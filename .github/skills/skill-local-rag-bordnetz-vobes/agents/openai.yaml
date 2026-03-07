@@ -1,0 +1,4 @@
+interface:
+  display_name: "Local RAG Bordnetz und VOBES"
+  short_description: "Nutze local_rag fuer belastbare Antworten zu Bordnetz und VOBES"
+  default_prompt: "Nutze $skill-local-rag-bordnetz-vobes, um meine Bordnetz- oder VOBES-Frage evidenzbasiert aus local_rag mit klarer Referenzuebersicht zu beantworten."

@@ -1,0 +1,45 @@
+{
+    "python.testing.pytestArgs": [
+        "tests"
+    ],
+    "python.testing.unittestEnabled": false,
+    "python.testing.pytestEnabled": true,
+    "python.testing.pytestPath": "pytest",
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.python"
+    },
+    "color-highlight.matchHslWithNoFunction": true,
+    "color-highlight.matchRgbWithNoFunction": true,
+    "color-highlight.matchWords": true,
+    "chat.mcp.serverSampling": {
+        "lightrag_test/.vscode/mcp.json: local-rag": {
+            "allowedModels": [
+                "copilot/claude-sonnet-4.5",
+                "copilot/claude-haiku-4.5",
+                "copilot/gpt-5.2"
+            ]
+        },
+        "vobes_agent_vscode/.vscode/mcp.json: mcp-atlassian": {
+            "allowedModels": [
+                "copilot/gpt-5.3-codex"
+            ]
+        }
+    },
+    "python.testing.unittestArgs": [
+        "-v",
+        "-s",
+        "./tests",
+        "-p",
+        "test*.py"
+    ],
+
+    "vscode-postgres.showExplorer": true,
+    "vscode-postgres.setConnectionFromExplorer": "ifunset",
+    "vscode-postgres.defaultDatabase": "lightrag_vobes",
+
+    "files.exclude": {
+        "**/__pycache__": true,
+        "**/*.pyc": true,
+        ".pytest_cache": true
+    }
+}

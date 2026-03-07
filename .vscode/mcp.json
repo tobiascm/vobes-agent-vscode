@@ -1,0 +1,19 @@
+// .vscode/mcp.json
+{
+  "servers": {
+      "local-rag": {
+        "type": "http",
+        "url": "http://localhost:8000/mcp"
+      },
+      "mcp-atlassian": {
+        "type": "stdio",
+        "command": "docker",
+        "args": [
+          "exec",
+          "-i",
+          "mcp-atlassian",
+          "/app/.venv/bin/mcp-atlassian"
+        ]
+      }
+  }
+}

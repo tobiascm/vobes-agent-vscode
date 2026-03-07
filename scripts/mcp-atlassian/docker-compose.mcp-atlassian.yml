@@ -1,0 +1,43 @@
+services:
+  mcp-atlassian:
+    image: ghcr.io/sooperset/mcp-atlassian:0.21
+    container_name: mcp-atlassian
+    restart: "no"
+    stdin_open: true
+    tty: true
+    entrypoint: ["/bin/sh"]
+    command: ["-c", "tail -f /dev/null"]
+
+    environment:
+      # Jira Configuration (Server/Data Center with Personal Access Token)
+      JIRA_URL: https://devstack.vwgroup.com/jira
+      JIRA_PERSONAL_TOKEN: ${JIRA_PAT}
+
+      # Confluence Configuration (Server/Data Center with Personal Access Token)
+      CONFLUENCE_URL: https://devstack.vwgroup.com/confluence
+      CONFLUENCE_PERSONAL_TOKEN: ${CONFLUENCE_PAT}
+
+      # MCP Server Configuration
+      PYTHONUNBUFFERED: "1"
+
+      # Hinweis: VW Devstack ist Server/Data Center, nicht Cloud
+      # Verwendet Bearer Token Auth statt Basic Auth
+
+    ports:
+      - "8100:8000"  # Host:Container (8100 um Konflikte mit vobes-rag:8000 zu vermeiden)
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - mcp-network
+
+networks:
+  mcp-network:
+    driver: bridge
+    name: mcp-atlassian-network
