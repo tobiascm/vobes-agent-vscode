@@ -9,3 +9,5 @@ Routing:
 Tool-Prioritaet:
 - Fuer Wissensfragen zuerst `local_rag`.
 - `mcp-atlassian` nur fuer Operationen, die `local_rag` nicht leisten kann (z. B. Confluence/Jira erstellen oder aendern).
+
+- Skill fuer wichtige Seiten/Links/URLs: `$skill-important-pages-links-and-urls`
