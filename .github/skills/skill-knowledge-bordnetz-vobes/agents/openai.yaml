@@ -1,0 +1,4 @@
+interface:
+  display_name: "Local RAG Bordnetz, VOBES, Prozesse und Datenmodelle"
+  short_description: "Nutze local_rag fuer belastbare Antworten zu Bordnetz, VOBES, Prozesse und Datenmodelle"
+  default_prompt: "Nutze $skill-knowledge-bordnetz-vobes, um meine Bordnetz-, VOBES-, Prozess- oder Datenmodell-Frage evidenzbasiert aus local_rag mit klarer Referenzuebersicht zu beantworten."
