@@ -49,6 +49,22 @@
       },
       "problemMatcher": [],
       "isBackground": true
+    },
+    {
+      "label": "Windows: Hibernate Scheduler",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\windows\\hibernate_scheduler.ps1"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
     }
   ]
 }
