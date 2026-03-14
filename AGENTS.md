@@ -22,4 +22,10 @@
   → PFLICHT: Skill `$skill-te-regelwerk` laden und befolgen.
 - BPLUS-NG Export | Vorgangsuebersicht / Abrufuebersicht / BM-Uebersicht als CSV oder Excel herunterladen
   → PFLICHT: Skill `$skill-bplus-export` laden und befolgen.
+- Stundensaetze | OE-Stundensaetze / Kostenstellen-Saetze aus BPLUS-NG abrufen
+  → PFLICHT: Skill `$skill-stundensaetze` laden und befolgen.
+- UA-Leiter | Unterabteilungsleiter / Leitung einer OE finden
+  → PFLICHT: Skill `$skill-ua-leiter` laden und befolgen.
+- EA-Uebersicht | Entwicklungsauftraege / DevOrders aus BPLUS-NG abrufen
+  → PFLICHT: Skill `$skill-ea-uebersicht` laden und befolgen.
 - ...

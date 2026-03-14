@@ -1,3 +1,4 @@
 userdata/*
 .claude/skills*
 .playwright-mcp/*
+.agents/userdata/*
