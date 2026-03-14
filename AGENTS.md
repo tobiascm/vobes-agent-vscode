@@ -18,4 +18,8 @@
 - Protokoll erstellen | ueberarbeiten und in Confluence speichern
   → PFLICHT: Skill `$skill-protokoll-confluence` laden und befolgen.
   → Zusaetzlich Skills `$skill-important-pages-links-and-urls` und `$skill-update-confluence-page` laden.
+- TE Regelwerk durchsuchen | Prozessstandard / Arbeitsanweisung finden, laden oder lesen
+  → PFLICHT: Skill `$skill-te-regelwerk` laden und befolgen.
+- BPLUS-NG Export | Vorgangsuebersicht / Abrufuebersicht / BM-Uebersicht als CSV oder Excel herunterladen
+  → PFLICHT: Skill `$skill-bplus-export` laden und befolgen.
 - ...

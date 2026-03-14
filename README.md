@@ -1,14 +1,27 @@
 # VOBES Agent VS Code Workspace
 
-VS Code Workspace für VOBES-bezogene Entwicklung mit dem VOBES-Agent und weiteren Tools/Skills wie z.B. MCP Atlassian Integration für Confluence und Jira
+VS Code Workspace mit KI-Agent-Konfiguration für die VOBES/Bordnetz-Entwicklung. Kombiniert GitHub Copilot mit domänenspezifischen Skills, einem lokalen RAG-System und MCP-Integrationen für Confluence/Jira.
+
+## Überblick
+
+| Komponente | Beschreibung |
+|---|---|
+| **AGENTS.md** | Steuerungsdatei für den KI-Agent (Skill-Routing, Tool-Prioritäten, Regeln) |
+| **Local RAG** | Lokaler MCP-Server für Wissensabfragen zu VOBES, VEC, KBL, Prozessen u. a. |
+| **MCP Atlassian** | Docker-basierter MCP-Server für Confluence- und Jira-Operationen |
+| **Skills** | 5 domänenspezifische Skills unter `.agents/skills/` |
 
 ## Quick Start
 
-### VOBES-Agent-MCP
+### 1. Voraussetzungen
 
-TODO
+- VS Code mit GitHub Copilot Extension
+- Docker Desktop (für MCP Atlassian)
+- Umgebungsvariablen: `JIRA_PAT` und `CONFLUENCE_PAT`
+- Lokaler RAG-Server auf `http://localhost:8000/mcp`
+- Chrome Extension: Playwright MCP Bridge (Store-ID: mmlmfjhmonkocbjadbfplnigmagldckm)
 
-### 1. MCP Atlassian Container starten
+### 2. MCP Atlassian Container starten
 
 ```powershell
 # Via VS Code Task (empfohlen)
@@ -16,41 +29,79 @@ Ctrl+Shift+P → "Tasks: Run Task" → "MCP Atlassian: Start"
 
 # Oder via PowerShell
 .\scripts\mcp-atlassian\start.ps1
-
-# Oder via Docker Compose
-docker-compose -f docker-compose.mcp-atlassian.yml up -d
 ```
 
-### 2. In Copilot Chat nutzen
+### 3. In Copilot Chat nutzen
 
 ```
 @workspace Liste alle Seiten im Confluence Space EKEK1
 @workspace Suche Issues im Projekt VKON2
+@workspace Was ist der VEC?
 ```
+
+## Projektstruktur
+
+```
+├── AGENTS.md                          # Agent-Steuerung (Skills, Regeln, Tool-Priorität)
+├── .agents/skills/                    # Domänenspezifische Skills
+│   ├── skill-knowledge-bordnetz-vobes/  # RAG-basierte Wissensabfragen
+│   ├── skill-important-pages-links-and-urls/  # Standard-Links & Referenzseiten
+│   ├── skill-protokoll-confluence/      # Protokollseiten erstellen/speichern
+│   ├── skill-update-confluence-page/    # Confluence-Seiten aktualisieren
+│   └── skill-jira-sys-flow/             # SYS-FLOW Jira-Board abfragen
+├── .vscode/
+│   ├── mcp.json                       # MCP-Server-Konfiguration (local-rag, mcp-atlassian)
+│   ├── tasks.json                     # VS Code Tasks
+│   └── settings.json                  # Workspace-Einstellungen
+├── docs/
+│   ├── mcp-atlassian/                 # MCP Atlassian Dokumentation
+│   │   ├── MCP-ATLASSIAN-QUICKSTART.md
+│   │   └── MCP-ATLASSIAN-SETUP.md
+│   └── protokollseite-vibe-coding.md  # Beispiel-Protokollseite
+├── scripts/
+│   ├── mcp-atlassian/                 # Container-Management (start, stop, logs)
+│   └── windows/                       # Utilities (Hibernate Scheduler)
+└── userdata/                          # Arbeitsdaten (Rollen, Listen)
+```
+
+## MCP-Server
+
+Konfiguriert in `.vscode/mcp.json`:
+
+| Server | Typ | Beschreibung |
+|---|---|---|
+| `local-rag` | HTTP (`localhost:8000`) | Lokales RAG-System mit mehreren Knowledgebases (default, datenmodelle, jira-vkon2, ldorado, chd, prozesse) |
+| `mcp-atlassian` | stdio (Docker) | Confluence- und Jira-Zugriff über Docker-Container |
+
+## Skills
+
+| Skill | Zweck |
+|---|---|
+| `skill-knowledge-bordnetz-vobes` | RAG-Abfragen zu VOBES, Bordnetz, VEC, KBL, Prozessen |
+| `skill-important-pages-links-and-urls` | Referenz-Links für Confluence/Jira Spaces und Dashboards |
+| `skill-protokoll-confluence` | Protokollseiten für Regeltermine erstellen und in Confluence speichern |
+| `skill-update-confluence-page` | Standardisierter Ablauf zum Aktualisieren von Confluence-Seiten |
+| `skill-jira-sys-flow` | Informationen aus dem Jira-Projekt SYS-FLOW abrufen |
+
+## VS Code Tasks
+
+| Task | Beschreibung |
+|---|---|
+| `MCP Atlassian: Start` | Docker-Container starten |
+| `MCP Atlassian: Stop` | Docker-Container stoppen |
+| `MCP Atlassian: Show Logs` | Container-Logs anzeigen |
+| `Windows: Hibernate Scheduler` | GUI zum Planen eines einmaligen Hibernate-Zeitpunkts |
 
 ## Dokumentation
 
-- **Quick Start**: `docs/MCP-ATLASSIAN-QUICKSTART.md`
-- **Detailliertes Setup**: `docs/MCP-ATLASSIAN-SETUP.md`
-- **Skill (Confluence Update, MCP-only)**: `docs/SKILL-UPDATE-CONFLUENCE-PAGE.md`
-
-## Konfiguration
-
-- **MCP Server**: `.vscode/mcp.json`
-- **VS Code Tasks**: `.vscode/tasks.json`
-- **Docker Compose**: `docker-compose.mcp-atlassian.yml`
-- **Scripts**: `scripts/mcp-atlassian/*.ps1`
-
-## Voraussetzungen
-
-- Docker Desktop
-- VS Code mit GitHub Copilot Extension
-- Umgebungsvariablen: `JIRA_PAT` und `CONFLUENCE_PAT`
+- [MCP Atlassian Quick Start](docs/mcp-atlassian/MCP-ATLASSIAN-QUICKSTART.md)
+- [MCP Atlassian Setup (Detail)](docs/mcp-atlassian/MCP-ATLASSIAN-SETUP.md)
+- [Protokollseite Vibe-Coding](docs/protokollseite-vibe-coding.md)
 
 ## Verfügbare Spaces
 
 - **Confluence**: VOBES, VSUP, EKEK1
-- **Jira**: VKON2, VOBES, VSUP, EKEK1
+- **Jira**: VKON2, SYS-FLOW
 
 ## Ressourcen
 

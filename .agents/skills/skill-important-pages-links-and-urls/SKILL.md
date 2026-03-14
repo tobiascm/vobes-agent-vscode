@@ -44,6 +44,11 @@ Nutze diesen Skill immer dann, wenn der User nach Agenda-Ergaenzungen, Regelterm
   https://devstack.vwgroup.com/confluence/spaces/VOBES/pages/6698589657/Workshopreihe+Easy-Migration-Selfservice
   Bedeutung: Workshopreihe zu Easy-Migration und Selfservice-Themen.
 
+### Howto
+- https://devstack.vwgroup.com/confluence/spaces/EKEK1/pages/6932124151/EKEK+1+HowTo
+  Bedeutung: Howtos für EKEK/1
+
+
 ### Weitere wichtige Links
 - HR Chat Bot:
   https://hr.chat.vwgroup.com/

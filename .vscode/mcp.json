@@ -1,19 +1,38 @@
 // .vscode/mcp.json
 {
-  "servers": {
-      "local-rag": {
-        "type": "http",
-        "url": "http://localhost:8000/mcp"
-      },
-      "mcp-atlassian": {
-        "type": "stdio",
-        "command": "docker",
-        "args": [
-          "exec",
-          "-i",
-          "mcp-atlassian",
-          "/app/.venv/bin/mcp-atlassian"
-        ]
+"servers": {
+    "local-rag": {
+      "type": "http",
+      "url": "http://localhost:8000/mcp"
+    },
+    "local-rag-bridge": {
+          "type": "stdio",
+          "command": "python",
+          "args": ["${workspaceFolder}\\src\\lightrag_vobes\\mcp\\local_mcp_bridge.py"],
+          "env": {
+            "VOBES_REMOTE_MCP_URL": "https://test.vobes.vwgroup.com/lightrag/mcp",
+            "VOBES_REMOTE_BROWSER_OPEN_URL": "https://test.vobes.vwgroup.com/lightrag/mcp",
+            "VOBES_BROWSER_COOKIE_SOURCE": "edge",
+            "VOBES_AUTH_COOKIE_NAMES": "MRHSession"
+          }
+    },
+    "mcp-atlassian": {
+      "type": "stdio",
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "mcp-atlassian",
+        "/app/.venv/bin/mcp-atlassian"
+      ]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest", "--extension"],
+      "env": {
+        "PLAYWRIGHT_MCP_EXTENSION_TOKEN":
+          "3JuXJHGadK_UMOzupAlgsUp31Ar_qSMmaypX19PsvTU"
       }
+    }
   }
 }

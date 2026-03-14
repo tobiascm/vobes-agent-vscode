@@ -41,5 +41,6 @@
         "**/__pycache__": true,
         "**/*.pyc": true,
         ".pytest_cache": true
-    }
+    },
+    "chat.tools.terminal.autoReplyToPrompts": true
 }
