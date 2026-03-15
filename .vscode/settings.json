@@ -42,5 +42,10 @@
         "**/*.pyc": true,
         ".pytest_cache": true
     },
-    "chat.tools.terminal.autoReplyToPrompts": true
+    "chat.tools.terminal.autoReplyToPrompts": true,
+    "workbench.editorAssociations": {
+        "{git}:/**/*.{md}": "vscode.markdown.preview.editor",
+        "{git-index}:/**/*.{md}": "vscode.markdown.preview.editor",
+        "*.md": "markdownForHumans.editor"
+    }
 }

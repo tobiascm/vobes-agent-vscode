@@ -26,7 +26,10 @@ Beispiele:
 import csv
 import argparse
 import sys
+import os
 from collections import defaultdict
+from datetime import date
+from io import StringIO
 
 # Status-Mapping: API workFlowStatus -> Anzeige-Praefix
 STATUS_MAP = {
@@ -51,23 +54,18 @@ def parse_wert(s):
 
 
 def format_eur(val):
-    """Zahl als Euro-Betrag formatieren"""
-    return f"{val:,.2f} \u20ac".replace(',', 'X').replace('.', ',').replace('X', '.')
+    """Zahl als Euro-Betrag formatieren (Ganzzahl, deutsches Format)"""
+    return f"{int(round(val)):,}".replace(',', '.')
 
 
 def display_status(row):
-    """Erzeugt lesbaren Status aus workFlowStatus + status"""
-    wf = row.get('workFlowStatus', '')
-    sub = row.get('status', '').strip()
-    base = STATUS_MAP.get(wf, wf)
-    if wf == 'WF_In_Planen_BM' and sub:
-        return f"{base}: {sub}"
-    return base
+    """Erzeugt lesbaren Status — API-CSV hat bereits kombinierten Status."""
+    return row.get('status', '').strip()
 
 
 def load_csv(path):
     with open(path, 'r', encoding='utf-8-sig') as f:
-        return list(csv.DictReader(f, delimiter=';'))
+        return list(csv.DictReader(f, delimiter=','))
 
 
 def filter_rows(data, firma=None, status=None, ea=None, projekt=None, oe=None):
@@ -77,60 +75,97 @@ def filter_rows(data, firma=None, status=None, ea=None, projekt=None, oe=None):
         result = [r for r in result if q in r.get('company', '').lower()]
     if status:
         q = status.lower()
-        result = [r for r in result if q in display_status(r).lower()]
+        result = [r for r in result if q in r.get('status', '').lower()]
     if ea:
         q = ea.lower()
-        result = [r for r in result if q in r.get('eaTitel', '').lower()]
+        result = [r for r in result if q in r.get('ea', '').lower()]
     if projekt:
         q = projekt.lower()
         result = [r for r in result if q in r.get('projektfamilie', '').lower()]
     if oe:
         q = oe.lower()
-        result = [r for r in result if q in r.get('orgUnitName', '').lower()]
+        result = [r for r in result if q in r.get('org_unit', '').lower()]
     return result
 
 
-def print_vorgaenge(rows):
+def print_vorgaenge(rows, out):
+    """Gibt alle Einzelvorgaenge als Markdown-Tabelle aus."""
     total = 0
+    out.write("| Konzept | EA-Nummer | EA-Titel | BM-Titel | Wert | Firma | Status |\n")
+    out.write("|---|---|---|---|---:|---|---|\n")
     for r in rows:
-        wert = parse_wert(r.get('plannedValue', ''))
+        wert = parse_wert(r.get('planned_value', ''))
         total += wert
         konzept = r.get('concept', '?').strip()
-        ea = r.get('eaTitel', '').strip()[:35]
-        titel = r.get('title', '').strip()[:50]
-        print(f"  Konzept {konzept:>8}"
-              f" | EA: {ea:35}"
-              f" | Status: {display_status(r):35}"
-              f" | Wert: {format_eur(wert):>14}"
-              f" | {titel}")
-    print(f"\n  SUMME: {format_eur(total)}  ({len(rows)} Vorgaenge)")
+        ea_titel = r.get('ea', '').strip()
+        dev = r.get('dev_order', '').strip()
+        bm_titel = r.get('title', '').strip()
+        firma = r.get('company', '').strip()
+        status = r.get('status', '').strip()
+        out.write(f"| {konzept} | {dev} | {ea_titel} | {bm_titel} | {format_eur(wert)} | {firma} | {status} |\n")
+    out.write(f"| | | | **Summe** | **{format_eur(total)}** | | |\n")
+    out.write(f"\n{len(rows)} Vorgaenge, Gesamtwert: {format_eur(total)} EUR\n")
     return total
 
 
-def print_by_status(rows):
+def print_by_status(rows, out):
+    """Gibt Status-Zusammenfassung als Markdown-Tabelle und Mermaid Pie Chart aus."""
     status_sums = defaultdict(lambda: [0, 0.0])
     for r in rows:
-        st = display_status(r)
-        wert = parse_wert(r.get('plannedValue', ''))
+        st = r.get('status', 'unbekannt').strip()
+        wert = parse_wert(r.get('planned_value', ''))
         status_sums[st][0] += 1
         status_sums[st][1] += wert
+    out.write("| Status | Anzahl | Wert |\n")
+    out.write("|---|---:|---:|\n")
     for st, (cnt, sm) in sorted(status_sums.items()):
-        print(f"  {st:45} | {cnt:3} Vorgaenge | {format_eur(sm):>16}")
+        out.write(f"| {st} | {cnt} | {format_eur(sm)} |\n")
+    out.write("\n```mermaid\npie\n    title Status-Verteilung\n")
+    for st, (cnt, sm) in sorted(status_sums.items()):
+        out.write(f'    "{st}: {format_eur(sm)} EUR" : {int(round(sm))}\n')
+    out.write("```\n")
 
 
-def print_by_firma(rows, top_n=None):
+def print_by_ea(rows, out):
+    """Gibt EA-Zusammenfassung als Markdown-Tabelle aus."""
+    eas = defaultdict(lambda: {'title': '', 'count': 0, 'sum': 0.0, 'statuses': defaultdict(float)})
+    for r in rows:
+        dev = r.get('dev_order', '').strip()
+        if not dev:
+            dev = '(ohne EA)'
+        wert = parse_wert(r.get('planned_value', ''))
+        eas[dev]['title'] = r.get('ea', '').strip()
+        eas[dev]['count'] += 1
+        eas[dev]['sum'] += wert
+        st = r.get('status', '').strip()
+        eas[dev]['statuses'][st] += wert
+    sorted_eas = sorted(eas.items(), key=lambda x: -x[1]['sum'])
+    total = 0
+    out.write("| EA-Nummer | EA-Titel | Anzahl | Wert | Status-Detail |\n")
+    out.write("|---|---|---:|---:|---|\n")
+    for dev, info in sorted_eas:
+        total += info['sum']
+        status_detail = "; ".join(f"{st}: {format_eur(sv)}" for st, sv in sorted(info['statuses'].items()))
+        out.write(f"| {dev} | {info['title']} | {info['count']} | {format_eur(info['sum'])} | {status_detail} |\n")
+    out.write(f"| | **Gesamt** | **{sum(i['count'] for i in eas.values())}** | **{format_eur(total)}** | |\n")
+
+
+def print_by_firma(rows, out, top_n=None):
+    """Gibt Firmen-Zusammenfassung als Markdown-Tabelle aus."""
     firmen = defaultdict(lambda: [0, 0.0])
     for r in rows:
         firma = r.get('company', '').strip()
         if firma:
-            wert = parse_wert(r.get('plannedValue', ''))
+            wert = parse_wert(r.get('planned_value', ''))
             firmen[firma][0] += 1
             firmen[firma][1] += wert
     sorted_firmen = sorted(firmen.items(), key=lambda x: -x[1][1])
     if top_n:
         sorted_firmen = sorted_firmen[:top_n]
+    out.write("| Firma | Anzahl | Wert |\n")
+    out.write("|---|---:|---:|\n")
     for firma, (cnt, sm) in sorted_firmen:
-        print(f"  {firma:55} | {cnt:3} Vorgaenge | {format_eur(sm):>16}")
+        out.write(f"| {firma} | {cnt} | {format_eur(sm)} |\n")
 
 
 def main():
@@ -142,11 +177,25 @@ def main():
     parser.add_argument('--projekt', help='Filter nach Projektfamilie (Teilstring, case-insensitive)')
     parser.add_argument('--oe', help='Filter nach OE (Teilstring, case-insensitive)')
     parser.add_argument('--top', type=int, default=None, help='Nur Top-N Firmen anzeigen')
+    parser.add_argument('--output', help='Pfad zur Ausgabedatei (.md). Default: userdata/tmp/')
     args = parser.parse_args()
 
     data = load_csv(args.csv_file)
     filtered = filter_rows(data, firma=args.firma, status=args.status,
                            ea=args.ea, projekt=args.projekt, oe=args.oe)
+
+    # Ausgabedatei bestimmen
+    if args.output:
+        out_path = args.output
+    else:
+        workspace = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+        tmp_dir = os.path.join(workspace, 'userdata', 'tmp')
+        os.makedirs(tmp_dir, exist_ok=True)
+        label = args.firma or args.ea or args.status or args.projekt or args.oe or 'gesamt'
+        label = label.lower().replace(' ', '_')[:20]
+        out_path = os.path.join(tmp_dir, f"{date.today().strftime('%Y%m%d')}_bplus_{label}.md")
+
+    out = StringIO()
 
     filter_info = []
     if args.firma:
@@ -161,22 +210,34 @@ def main():
         filter_info.append(f"OE='{args.oe}'")
     filter_str = f" (Filter: {', '.join(filter_info)})" if filter_info else ""
 
-    print(f"=== BPLUS-NG API-Auswertung{filter_str} ===")
-    print(f"Gesamt Datensaetze: {len(data)} | Gefiltert: {len(filtered)}")
+    out.write(f"## BPLUS-NG Auswertung{filter_str}\n")
+    out.write(f"Gesamt: {len(data)} | Gefiltert: {len(filtered)}\n")
 
     if not filtered:
-        print("\nKeine Treffer gefunden.")
+        out.write("\nKeine Treffer gefunden.\n")
+        with open(out_path, 'w', encoding='utf-8') as f:
+            f.write(out.getvalue())
+        print(out_path)
         sys.exit(0)
 
     if args.firma or args.ea or args.projekt:
-        print(f"\n--- Vorgaenge ---")
-        print_vorgaenge(filtered)
+        out.write(f"\n### Einzelvorgaenge\n")
+        print_vorgaenge(filtered, out)
 
-    print(f"\n--- Aufschluesselung nach Status ---")
-    print_by_status(filtered)
+        if len(set(r.get('dev_order', '') for r in filtered)) > 1:
+            out.write(f"\n### Nach EA\n")
+            print_by_ea(filtered, out)
 
-    print(f"\n--- Aufschluesselung nach Firma ---")
-    print_by_firma(filtered, top_n=args.top)
+    out.write(f"\n### Nach Status\n")
+    print_by_status(filtered, out)
+
+    if not args.firma:
+        out.write(f"\n### Nach Firma\n")
+        print_by_firma(filtered, out, top_n=args.top)
+
+    with open(out_path, 'w', encoding='utf-8') as f:
+        f.write(out.getvalue())
+    print(out_path)
 
 
 if __name__ == '__main__':

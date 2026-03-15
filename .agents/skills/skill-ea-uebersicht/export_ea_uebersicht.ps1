@@ -23,7 +23,7 @@
     ProjektFamilie filtern, z.B. "A_BEV". Ohne Filter werden alle exportiert.
 
 .PARAMETER OutputPath
-    Zielpfad fuer die CSV-Datei. Default: userdata\bplus\YYYYMMDD_EA_Uebersicht.csv
+    Zielpfad fuer die CSV-Datei. Default: userdata\tmp\YYYYMMDD_EA_Uebersicht.csv
 
 .PARAMETER BaseUrl
     Basis-URL der BPLUS-NG Instanz.
@@ -45,32 +45,10 @@ param(
     [bool]$ActiveOnly = $true,
     [string]$ProjectFamily = "",
     [string]$OutputPath = "",
-    [string]$BaseUrl = "https://bplus-ng-mig.r02.vwgroup.com",
-    [switch]$Force
+    [string]$BaseUrl = "https://bplus-ng-mig.r02.vwgroup.com"
 )
 
 $ErrorActionPreference = "Stop"
-
-# --- 0. Cache pruefen (nur neu laden wenn aelter als 1 Monat) ---
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$workspaceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $scriptDir))
-$destDir = Join-Path $workspaceRoot "userdata\bplus"
-if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
-$pfSuffix = if ($ProjectFamily -ne "") { "_$ProjectFamily" } else { "" }
-$activeTag = if ($ActiveOnly) { "_aktiv" } else { "" }
-
-if ($OutputPath -eq "") {
-    $OutputPath = Join-Path $destDir "$(Get-Date -Format 'yyyyMMdd')_EA_Uebersicht$pfSuffix$activeTag.csv"
-}
-
-if (-not $Force) {
-    $pattern = "*_EA_Uebersicht$pfSuffix$activeTag.csv"
-    $existing = Get-ChildItem -Path $destDir -Filter $pattern -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if ($existing -and $existing.LastWriteTime -gt (Get-Date).AddMonths(-1)) {
-        Write-Host "Cache aktuell: $($existing.FullName) ($('{0:dd.MM.yyyy}' -f $existing.LastWriteTime)). Ueberspringe Download. (-Force zum Erzwingen)"
-        exit 0
-    }
-}
 
 # --- 1. API-Abruf ---
 $apiUrl = "$BaseUrl/ek/api/DevOrder/GetAll?year=$Year"
@@ -123,7 +101,16 @@ $transformed = $filtered | ForEach-Object {
     }
 } | Sort-Object ea_number
 
-# --- 4. Ausgabepfad (bereits in Schritt 0 bestimmt) ---
+# --- 4. Ausgabepfad bestimmen ---
+if (-not $OutputPath) {
+    $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+    $workspaceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $scriptDir))
+    $destDir = Join-Path $workspaceRoot "userdata\tmp"
+    if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+    $suffix = if ($ProjectFamily -ne "") { "_$ProjectFamily" } else { "" }
+    $activeTag = if ($ActiveOnly) { "_aktiv" } else { "" }
+    $OutputPath = Join-Path $destDir "$(Get-Date -Format 'yyyyMMdd')_EA_Uebersicht$suffix$activeTag.csv"
+}
 
 # --- 5. CSV-Export (UTF-8 ohne BOM, Komma-Delimiter) ---
 $csvContent = $transformed |

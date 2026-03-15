@@ -1,32 +1,76 @@
 ---
 name: skill-bplus-export
-description: Export aus BPLUS-NG (Vorgangsuebersicht, Abrufuebersicht, BM-Uebersicht) per API oder Playwright. Nutze diesen Skill wenn der User eine BPLUS-Uebersicht als Excel oder CSV exportieren moechte.
+description: Export und Analyse aus BPLUS-NG (Vorgangsuebersicht, Abrufuebersicht, BM-Uebersicht, Konzeptuebersicht) per API oder Playwright. Nutze diesen Skill wenn der User eine BPLUS-Uebersicht als Excel oder CSV exportieren moechte ODER wenn er Analysefragen zu BPLUS-Daten stellt, z.B. auf welche EA eine Firma/Lieferant/Dienstleister gebucht ist, welche Vorgaenge/Abrufe eine bestimmte Firma hat, wo ein externer Partner zugeordnet ist, oder Budget-/Ausgabenfragen zu Firmen und Konzepten. Auch ohne expliziten Exportwunsch ist dieser Skill zustaendig, wenn die Antwort auf BTL-Daten (company, concept, ea, planned_value) basiert.
 ---
 
 # Skill: BPLUS-NG Export
 
 Dieser Skill beschreibt den Workflow, um Uebersichten aus **BPLUS-NG/EK** (Konzeptuebersicht / Vorgangsuebersicht / Abrufuebersicht / BM-Uebersicht / Ausgaben) als CSV- oder Excel-Datei herunterzuladen.
 
+## Pflicht: Analyse-Script verwenden
+
+> **WICHTIG:** Bei Analysefragen zu BPLUS-Daten (Firma/EA/Status/Summen) IMMER das Analyse-Script `analyze_bplus_api.py` ausfuehren.
+> Summen, Aggregationen und Filterungen NIEMALS manuell berechnen oder aus der CSV-Datei ablesen.
+> **NIEMALS eine bereits vorhandene Ergebnis-Datei (.md) wiederverwenden.** Das Script muss bei JEDER Anfrage neu ausgefuehrt werden, damit die Daten aktuell sind.
+>
+> **Workflow:**
+> 1. CSV exportieren per `export_bplus_api.ps1` (falls noch nicht vorhanden oder älter als 1 Tag)
+> 2. `python analyze_bplus_api.py <csv> --firma <name>` ausfuehren (IMMER neu, nie vorhandene .md-Datei verwenden)
+> 3. Das Script gibt den **Pfad zur Ergebnis-Datei** (.md) auf stdout aus
+> 4. **Optional:** Falls die Userfrage Kontext erfordert (z.B. Einordnung, Hinweise, Empfehlungen), darf die Ergebnis-Datei per `replace_string_in_file` oder `read_file` + Einfuegen **vor oder nach den Tabellen** ergaenzt werden. Zahlen und Tabellen des Scripts dabei NICHT veraendern.
+> 5. **NUR folgenden Satz im Chat an den User ausgeben:**
+>    `Den Ergebnisbericht habe ich erstellt und hier fuer Dich abgelegt:` gefolgt von einem **klickbaren Markdown-Link** auf die Ergebnis-Datei (workspace-relativer Pfad).
+> 6. **Im Chat NICHTS weiter ausgeben** — keine Tabellen, keine Zusammenfassungen, keine Zahlen. Der User oeffnet die Datei selbst.
+>
+> **VERBOTEN:** Zahlen, Summen oder Tabellen des Scripts im Chat anzeigen oder in der Datei veraendern. Eigene Ergaenzungen (Kontext, Fazit, Hinweise) gehoeren VOR oder NACH die Script-Daten in die Ergebnis-Datei.
+>
+> **Pfad:** `<WORKSPACE>/.agents/skills/skill-bplus-export/analyze_bplus_api.py`
+> **Ergebnis:** `<WORKSPACE>/userdata/tmp/<datum>_bplus_<filter>.md`
+
 ## Kontext
 
 - Der Standard Export umfasst ausschliesslich das Team **EKEK/1**. Der Export kann auf ganz EK ausgeweitet werden.
 - Ersteller im Team: **Bachmann Armin**, **Bartels Timo**, **Junge Christian**.
+- **Standard-Jahr:** Wenn der User kein Jahr nennt, wird immer das **aktuelle Jahr** verwendet. 
 
 ## Darstellung von Einzelaufstellungen
 
-Wenn einzelne Vorgaenge/Abrufe als Tabelle aufgelistet werden, muessen mindestens folgende Spalten enthalten sein:
+Tabellen immer als pretty printed Markdown-Tabellen darstellen.
+Nutze zur Visualisierung wenn möglich mermaid pie showData Charts.
+Wenn einzelne Vorgaenge/Abrufe als Tabelle aufgelistet werden, muessen mindestens die folgenden Spalten enthalten sein, je nach Userfrag auch mehr:
 
 | Spalte | Pflicht | CSV-Spalte |
 |---|---|---|
 | Konzept | Ja | `concept` |
-| EA | Ja | `ea` |
-| Titel | Ja | `title` |
-| Status | Ja | `status` (kombinierter Klartext) |
-| Wert | Ja | `planned_value` (Ganzzahl EUR) |
+| EA-Nummer | Ja | `dev_order` |
+| EA-Titel | Ja | `ea` |
+| BM-Titel | Ja | `title` |
+| Wert | Ja | `planned_value` (Ganzzahl EUR, keine Nachkommastellen) |
 | Firma | Ja | `company` |
+| Status | Ja | `status` (kombinierter Klartext) |
 | OE | Nur bei mehreren OEs | `org_unit` |
 
+> **Am Ende der Tabelle immer eine Summenzeile mit dem Gesamtwert ausgeben.**
+> Zusaetzlich darunter die Summenwerte pro Status.
+>
 > **Ersteller (`creator`) ist NICHT standardmaessig anzuzeigen**, nur auf explizite Nachfrage.
+
+### Beispiel-Ausgabe
+
+| Konzept | EA-Nummer | EA-Titel | BM-Titel | Wert | Firma | Status |
+|---|---|---|---|---:|---|---|
+| K-12345 | 0043402 | VW386/0EU_K T-ROC | Aenderung Stecker | 12000 | Mustermann GmbH | 07_In Planen-BM: Bestellt |
+| K-12346 | 0043516 | VW316/6EU_B1 PA ID.4 EU | Kabelbaum Anpassung | 8500 | Beispiel AG | 06_In Bearbeitung BM-Team |
+| K-12347 | 0043516 | VW316/6EU_B1 PA ID.4 EU | Clip-Aenderung | 3200 | Beispiel AG | 98_Storniert |
+| | | | **Summe** | **23700** | | |
+
+```mermaid
+pie showData
+    title Status-Verteilung
+    "07_In Planen-BM: Bestellt" : 12000
+    "06_In Bearbeitung BM-Team" : 8500
+    "98_Storniert" : 3200
+```
 
 ## Wann verwenden?
 

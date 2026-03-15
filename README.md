@@ -108,3 +108,21 @@ Konfiguriert in `.vscode/mcp.json`:
 - **VW Devstack Jira**: https://devstack.vwgroup.com/jira
 - **VW Devstack Confluence**: https://devstack.vwgroup.com/confluence
 - **MCP Atlassian GitHub**: https://github.com/sooperset/mcp-atlassian
+
+# VS Code Einstellungen
+
+## Markdown
+In VS Code kannst du Markdown-Dateien standardmäßig direkt als gerenderte Vorschau öffnen, statt als reinen Texteditor. Dafür gibt es offiziell die Einstellung ```workbench.editorAssociations mit *.md -> vscode.markdown.preview.editor```
+Noch besser wird es mit dem Markdown WYSIWYG-Editor "Markdown For Humans WYSIWYG" 
+
+Damit der aber nicht für DIFFS verwendet wird, trage in deine settings.json ein:
+
+```
+"workbench.editorAssociations": {
+    "{git}:/**/*.{md}": "vscode.markdown.preview.editor",
+    "{git-index}:/**/*.{md}": "vscode.markdown.preview.editor",
+    "*.md": "markdownForHumans.editor"
+}
+```
+
+Damit werden .md-Dateien beim Öffnen als Markdown-Preview angezeigt. VS Code nennt das den Markdown Preview Custom Editor

@@ -1,6 +1,6 @@
 ---
 name: skill-ea-uebersicht
-description: Entwicklungsauftraege, EA-Nummer, Projektfamilie, Controller, SOP aus BPLUS-NG per API abrufen und als CSV exportieren und auswerten.
+description: Entwicklungsauftraege (EA) aus BPLUS-NG per API abrufen und als CSV exportieren. Nutze diesen Skill wenn der User nach EA-Stammdaten, EA-Nummern, EA-Laufzeiten, Projektfamilien, Controllern oder der EA-Uebersicht fragt. NICHT verwenden fuer Fragen zu Firmen, Lieferanten, Dienstleistern, Buchungen auf EAs, Vorgaengen oder Abrufen — dafuer ist skill-bplus-export zustaendig.
 ---
 
 # Skill: BPLUS-NG Entwicklungsauftraege (EA-Uebersicht)
@@ -19,6 +19,12 @@ Dieser Skill laedt die **EA-Uebersicht** (Entwicklungsauftraege / DevOrders) aus
 - Der User moechte eine **EA-Uebersicht** oder **EA-Liste** aus BPLUS-NG
 - Der User sucht eine bestimmte **EA-Nummer** oder EAs einer **Projektfamilie**
 - Der User erwaehnt **DevOrders** oder **InfoDevOrders**
+
+# Disambiguierung: "Auf welche EA wird X gebucht?"
+- Wenn die Anfrage ein Muster wie "auf welche EA wird <Name> gebucht" oder "wo ist <Name> zugeordnet" enthaelt:
+  1. Zuerst pruefen: Ist <Name> eine Firma/Lieferant? → `skill-bplus-export` (BTL-Daten, Feld `company`)
+  2. Nur wenn kein Treffer bei company: Personenfelder pruefen → `skill-ea-uebersicht`
+  3. Bei Doppeltreffern (Firma UND Person): User fragen, was gemeint ist.
 
 ## Datenstruktur
 
@@ -90,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-ea-ue
 | `-Year` | Aktuelles Jahr | Jahr |
 | `-ActiveOnly` | `$true` | Nur aktive EAs |
 | `-ProjectFamily` | (leer = alle) | Projektfamilie filtern |
-| `-OutputPath` | `<WORKSPACE>\userdata\bplus\YYYYMMDD_EA_Uebersicht[_ProjFam][_aktiv].csv` | Zielpfad |
+| `-OutputPath` | `userdata\tmp\YYYYMMDD_EA_Uebersicht[_ProjFam][_aktiv].csv` | Zielpfad |
 | `-BaseUrl` | `https://bplus-ng-mig.r02.vwgroup.com` | Basis-URL |
 
 ### Manueller Inline-Abruf (ohne Script)
