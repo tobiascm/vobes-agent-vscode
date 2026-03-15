@@ -1,5 +1,5 @@
 ---
-name: skill-ua-leiter
+name: skill-budget-ua-leiter
 description: Unterabteilungsleiter (UA-Leiter) aus BPLUS-NG abrufen. Nutze diesen Skill wenn der User nach Leitungen, UA-Leitern oder Ansprechpartnern einer OE fragt.
 ---
 
@@ -42,22 +42,22 @@ Dieser Skill findet die **Leitungen** (Leitung=1) aus den BPLUS-NG InfoDepartmen
 
 ## Export per Script
 
-**Pfad:** `<WORKSPACE>/.agents/skills/skill-ua-leiter/export_ua_leiter.ps1`
+**Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-ua-leiter/export_ua_leiter.ps1`
 
 ### Standard-Export (alle Leitungen, aktuelles Jahr)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-ua-leiter\export_ua_leiter.ps1"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ua-leiter\export_ua_leiter.ps1"
 ```
 
 ### Mit Parametern
 
 ```powershell
 # Bestimmte OE:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-ua-leiter\export_ua_leiter.ps1" -OrgUnit "EKEK/1"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ua-leiter\export_ua_leiter.ps1" -OrgUnit "EKEK/1"
 
 # Anderes Jahr:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-ua-leiter\export_ua_leiter.ps1" -Year 2025
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ua-leiter\export_ua_leiter.ps1" -Year 2025
 ```
 
 ### Parameter
@@ -66,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-ua-le
 |---|---|---|
 | `-Year` | Aktuelles Jahr | Jahr |
 | `-OrgUnit` | (leer = alle) | OE filtern |
-| `-OutputPath` | `<WORKSPACE>\userdata\bplus\YYYYMMDD_UA_Leiter[_OE].csv` | Zielpfad |
+| `-OutputPath` | `<WORKSPACE>\userdata\exports\YYYYMMDD_UA_Leiter[_OE].csv` | Zielpfad |
 | `-BaseUrl` | `https://bplus-ng-mig.r02.vwgroup.com` | Basis-URL |
 
 ## Haeufige Probleme

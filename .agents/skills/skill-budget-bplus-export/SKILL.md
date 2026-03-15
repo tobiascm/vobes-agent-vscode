@@ -1,5 +1,5 @@
 ---
-name: skill-bplus-export
+name: skill-budget-bplus-export
 description: Export und Analyse aus BPLUS-NG (Vorgangsuebersicht, Abrufuebersicht, BM-Uebersicht, Konzeptuebersicht) per API oder Playwright. Nutze diesen Skill wenn der User eine BPLUS-Uebersicht als Excel oder CSV exportieren moechte ODER wenn er Analysefragen zu BPLUS-Daten stellt, z.B. auf welche EA eine Firma/Lieferant/Dienstleister gebucht ist, welche Vorgaenge/Abrufe eine bestimmte Firma hat, wo ein externer Partner zugeordnet ist, oder Budget-/Ausgabenfragen zu Firmen und Konzepten. Auch ohne expliziten Exportwunsch ist dieser Skill zustaendig, wenn die Antwort auf BTL-Daten (company, concept, ea, planned_value) basiert.
 ---
 
@@ -24,8 +24,8 @@ Dieser Skill beschreibt den Workflow, um Uebersichten aus **BPLUS-NG/EK** (Konze
 >
 > **VERBOTEN:** Zahlen, Summen oder Tabellen des Scripts im Chat anzeigen oder in der Datei veraendern. Eigene Ergaenzungen (Kontext, Fazit, Hinweise) gehoeren VOR oder NACH die Script-Daten in die Ergebnis-Datei.
 >
-> **Pfad:** `<WORKSPACE>/.agents/skills/skill-bplus-export/analyze_bplus_api.py`
-> **Ergebnis:** `<WORKSPACE>/userdata/tmp/<datum>_bplus_<filter>.md`
+> **Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-bplus-export/analyze_bplus_api.py`
+> **Ergebnis:** `<WORKSPACE>/userdata/sessions/<datum>_bplus_<filter>.md`
 
 ## Kontext
 
@@ -165,28 +165,28 @@ Das Export-Script transformiert die API-Daten in ein LLM-optimiertes CSV-Format.
 
 Im Skill-Verzeichnis liegt das Script `export_bplus_api.ps1`.
 
-**Pfad:** `<WORKSPACE>/.agents/skills/skill-bplus-export/export_bplus_api.ps1`
+**Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-bplus-export/export_bplus_api.ps1`
 
 #### Standard-Export (EKEK/1, aktuelles Jahr, ohne Archivierte)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-bplus-export\export_bplus_api.ps1"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\export_bplus_api.ps1"
 ```
 
 #### Mit Parametern
 
 ```powershell
 # Anderes Jahr:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-bplus-export\export_bplus_api.ps1" -Year 2025
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\export_bplus_api.ps1" -Year 2025
 
 # Andere OE:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-bplus-export\export_bplus_api.ps1" -OrgUnit "EKEK/2"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\export_bplus_api.ps1" -OrgUnit "EKEK/2"
 
 # Inkl. Archivierte:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-bplus-export\export_bplus_api.ps1" -ExcludeArchived $false
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\export_bplus_api.ps1" -ExcludeArchived $false
 
 # Eigener Ausgabepfad:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-bplus-export\export_bplus_api.ps1" -OutputPath "C:\tmp\export.csv"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\export_bplus_api.ps1" -OutputPath "C:\tmp\export.csv"
 ```
 
 > **Parameter `-Delimiter` wurde entfernt.** Das CSV nutzt jetzt immer Komma als Delimiter (LLM-optimiert).
@@ -344,48 +344,48 @@ Im Skill-Verzeichnis liegen zwei Analyse-Scripts:
 
 ### analyze_bplus_api.py (fuer API-Export)
 
-**Pfad:** `<WORKSPACE>/.agents/skills/skill-bplus-export/analyze_bplus_api.py`
+**Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-bplus-export/analyze_bplus_api.py`
 
 ```powershell
 # Gesamtuebersicht aller Firmen:
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv"
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv"
 
 # Nur eine bestimmte Firma:
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --firma 4soft
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --firma 4soft
 
 # Nur bestimmter Status:
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --status bestellt
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --status bestellt
 
 # Nach EA-Titel filtern:
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --ea "IDS.8"
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --ea "IDS.8"
 
 # Nach Projektfamilie filtern:
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --projekt MEB
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --projekt MEB
 
 # Kombination:
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --firma edag --status bestellt
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --firma edag --status bestellt
 
 # Top-N Firmen:
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --top 5
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --top 5
 ```
 
 ### analyze_bplus.py (fuer Playwright-Export)
 
 ```powershell
 # Gesamtuebersicht aller Firmen (sortiert nach Wert):
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv"
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv"
 
 # Nur eine bestimmte Firma (Teilstring, case-insensitive):
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --firma 4soft
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --firma 4soft
 
 # Nur bestimmter Status:
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --status bestellt
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --status bestellt
 
 # Kombination Firma + Status:
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --firma edag --status bestellt
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --firma edag --status bestellt
 
 # Top-N Firmen:
-python "<WORKSPACE>\.agents\skills\skill-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --top 5
+python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --top 5
 ```
 
 ### Ausgabe

@@ -2,3 +2,6 @@ userdata/*
 .claude/skills*
 .playwright-mcp/*
 .agents/userdata/*
+*__pycache__*
+*.pyc
+*.log

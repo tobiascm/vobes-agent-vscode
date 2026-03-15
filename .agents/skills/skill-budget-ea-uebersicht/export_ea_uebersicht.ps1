@@ -23,7 +23,7 @@
     ProjektFamilie filtern, z.B. "A_BEV". Ohne Filter werden alle exportiert.
 
 .PARAMETER OutputPath
-    Zielpfad fuer die CSV-Datei. Default: userdata\tmp\YYYYMMDD_EA_Uebersicht.csv
+    Zielpfad fuer die CSV-Datei. Default: userdata\exports\YYYYMMDD_EA_Uebersicht.csv
 
 .PARAMETER BaseUrl
     Basis-URL der BPLUS-NG Instanz.
@@ -105,7 +105,7 @@ $transformed = $filtered | ForEach-Object {
 if (-not $OutputPath) {
     $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
     $workspaceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $scriptDir))
-    $destDir = Join-Path $workspaceRoot "userdata\tmp"
+    $destDir = Join-Path $workspaceRoot "userdata\exports"
     if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
     $suffix = if ($ProjectFamily -ne "") { "_$ProjectFamily" } else { "" }
     $activeTag = if ($ActiveOnly) { "_aktiv" } else { "" }

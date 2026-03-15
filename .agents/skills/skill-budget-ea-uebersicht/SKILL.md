@@ -1,6 +1,6 @@
 ---
-name: skill-ea-uebersicht
-description: Entwicklungsauftraege (EA) aus BPLUS-NG per API abrufen und als CSV exportieren. Nutze diesen Skill wenn der User nach EA-Stammdaten, EA-Nummern, EA-Laufzeiten, Projektfamilien, Controllern oder der EA-Uebersicht fragt. NICHT verwenden fuer Fragen zu Firmen, Lieferanten, Dienstleistern, Buchungen auf EAs, Vorgaengen oder Abrufen — dafuer ist skill-bplus-export zustaendig.
+name: skill-budget-ea-uebersicht
+description: Entwicklungsauftraege (EA) aus BPLUS-NG per API abrufen und als CSV exportieren. Nutze diesen Skill wenn der User nach EA-Stammdaten, EA-Nummern, EA-Laufzeiten, Projektfamilien, Controllern oder der EA-Uebersicht fragt. NICHT verwenden fuer Fragen zu Firmen, Lieferanten, Dienstleistern, Buchungen auf EAs, Vorgaengen oder Abrufen — dafuer ist skill-budget-bplus-export zustaendig.
 ---
 
 # Skill: BPLUS-NG Entwicklungsauftraege (EA-Uebersicht)
@@ -22,8 +22,8 @@ Dieser Skill laedt die **EA-Uebersicht** (Entwicklungsauftraege / DevOrders) aus
 
 # Disambiguierung: "Auf welche EA wird X gebucht?"
 - Wenn die Anfrage ein Muster wie "auf welche EA wird <Name> gebucht" oder "wo ist <Name> zugeordnet" enthaelt:
-  1. Zuerst pruefen: Ist <Name> eine Firma/Lieferant? → `skill-bplus-export` (BTL-Daten, Feld `company`)
-  2. Nur wenn kein Treffer bei company: Personenfelder pruefen → `skill-ea-uebersicht`
+  1. Zuerst pruefen: Ist <Name> eine Firma/Lieferant? → `skill-budget-bplus-export` (BTL-Daten, Feld `company`)
+  2. Nur wenn kein Treffer bei company: Personenfelder pruefen → `skill-budget-ea-uebersicht`
   3. Bei Doppeltreffern (Firma UND Person): User fragen, was gemeint ist.
 
 ## Datenstruktur
@@ -68,25 +68,25 @@ Dieser Skill laedt die **EA-Uebersicht** (Entwicklungsauftraege / DevOrders) aus
 
 ## Export per Script
 
-**Pfad:** `<WORKSPACE>/.agents/skills/skill-ea-uebersicht/export_ea_uebersicht.ps1`
+**Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-ea-uebersicht/export_ea_uebersicht.ps1`
 
 ### Standard-Export (alle aktiven EAs, aktuelles Jahr)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-ea-uebersicht\export_ea_uebersicht.ps1"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ea-uebersicht\export_ea_uebersicht.ps1"
 ```
 
 ### Mit Parametern
 
 ```powershell
 # Inkl. inaktive EAs:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-ea-uebersicht\export_ea_uebersicht.ps1" -ActiveOnly $false
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ea-uebersicht\export_ea_uebersicht.ps1" -ActiveOnly $false
 
 # Bestimmte Projektfamilie:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-ea-uebersicht\export_ea_uebersicht.ps1" -ProjectFamily "A_BEV"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ea-uebersicht\export_ea_uebersicht.ps1" -ProjectFamily "A_BEV"
 
 # Anderes Jahr:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-ea-uebersicht\export_ea_uebersicht.ps1" -Year 2025
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ea-uebersicht\export_ea_uebersicht.ps1" -Year 2025
 ```
 
 ### Parameter
@@ -96,7 +96,7 @@ powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-ea-ue
 | `-Year` | Aktuelles Jahr | Jahr |
 | `-ActiveOnly` | `$true` | Nur aktive EAs |
 | `-ProjectFamily` | (leer = alle) | Projektfamilie filtern |
-| `-OutputPath` | `userdata\tmp\YYYYMMDD_EA_Uebersicht[_ProjFam][_aktiv].csv` | Zielpfad |
+| `-OutputPath` | `userdata\exports\YYYYMMDD_EA_Uebersicht[_ProjFam][_aktiv].csv` | Zielpfad |
 | `-BaseUrl` | `https://bplus-ng-mig.r02.vwgroup.com` | Basis-URL |
 
 ### Manueller Inline-Abruf (ohne Script)

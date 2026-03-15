@@ -27,12 +27,14 @@
 - TE Regelwerk durchsuchen | Prozessstandard / Arbeitsanweisung finden, laden oder lesen  
 → PFLICHT: Skill `$skill-te-regelwerk` laden und befolgen.
 - BPLUS-NG Export | Vorgangsuebersicht / Abrufuebersicht / BM-Uebersicht als CSV oder Excel herunterladen  
-→ PFLICHT: Skill `$skill-bplus-export` laden und befolgen.
+→ PFLICHT: Skill `$skill-budget-bplus-export` laden und befolgen.
 - Firma | Lieferant | Dienstleister | Partner → auf welche EA / DevOrder gebucht / zugeordnet / welche Vorgaenge hat Firma X  
-→ PFLICHT: Skill `$skill-bplus-export` laden und befolgen.
+→ PFLICHT: Skill `$skill-budget-bplus-export` laden und befolgen.
 - Stundensaetze | OE-Stundensaetze / Kostenstellen-Saetze aus BPLUS-NG abrufen  
-→ PFLICHT: Skill `$skill-stundensaetze` laden und befolgen.
+→ PFLICHT: Skill `$skill-budget-stundensaetze` laden und befolgen.
 - UA-Leiter | Unterabteilungsleiter / Leitung einer OE finden  
-→ PFLICHT: Skill `$skill-ua-leiter` laden und befolgen.
+→ PFLICHT: Skill `$skill-budget-ua-leiter` laden und befolgen.
 - EA-Uebersicht | EA-Stammdaten / EA-Nummern / Laufzeiten / Projektfamilien / DevOrders aus BPLUS-NG abrufen  
-→ PFLICHT: Skill `$skill-ea-uebersicht` laden und befolgen.
+→ PFLICHT: Skill `$skill-budget-ea-uebersicht` laden und befolgen.
+- Eigenleistung | EL-Planung | Mitarbeiter-EL-Buchung (auf welche EA bucht ein MA) | Buchungssperren | Jahressicht EL | EL vs. Fremdleistung  
+→ PFLICHT: Skill `$skill-budget-eigenleistung-el` laden und befolgen.

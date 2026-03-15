@@ -1,5 +1,5 @@
 ---
-name: skill-stundensaetze
+name: skill-budget-stundensaetze
 description: Stundensaetze (Hourly Rates) aus BPLUS-NG per API abrufen und als CSV exportieren. Nutze diesen Skill wenn der User nach Stundensaetzen, Kostenstellen oder OE-Stundensaetzen fragt.
 ---
 
@@ -57,25 +57,25 @@ Der Stundensatz ist pro OE immer gleich. Die Daten werden daher aggregiert expor
 
 Im Skill-Verzeichnis liegt das Script `export_stundensaetze.ps1`.
 
-**Pfad:** `<WORKSPACE>/.agents/skills/skill-stundensaetze/export_stundensaetze.ps1`
+**Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-stundensaetze/export_stundensaetze.ps1`
 
 ### Standard-Export (alle OEs, aktuelles Jahr)
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-stundensaetze\export_stundensaetze.ps1"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-stundensaetze\export_stundensaetze.ps1"
 ```
 
 ### Mit Parametern
 
 ```powershell
 # Anderes Jahr:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-stundensaetze\export_stundensaetze.ps1" -Year 2025
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-stundensaetze\export_stundensaetze.ps1" -Year 2025
 
 # Bestimmte OE:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-stundensaetze\export_stundensaetze.ps1" -OrgUnit "EKEK/1"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-stundensaetze\export_stundensaetze.ps1" -OrgUnit "EKEK/1"
 
 # Eigener Ausgabepfad:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-stundensaetze\export_stundensaetze.ps1" -OutputPath "C:\tmp\stundensaetze.csv"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-stundensaetze\export_stundensaetze.ps1" -OutputPath "C:\tmp\stundensaetze.csv"
 ```
 
 ### Parameter
@@ -84,14 +84,14 @@ powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-stund
 |---|---|---|
 | `-Year` | Aktuelles Jahr | Jahr fuer den Export |
 | `-OrgUnit` | (leer = alle) | OE filtern, z.B. `EKEK/1` |
-| `-OutputPath` | `<WORKSPACE>\userdata\bplus\YYYYMMDD_Stundensaetze[_OE].csv` | Zielpfad |
+| `-OutputPath` | `<WORKSPACE>\userdata\exports\YYYYMMDD_Stundensaetze[_OE].csv` | Zielpfad |
 | `-BaseUrl` | `https://bplus-ng-mig.r02.vwgroup.com` | Basis-URL |
 
 ### Ausgabedatei
 
 ```
-<WORKSPACE>/userdata/bplus/YYYYMMDD_Stundensaetze.csv          # Alle OEs
-<WORKSPACE>/userdata/bplus/YYYYMMDD_Stundensaetze_EKEK-1.csv   # Gefiltert auf EKEK/1
+<WORKSPACE>/userdata/exports/YYYYMMDD_Stundensaetze.csv          # Alle OEs
+<WORKSPACE>/userdata/exports/YYYYMMDD_Stundensaetze_EKEK-1.csv   # Gefiltert auf EKEK/1
 ```
 
 ---

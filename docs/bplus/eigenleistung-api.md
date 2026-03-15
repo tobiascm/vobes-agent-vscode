@@ -754,7 +754,7 @@ Die folgenden BPLUS-NG APIs sind bereits in bestehenden Skills dokumentiert und 
 
 | Skill | API-Endpunkt | Relevanz für EL |
 |---|---|---|
-| `skill-bplus-export` | `GET /ek/api/Btl/GetAll?year={y}` | EA-Nummern, Beträge, Status |
-| `skill-ea-uebersicht` | `GET /ek/api/DevOrder/GetAll?year={y}` | EA-Stammdaten, Laufzeiten |
-| `skill-stundensaetze` | HTML-Scraping von InfoDepartments | Stundensätze (alternativ zu BasicELData) |
-| `skill-ua-leiter` | HTML-Scraping von InfoDepartments | OE-Leiter |
+| `skill-budget-bplus-export` | `GET /ek/api/Btl/GetAll?year={y}` | EA-Nummern, Beträge, Status |
+| `skill-budget-ea-uebersicht` | `GET /ek/api/DevOrder/GetAll?year={y}` | EA-Stammdaten, Laufzeiten |
+| `skill-budget-stundensaetze` | HTML-Scraping von InfoDepartments | Stundensätze (alternativ zu BasicELData) |
+| `skill-budget-ua-leiter` | HTML-Scraping von InfoDepartments | OE-Leiter |

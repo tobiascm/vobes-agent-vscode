@@ -25,7 +25,7 @@
     Archivierte Vorgaenge ausschliessen (Default: $true).
 
 .PARAMETER OutputPath
-    Zielpfad fuer die CSV-Datei. Default: userdata\bplus\YYYYMMDD_BPlus_Export_<OrgUnit>.csv
+    Zielpfad fuer die CSV-Datei. Default: userdata\exports\YYYYMMDD_BPlus_Export_<OrgUnit>.csv
 
 .PARAMETER BaseUrl
     Basis-URL der BPLUS-NG Instanz.
@@ -149,7 +149,7 @@ $transformed = $filtered | ForEach-Object {
 if (-not $OutputPath) {
     $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
     $workspaceRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $scriptDir))
-    $destDir = Join-Path $workspaceRoot "userdata\bplus"
+    $destDir = Join-Path $workspaceRoot "userdata\exports"
     if (!(Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
     $orgSafe = $OrgUnit -replace '/', ''
     $OutputPath = Join-Path $destDir "$(Get-Date -Format 'yyyyMMdd')_BPlus_Export_$orgSafe.csv"

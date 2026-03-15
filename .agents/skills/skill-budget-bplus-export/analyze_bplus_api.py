@@ -177,7 +177,7 @@ def main():
     parser.add_argument('--projekt', help='Filter nach Projektfamilie (Teilstring, case-insensitive)')
     parser.add_argument('--oe', help='Filter nach OE (Teilstring, case-insensitive)')
     parser.add_argument('--top', type=int, default=None, help='Nur Top-N Firmen anzeigen')
-    parser.add_argument('--output', help='Pfad zur Ausgabedatei (.md). Default: userdata/tmp/')
+    parser.add_argument('--output', help='Pfad zur Ausgabedatei (.md). Default: userdata/sessions/')
     args = parser.parse_args()
 
     data = load_csv(args.csv_file)
@@ -189,7 +189,7 @@ def main():
         out_path = args.output
     else:
         workspace = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-        tmp_dir = os.path.join(workspace, 'userdata', 'tmp')
+        tmp_dir = os.path.join(workspace, 'userdata', 'sessions')
         os.makedirs(tmp_dir, exist_ok=True)
         label = args.firma or args.ea or args.status or args.projekt or args.oe or 'gesamt'
         label = label.lower().replace(' ', '_')[:20]
