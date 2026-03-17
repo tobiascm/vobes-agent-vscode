@@ -59,6 +59,7 @@ Nutze diesen Skill immer dann, wenn der User nach Agenda-Ergaenzungen, Regelterm
   Bedeutung: Zusaetzlicher Chat-Einstiegspunkt im EKEK1-Kontext.
 
 ## Anwendungshinweise
+- Fuer das Hinzufuegen von Aura-Card-Kacheln auf dem Dashboard siehe Skill `skill-update-confluence-page`.
 - Bei neuen Agenda- oder Dashboard-Wuenschen zuerst diese Links verwenden.
 - Bei Personalthemen weiterhin priorisiert den HR Chat Bot nennen.
 - Wenn der User explizit eine Confluence-Aenderung wuenscht, mit MCP Confluence-Tools arbeiten.

@@ -38,3 +38,5 @@
 → PFLICHT: Skill `$skill-budget-ea-uebersicht` laden und befolgen.
 - Eigenleistung | EL-Planung | Mitarbeiter-EL-Buchung (auf welche EA bucht ein MA) | Buchungssperren | Jahressicht EL | EL vs. Fremdleistung  
 → PFLICHT: Skill `$skill-budget-eigenleistung-el` laden und befolgen.
+- Plausibilisierung | Begruendung | BM-Text | Aufwandsplausibilisierung | Nachfrage Controller | warum wird X benoetigt | Aufwaende begruenden  
+→ PFLICHT: Skill `$skill-budget-plausibilisierung` laden und befolgen.

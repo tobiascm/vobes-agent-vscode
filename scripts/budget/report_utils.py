@@ -7,7 +7,7 @@ from typing import Iterable, Sequence
 from tabulate import tabulate
 
 
-WORKSPACE = Path(__file__).resolve().parent.parent
+WORKSPACE = Path(__file__).resolve().parent.parent.parent
 SESSIONS_DIR = WORKSPACE / "userdata" / "sessions"
 
 

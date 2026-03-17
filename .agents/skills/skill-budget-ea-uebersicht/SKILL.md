@@ -9,8 +9,8 @@ Dieser Skill laedt die **EA-Uebersicht** (Entwicklungsauftraege / DevOrders) aus
 
 ## Workflow
 
-> 1. **Sync:** `python scripts/budget_db.py sync devorder` (Cache: 1 Tag, `--force` zum Erzwingen)
-> 2. **Query:** `python scripts/budget_db.py query "SELECT ..." --output result.md --open` ausfuehren
+> 1. **Sync:** `python scripts/budget/budget_db.py sync devorder` (Cache: 1 Tag, `--force` zum Erzwingen)
+> 2. **Query:** `python scripts/budget/budget_db.py query "SELECT ..." --output result.md --open` ausfuehren
 > 3. Das Script schreibt eine **Markdown-Tabelle** in die Datei und oeffnet sie in VS Code
 
 ## Kontext

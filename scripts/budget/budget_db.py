@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from report_utils import report_path, section, table_md, write_report
 
 
-WORKSPACE = Path(__file__).resolve().parent.parent
+WORKSPACE = Path(__file__).resolve().parent.parent.parent
 DB_PATH = WORKSPACE / "userdata" / "budget.db"
 BASE_URL = "https://bplus-ng-mig.r02.vwgroup.com"
 ORG_UNIT = "EKEK/1"
@@ -401,21 +401,112 @@ def validate_select(sql: str) -> None:
             raise ValueError(f"Verbotenes SQL erkannt:{banned.strip()}")
 
 
-def run_select(sql: str, *, output: str | None = None, title: str = "Budget-Auswertung") -> Path:
+def _extract_tables(sql: str) -> list[str]:
+    """Extract table names referenced in FROM/JOIN clauses."""
+    tokens = re.findall(r'(?:from|join)\s+([a-z_]\w*)', sql.strip().lower())
+    known = set(SYNC_FUNCS.keys())
+    return [t for t in dict.fromkeys(tokens) if t in known]
+
+
+def _auto_sync(conn: sqlite3.Connection, sql: str, year: int) -> list[str]:
+    """Sync tables referenced in *sql* if they are not fresh."""
+    synced = []
+    for table in _extract_tables(sql):
+        if not is_fresh(conn, table, year):
+            count = SYNC_FUNCS[table](conn, year, force=True)
+            synced.append(f"{table} ({count} Zeilen)")
+    return synced
+
+
+def run_select(
+    sql: str,
+    *,
+    output: str | None = None,
+    title: str = "Budget-Auswertung",
+    stdout: bool = False,
+    no_file: bool = False,
+    limit: int = 0,
+    sync: bool = False,
+    year: int | None = None,
+) -> Path | None:
     validate_select(sql)
     with connect() as conn:
         init_db(conn)
+        if sync:
+            _auto_sync(conn, sql, year or datetime.now().year)
         rows = conn.execute(sql).fetchall()
     headers = list(rows[0].keys()) if rows else []
     data = [list(r) for r in rows]
-    path = report_path("budget_query", output=output)
-    body = [section("SQL", f"```sql\n{sql.strip()}\n```"), section("Ergebnis", table_md(data, headers))]
-    write_report(path, title, body)
+
+    # --- Markdown report file (all rows, no limit) ---
+    path: Path | None = None
+    if not no_file:
+        path = report_path("budget_query", output=output)
+        body = [
+            section("SQL", f"```sql\n{sql.strip()}\n```"),
+            section("Ergebnis", f"> {len(data)} Zeilen\n\n" + table_md(data, headers)),
+        ]
+        write_report(path, title, body)
+
+    # --- stdout (respects limit) ---
+    if stdout:
+        print(f"SQL:\n{sql.strip()}\n")
+        truncated = data[:limit] if limit > 0 else data
+        print(table_md(truncated, headers))
+        print(f"Zeilen: {len(truncated)}", end="")
+        if limit > 0 and len(data) > limit:
+            print(f" (von {len(data)} gesamt, --limit {limit})")
+        else:
+            print()
+        if path:
+            print(f"Report: {path}")
+
     return path
 
 
+def run_schema(table: str | None = None) -> None:
+    """Print DB schema info to stdout."""
+    with connect() as conn:
+        init_db(conn)
+        if table:
+            # Show columns for a specific table
+            cols = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            if not cols:
+                print(f"Tabelle '{table}' nicht gefunden.", file=sys.stderr)
+                raise SystemExit(1)
+            # Fetch sample values
+            sample_rows = conn.execute(f"SELECT * FROM {table} LIMIT 3").fetchall()  # noqa: S608 — table comes from PRAGMA-validated name
+            col_info = []
+            for c in cols:
+                name = c["name"]
+                col_type = c["type"] or "TEXT"
+                examples = [str(r[name]) for r in sample_rows if r[name] is not None and str(r[name]).strip()]
+                sample = "; ".join(examples[:3]) if examples else ""
+                if len(sample) > 60:
+                    sample = sample[:57] + "..."
+                col_info.append([name, col_type, sample])
+            print(f"## Tabelle: {table}\n")
+            print(table_md(col_info, ["Spalte", "Typ", "Beispielwerte"]))
+            row_count = conn.execute(f"SELECT COUNT(*) AS cnt FROM {table}").fetchone()["cnt"]  # noqa: S608
+            print(f"Zeilen: {row_count}")
+        else:
+            # List all user tables
+            tables = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            ).fetchall()
+            info = []
+            for t in tables:
+                name = t["name"]
+                cnt = conn.execute(f"SELECT COUNT(*) AS cnt FROM {name}").fetchone()["cnt"]  # noqa: S608
+                meta = get_sync_meta(conn, name)
+                synced = meta["synced_at"] if meta else "-"
+                info.append([name, cnt, synced])
+            print("## budget.db Schema\n")
+            print(table_md(info, ["Tabelle", "Zeilen", "Letzter Sync"]))
+
+
 def parse_args():
-    parser = argparse.ArgumentParser(description="BPLUS budget.db Sync/Query")
+    parser = argparse.ArgumentParser(description="BPLUS budget.db Sync/Query/Schema")
     sub = parser.add_subparsers(dest="command", required=True)
 
     sync = sub.add_parser("sync", help="Tabelle oder alle Tabellen synchronisieren")
@@ -427,14 +518,36 @@ def parse_args():
     query.add_argument("sql")
     query.add_argument("--output")
     query.add_argument("--title", default="Budget-Auswertung")
+    query.add_argument("--stdout", action="store_true", help="Ergebnis auf stdout ausgeben")
+    query.add_argument("--no-file", action="store_true", help="Keinen Report-File erzeugen (nur mit --stdout)")
+    query.add_argument("--limit", type=int, default=200, help="Max. Zeilen auf stdout (0=unbegrenzt, Default: 200)")
+    query.add_argument("--sync", action="store_true", help="Referenzierte Tabellen vor Query synchronisieren")
+    query.add_argument("--year", type=int, default=datetime.now().year)
+
+    schema_p = sub.add_parser("schema", help="DB-Schema anzeigen")
+    schema_p.add_argument("--table", help="Details zu einer bestimmten Tabelle")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.command == "schema":
+        run_schema(args.table)
+        return 0
+
     if args.command == "query":
-        path = run_select(args.sql, output=args.output, title=args.title)
-        print(path)
+        path = run_select(
+            args.sql,
+            output=args.output,
+            title=args.title,
+            stdout=args.stdout,
+            no_file=args.no_file,
+            limit=args.limit,
+            sync=args.sync,
+            year=args.year,
+        )
+        if not args.stdout and path:
+            print(path)
         return 0
 
     with connect() as conn:

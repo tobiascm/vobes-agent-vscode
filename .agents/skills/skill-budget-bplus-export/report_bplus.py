@@ -10,12 +10,12 @@ from datetime import datetime
 from pathlib import Path
 
 WORKSPACE = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(WORKSPACE / "scripts"))
+sys.path.insert(0, str(WORKSPACE / "scripts" / "budget"))
 
 from report_utils import note, report_path, section, sync_info, table_md, warning, write_report  # noqa: E402
 
 DB_PATH = WORKSPACE / "userdata" / "budget.db"
-BUDGET_DB = WORKSPACE / "scripts" / "budget_db.py"
+BUDGET_DB = WORKSPACE / "scripts" / "budget" / "budget_db.py"
 
 
 def sync_btl(year: int, force: bool = False) -> bool:
