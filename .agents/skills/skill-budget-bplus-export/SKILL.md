@@ -1,434 +1,196 @@
 ---
 name: skill-budget-bplus-export
-description: Export und Analyse aus BPLUS-NG (Vorgangsuebersicht, Abrufuebersicht, BM-Uebersicht, Konzeptuebersicht) per API oder Playwright. Nutze diesen Skill wenn der User eine BPLUS-Uebersicht als Excel oder CSV exportieren moechte ODER wenn er Analysefragen zu BPLUS-Daten stellt, z.B. auf welche EA eine Firma/Lieferant/Dienstleister gebucht ist, welche Vorgaenge/Abrufe eine bestimmte Firma hat, wo ein externer Partner zugeordnet ist, oder Budget-/Ausgabenfragen zu Firmen und Konzepten. Auch ohne expliziten Exportwunsch ist dieser Skill zustaendig, wenn die Antwort auf BTL-Daten (company, concept, ea, planned_value) basiert.
+description: Export und Analyse aus BPLUS-NG (Vorgangsuebersicht, Abrufuebersicht, BM-Uebersicht, Konzeptuebersicht) per API oder Playwright. Analysefragen laufen ueber report_bplus.py auf Basis der lokalen SQLite-DB. Fuer expliziten Excel-Export bleibt der Web-/Playwright-Pfad erhalten. Auch ohne expliziten Exportwunsch ist dieser Skill zustaendig, wenn die Antwort auf BTL-Daten (company, concept, ea, planned_value) basiert — z.B. auf welche EA eine Firma/Lieferant/Dienstleister gebucht ist, welche Vorgaenge/Abrufe eine bestimmte Firma hat, wo ein externer Partner zugeordnet ist, oder Budget-/Ausgabenfragen zu Firmen und Konzepten.
 ---
 
 # Skill: BPLUS-NG Export
 
-Dieser Skill beschreibt den Workflow, um Uebersichten aus **BPLUS-NG/EK** (Konzeptuebersicht / Vorgangsuebersicht / Abrufuebersicht / BM-Uebersicht / Ausgaben) als CSV- oder Excel-Datei herunterzuladen.
+Dieser Skill hat zwei Pfade:
 
-## Pflicht: Analyse-Script verwenden
-
-> **WICHTIG:** Bei Analysefragen zu BPLUS-Daten (Firma/EA/Status/Summen) IMMER das Analyse-Script `analyze_bplus_api.py` ausfuehren.
-> Summen, Aggregationen und Filterungen NIEMALS manuell berechnen oder aus der CSV-Datei ablesen.
-> **NIEMALS eine bereits vorhandene Ergebnis-Datei (.md) wiederverwenden.** Das Script muss bei JEDER Anfrage neu ausgefuehrt werden, damit die Daten aktuell sind.
->
-> **Workflow:**
-> 1. CSV exportieren per `export_bplus_api.ps1` (falls noch nicht vorhanden oder älter als 1 Tag)
-> 2. `python analyze_bplus_api.py <csv> --firma <name>` ausfuehren (IMMER neu, nie vorhandene .md-Datei verwenden)
-> 3. Das Script gibt den **Pfad zur Ergebnis-Datei** (.md) auf stdout aus
-> 4. **Optional:** Falls die Userfrage Kontext erfordert (z.B. Einordnung, Hinweise, Empfehlungen), darf die Ergebnis-Datei per `replace_string_in_file` oder `read_file` + Einfuegen **vor oder nach den Tabellen** ergaenzt werden. Zahlen und Tabellen des Scripts dabei NICHT veraendern.
-> 5. **NUR folgenden Satz im Chat an den User ausgeben:**
->    `Den Ergebnisbericht habe ich erstellt und hier fuer Dich abgelegt:` gefolgt von einem **klickbaren Markdown-Link** auf die Ergebnis-Datei (workspace-relativer Pfad).
-> 6. **Im Chat NICHTS weiter ausgeben** — keine Tabellen, keine Zusammenfassungen, keine Zahlen. Der User oeffnet die Datei selbst.
->
-> **VERBOTEN:** Zahlen, Summen oder Tabellen des Scripts im Chat anzeigen oder in der Datei veraendern. Eigene Ergaenzungen (Kontext, Fazit, Hinweise) gehoeren VOR oder NACH die Script-Daten in die Ergebnis-Datei.
->
-> **Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-bplus-export/analyze_bplus_api.py`
-> **Ergebnis:** `<WORKSPACE>/userdata/sessions/<datum>_bplus_<filter>.md`
+1. **Analyse / Reporting** (Standard)
+   BTL-Daten nach `budget.db` synchronisieren und strukturierten Markdown-Bericht erzeugen
+2. **Expliziter Datei-Export** (Ausnahme)
+   CSV/Excel direkt aus BPLUS herunterladen. **Excel bleibt separater Web-/Playwright-Pfad.**
+   BPLUS URL: https://bplus-ng-mig.r02.vwgroup.com/ek/btl
 
 ## Kontext
 
-- Der Standard Export umfasst ausschliesslich das Team **EKEK/1**. Der Export kann auf ganz EK ausgeweitet werden.
+- Der Standard-Export umfasst ausschliesslich das Team **EKEK/1**. Der Export kann auf ganz EK ausgeweitet werden.
 - Ersteller im Team: **Bachmann Armin**, **Bartels Timo**, **Junge Christian**.
-- **Standard-Jahr:** Wenn der User kein Jahr nennt, wird immer das **aktuelle Jahr** verwendet. 
-
-## Darstellung von Einzelaufstellungen
-
-Tabellen immer als pretty printed Markdown-Tabellen darstellen.
-Nutze zur Visualisierung wenn möglich mermaid pie showData Charts.
-Wenn einzelne Vorgaenge/Abrufe als Tabelle aufgelistet werden, muessen mindestens die folgenden Spalten enthalten sein, je nach Userfrag auch mehr:
-
-| Spalte | Pflicht | CSV-Spalte |
-|---|---|---|
-| Konzept | Ja | `concept` |
-| EA-Nummer | Ja | `dev_order` |
-| EA-Titel | Ja | `ea` |
-| BM-Titel | Ja | `title` |
-| Wert | Ja | `planned_value` (Ganzzahl EUR, keine Nachkommastellen) |
-| Firma | Ja | `company` |
-| Status | Ja | `status` (kombinierter Klartext) |
-| OE | Nur bei mehreren OEs | `org_unit` |
-
-> **Am Ende der Tabelle immer eine Summenzeile mit dem Gesamtwert ausgeben.**
-> Zusaetzlich darunter die Summenwerte pro Status.
->
-> **Ersteller (`creator`) ist NICHT standardmaessig anzuzeigen**, nur auf explizite Nachfrage.
-
-### Beispiel-Ausgabe
-
-| Konzept | EA-Nummer | EA-Titel | BM-Titel | Wert | Firma | Status |
-|---|---|---|---|---:|---|---|
-| K-12345 | 0043402 | VW386/0EU_K T-ROC | Aenderung Stecker | 12000 | Mustermann GmbH | 07_In Planen-BM: Bestellt |
-| K-12346 | 0043516 | VW316/6EU_B1 PA ID.4 EU | Kabelbaum Anpassung | 8500 | Beispiel AG | 06_In Bearbeitung BM-Team |
-| K-12347 | 0043516 | VW316/6EU_B1 PA ID.4 EU | Clip-Aenderung | 3200 | Beispiel AG | 98_Storniert |
-| | | | **Summe** | **23700** | | |
-
-```mermaid
-pie showData
-    title Status-Verteilung
-    "07_In Planen-BM: Bestellt" : 12000
-    "06_In Bearbeitung BM-Team" : 8500
-    "98_Storniert" : 3200
-```
+- **Standard-Jahr:** Wenn der User kein Jahr nennt, wird immer das **aktuelle Jahr** verwendet.
 
 ## Wann verwenden?
 
-- Der User moechte eine BM / Budget / Abruf Uebersicht aus BPLUS-NG als CSV oder Excel exportieren
+- Der User moechte eine BM / Budget / Abruf Uebersicht aus BPLUS-NG
 - Der User erwaehnt BPLUS, Budget, Vorgangsuebersicht, Abrufuebersicht, BM-Uebersicht oder Konzeptuebersicht
-- Der User moechte Daten aus dem Beschaffungstool BPLUS herunterladen
+- Der User fragt, auf welche EA eine **Firma/Lieferant/Dienstleister** gebucht ist
+- Der User fragt nach Vorgaengen/Abrufen einer bestimmten Firma
+- Der User stellt Budget-/Ausgabenfragen zu Firmen und Konzepten
 
-## Methodenwahl
+## Pflicht: Analyse-Script verwenden
 
-| Methode | Wann verwenden |
-|---|---|
-| **API (bevorzugt)** | Standard fuer CSV-Export. Schnell (~2-3 Sek.), robust, kein Browser noetig. |
-| **Playwright (Fallback)** | Nur wenn API nicht erreichbar ist, oder der User explizit Excel-Export benoetigt. |
+> **WICHTIG:** Bei Analysefragen zu BPLUS-Daten IMMER `report_bplus.py` verwenden.
+> Tabellen, Summen und Status-Aufschluesselungen NIEMALS manuell berechnen.
+> **NIEMALS eine vorhandene Ergebnis-Datei wiederverwenden.** Das Script wird bei JEDER Anfrage neu ausgefuehrt.
+>
+> **Workflow Analyse:**
+> 1. `python .agents/skills/skill-budget-bplus-export/report_bplus.py ...`
+> 2. Das Script synchronisiert `btl` selbst bei Bedarf.
+> 3. Das Script schreibt IMMER eine Ergebnis-Datei nach `userdata/sessions/`.
+> 4. Das Script gibt NUR den Pfad zur Ergebnis-Datei auf stdout aus.
+> 5. **NUR folgenden Satz im Chat an den User ausgeben:**
+>    `Den Ergebnisbericht habe ich erstellt und hier fuer Dich abgelegt:` gefolgt von einem klickbaren Markdown-Link.
+> 6. **Im Chat NICHTS weiter ausgeben** — keine Tabellen, keine Zahlen, keine Zusammenfassung.
 
-> **Immer zuerst die API-Methode versuchen.** Playwright nur als Fallback.
+## Begriffsklaerung: "Export"
 
-## Voraussetzungen
+- **Bei Analysefragen** bedeutet "Export" hier: BPLUS-Daten in die lokale DB synchronisieren.
+- **Wenn der User explizit eine Datei moechte**, ist echter Datei-Export gemeint.
+- **Excel-Export** bleibt erhalten und laeuft NICHT ueber `budget_db.py`.
 
-- Der User muss im VW-Netzwerk authentifiziert sein (SSO/Kerberos)
-- Fuer API-Methode: PowerShell mit `Invoke-RestMethod` (Standard)
-- Fuer Playwright-Methode: MCP Playwright muss konfiguriert und aktiv sein
-- KEINE Screenshots/Bilder herunterladen oder anschauen (Performance)
+## Analyse-Beispiele
 
-## URLs und API-Endpunkte
+```bash
+python .agents/skills/skill-budget-bplus-export/report_bplus.py --firma edag
+python .agents/skills/skill-budget-bplus-export/report_bplus.py --status bestellt
+python .agents/skills/skill-budget-bplus-export/report_bplus.py --ea 0043402
+python .agents/skills/skill-budget-bplus-export/report_bplus.py --projekt MEB
+python .agents/skills/skill-budget-bplus-export/report_bplus.py --oe EKEK/1
+python .agents/skills/skill-budget-bplus-export/report_bplus.py --firma edag --status bestellt --top 5
+```
 
-| Ressource | URL |
-|---|---|
-| Konzeptuebersicht (BTL) | `https://bplus-ng-mig.r02.vwgroup.com/ek/btl` |
-| API: Alle BTL-Daten | `https://bplus-ng-mig.r02.vwgroup.com/ek/api/Btl/GetAll?year={year}` |
-| API: Verfuegbare Jahre | `https://bplus-ng-mig.r02.vwgroup.com/ek/api/Year` |
+## Status-Mapping
 
-> Hinweis: Die URL kann sich aendern (z.B. Wechsel von `-mig` zu Produktion). Falls die API nicht antwortet, den User nach der aktuellen URL fragen.
-
----
-
-## Methode 1: API-Export (bevorzugt)
-
-### Ueberblick
-
-Die BPLUS-NG REST-API liefert alle BTL-Daten als JSON-Array. Die Filterung (OE, Status) erfolgt client-seitig. Die Authentifizierung laeuft ueber Windows-SSO (`-UseDefaultCredentials`).
-
-### API-Details
-
-- **Endpunkt:** `GET /ek/api/Btl/GetAll?year={year}`
-- **Authentifizierung:** Windows-SSO (Kerberos/NTLM)
-- **Antwort:** JSON-Array mit allen Konzepten des Jahres (alle OEs)
-- **Keine Server-seitige Filterung** — Query-Parameter ausser `year` werden ignoriert
-
-### Wichtige JSON-Felder (API) und CSV-Spalten
-
-Das Export-Script transformiert die API-Daten in ein LLM-optimiertes CSV-Format.
-
-| API-Feld (JSON) | CSV-Spalte | Beschreibung | Transformation |
-|---|---|---|---|
-| `concept` | `concept` | Konzept-Nummer | — |
-| `eaTitel` | `ea` | EA-Titel | Getrimmt |
-| `title` | `title` | Titel des Vorgangs | Getrimmt |
-| `workFlowStatus` + `status` | `status` | Kombinierter Klartext-Status | z.B. `07_In Planen-BM: Bestellt` |
-| `plannedValue` | `planned_value` | Wert in EUR | Ganzzahl, Punkt-Dezimal |
-| `orgUnitName` | `org_unit` | Organisationseinheit | — |
-| `company` | `company` | Firmenname | Getrimmt |
-| `creatorName` | `creator` | Ersteller | Getrimmt |
-| `bmNumber` | `bm_number` | BM-Nummer | — |
-| `azNumber` | `az_number` | Rahmen-Aktenzeichen | — |
-| `projektfamilie` | `projektfamilie` | Projektfamilie | `KEINE` → leer |
-| `devOrder` | `dev_order` | EA-Nummer | — |
-| `pbmText` | `bm_text` | Beschreibungstext | Newlines → ` \| ` |
-| `lastUpdated` | `last_updated` | Letzte Aenderung | Nur Datum (YYYY-MM-DD) |
-| `targetDate` | `target_date` | Zieldatum | Nur Datum (YYYY-MM-DD) |
-
-### CSV-Format
-
-- **Delimiter:** Komma (`,`)
-- **Encoding:** UTF-8 ohne BOM
-- **Dezimalzeichen:** Punkt (`.`)
-- **Werte:** Ganzzahl (keine Nachkommastellen)
-- **Strings:** Alle getrimmt (kein trailing whitespace)
-- **Spaltennamen:** snake_case
-
-### Status-Mapping (API → Anzeige)
-
-| API `workFlowStatus` | Anzeige-Status | Im Standard-Filter enthalten |
+| API `workFlowStatus` | Anzeige-Status | Im Standard-Filter |
 |---|---|---|
 | `WF_Created` | 01_In Erstellung | Ja |
 | `WF_In_process_BM_Team` | 06_In Bearbeitung BM-Team | Ja |
-| `WF_In_Planen_BM` | 07_In Planen-BM: {status} | Ja |
+| `WF_In_Planen_BM` | 07_In Planen-BM: {detail} | Ja |
 | `WF_Rejected` | 97_Abgelehnt | Ja |
 | `WF_Canceled` | 98_Storniert | Ja |
-| `WF_Archived` | 99_Archiviert | **Nein** (Standard: ausgeschlossen) |
+| `WF_Archived` | 99_Archiviert | **Nein** (ausgeschlossen) |
 
-### Workflow: API-Export per Script
+## Darstellungsregeln (im Report)
 
-Im Skill-Verzeichnis liegt das Script `export_bplus_api.ps1`.
+Der Report enthaelt automatisch:
+- **Einzelvorgaenge** als Markdown-Tabelle (Konzept, EA-Nummer, EA-Titel, BM-Titel, Wert, Firma, Status) mit Summenzeile
+- **Status-Verteilung** als Tabelle + Mermaid Pie-Chart
+- **Firmen-Verteilung** (wenn kein Firma-Filter aktiv)
+- **EA-Verteilung** (wenn mehrere EAs)
 
-**Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-bplus-export/export_bplus_api.ps1`
+## Excel-Export behalten
 
-#### Standard-Export (EKEK/1, aktuelles Jahr, ohne Archivierte)
+Wenn der User **explizit Excel** verlangt:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\export_bplus_api.ps1"
-```
+1. Analysepfad NICHT verwenden
+2. Web-/Playwright-Pfad verwenden
+3. In BPLUS auf **Export** → **Export als Excel** gehen
+4. Ergebnisdatei nach `userdata/bplus/` verschieben
+5. Erzeuge NIEMALS Bilder und schaue NIEMALS Bilder an.
 
-#### Mit Parametern
+Kurzregel:
 
-```powershell
-# Anderes Jahr:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\export_bplus_api.ps1" -Year 2025
+- **Analysefrage** → `report_bplus.py`
+- **"als Excel herunterladen"** → Web-/Playwright-Export
 
-# Andere OE:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\export_bplus_api.ps1" -OrgUnit "EKEK/2"
+## API-Endpunkte
 
-# Inkl. Archivierte:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\export_bplus_api.ps1" -ExcludeArchived $false
-
-# Eigener Ausgabepfad:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\export_bplus_api.ps1" -OutputPath "C:\tmp\export.csv"
-```
-
-> **Parameter `-Delimiter` wurde entfernt.** Das CSV nutzt jetzt immer Komma als Delimiter (LLM-optimiert).
-
-#### Manueller Inline-Export (ohne Script)
-
-> **Hinweis:** Der Inline-Export erzeugt ein Roh-CSV ohne LLM-Optimierungen. Fuer den optimierten Export das Script verwenden.
-
-```powershell
-$response = Invoke-RestMethod -Uri "https://bplus-ng-mig.r02.vwgroup.com/ek/api/Btl/GetAll?year=2026" -UseDefaultCredentials
-$filtered = $response | Where-Object { $_.orgUnitName -eq 'EKEK/1' -and $_.workFlowStatus -ne 'WF_Archived' }
-$filtered | Export-Csv -Path "<WORKSPACE>\userdata\bplus\$(Get-Date -Format 'yyyyMMdd')_BPlus_Export_EKEK1.csv" -NoTypeInformation -Delimiter "," -Encoding UTF8
-```
-
-### API: Haeufige Probleme
-
-| Problem | Loesung |
+| Ressource | URL |
 |---|---|
-| `Invoke-RestMethod` schlaegt fehl | Pruefen ob VW-Netzwerk/VPN aktiv; ggf. Fallback auf Playwright |
-| Leere Antwort | Jahr pruefen (`/ek/api/Year` liefert gueltige Jahre) |
-| Weniger Daten als erwartet | OrgUnit-Filter pruefen (exakte Schreibweise, z.B. `EKEK/1`) |
-| URL nicht erreichbar | URL kann sich aendern (z.B. `-mig` entfaellt); User fragen |
+| BTL-Daten | `GET /ek/api/Btl/GetAll?year={year}` |
 
----
+## Flexible SQL-Abfrage (budget_db.py query)
 
-## Methode 2: Playwright-Export (Fallback)
+> Der Agent entscheidet SELBST, ob `report_bplus.py` oder `budget_db.py query` verwendet wird.
+> Der User muss NICHT explizit "per SQL" sagen.
 
-> **Hinweis:** Diese Methode nur verwenden wenn die API-Methode (Methode 1) nicht funktioniert oder der User explizit Excel-Format benoetigt.
+### Automatische Entscheidungslogik
 
-## Seitenstruktur (Accessibility-Tree)
+**`report_bplus.py` verwenden wenn:**
+- Einfacher Filter nach genau EINEM Kriterium (Firma, Status, EA, Projekt, OE)
+- Der User fragt "Zeig mir alle BMs von Firma X" oder "Was hat Status bestellt?"
+- Kein Vergleich, keine Aggregation, kein JOIN noetig
 
-Die geladene Seite hat folgende relevante Elemente:
+**`budget_db.py query --stdout --no-file --sync` verwenden wenn:**
+- Aggregationen gefragt sind (SUM, COUNT, AVG, GROUP BY)
+- Vergleiche oder Rankings ("Top 5", "groesste", "meiste", "Verteilung")
+- Daten aus mehreren Tabellen kombiniert werden muessen (JOIN btl + devorder + el_planning)
+- Komplexe WHERE-Bedingungen (AND/OR, Subqueries, HAVING)
+- Der User nach Summen, Anteilen oder Verhältnissen fragt
+- Die Frage nicht mit einem einzelnen report_bplus.py-Filter beantwortbar ist
+- Der User explizit SQL oder eine freie Abfrage verlangt
 
-### Header
-- Sprache umschalten: Buttons **DE** / **EN**
-- User-Icon oben rechts
+### Workflow
 
-### Filter-Bereich (chip area / listbox)
-- **Jahr-Dropdown** (`combobox "Jahr"`): Standardmaessig aktuelles Jahr
-- **Filter-Chips** in einer `listbox "chip area"`:
-  - `option "EKEK/1-Export"` — OE-Vorfilter (Organisationseinheit)
-  - `option "Status"` — Status-Filter (z.B. nur bestimmte Status anzeigen)
-  - `option "OE"` — OE-Filter
-  - Jeder Chip hat ein **Icon-Element** (letztes Kind-Element des Chips) zum **Entfernen** des Filters
+1. **Schema erkunden** (einmalig pro Session):
+   ```bash
+   python scripts/budget/budget_db.py schema
+   python scripts/budget/budget_db.py schema --table btl
+   ```
+2. **SQL ausfuehren**:
+   ```bash
+   python scripts/budget/budget_db.py query "SELECT ..." --stdout --no-file --sync
+   ```
+3. Ergebnis direkt aus stdout verwenden und dem User praesentieren.
 
-### Aktions-Buttons
-- `button "Meine Filter"` — Gespeicherte Filtersets
-- `button "+ Konzept"` — Neues Konzept anlegen
-- `button "31 Ausgeblendet"` — Spalten ein-/ausblenden
-- `button "Export"` — **Export-Dropdown** oeffnen
+### CLI-Flags fuer `query`
 
-### Export-Dropdown
-Nach Klick auf den **Export**-Button erscheint eine `list` mit:
-- `listitem` → `"Export als Excel"` (HTML-ID: `#btnExportExcel`)
-- `listitem` → `"Export als CSV"`
-
-### Datentabelle (grid)
-- Spalten: ACTION, OP, Titel, Konzept, Status, Wert, OE, Firma, Ersteller, BM-Nr., Rahmen-AZ, Proj. Fam., EA-Nr., EA, BM-Text
-- Summenzeile am Ende (z.B. `∑ 4.508.527,66`)
-
-## Workflow: Export mit optionaler Filter-Aenderung
-
-### Schritt 1: Seite laden
-
-```
-browser_navigate → https://bplus-ng-mig.r02.vwgroup.com/ek/btl
-browser_wait_for → time: 4 (Sekunden warten bis Seite vollstaendig geladen)
-```
-
-### Schritt 2: Snapshot pruefen
-
-```
-browser_snapshot
-```
-
-Pruefen ob:
-- Die Tabelle mit Daten geladen ist (Zeilen in `rowgroup` sichtbar)
-- Die Filter-Chips sichtbar sind
-
-### Schritt 3: Filter anpassen (optional)
-
-Falls der User bestimmte Filter entfernen moechte (z.B. Status-Filter):
-
-1. Den gewuenschten Filter-Chip in der `listbox "chip area"` finden (z.B. `option "Status"`)
-2. Das **Icon-Element** (letztes Kind-Element innerhalb des Chips) anklicken — das ist der Entfernen-Button
-3. Warten bis die Tabelle neu geladen hat (1-2 Sekunden)
-4. Snapshot pruefen ob Filter entfernt wurde (Chip sollte verschwunden sein)
-
-**Wichtig:** Den Chip selbst anklicken oeffnet/aktiviert ihn nur. Das **Icon-Element** (generic mit leerem Text oder cancel-Symbol) innerhalb des Chips **entfernt** den Filter.
-
-Beispiel-Sequenz zum Entfernen des Status-Filters:
-```
-# Chip finden: option "Status" mit ref=eXXX
-# Icon (letztes Kind) finden: generic ref=eYYY
-browser_click → ref=eYYY (das Icon, NICHT den Chip selbst)
-```
-
-### Schritt 4: Export ausloesen
-
-Standard ist **CSV**. Falls der User explizit Excel verlangt, stattdessen "Export als Excel" waehlen.
-
-```
-browser_click → Export-Button (button "Export")
-# Warten bis Dropdown erscheint
-browser_click → "Export als CSV" (listitem mit Text "Export als CSV")
-# Alternativ fuer Excel:
-# browser_click → "Export als Excel" (listitem mit Text "Export als Excel")
-```
-
-### Schritt 5: Download pruefen und nach userdata\bplus verschieben
-
-```
-# 3-4 Sekunden warten
-browser_wait_for → time: 4
-
-# Neueste CSV-Datei im Downloads-Ordner finden (bei Excel: *.xlsx):
-$file = Get-ChildItem "$env:USERPROFILE\Downloads" -Filter "*.csv" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-$file | Format-Table Name, LastWriteTime -AutoSize
-
-# Nach userdata\bplus verschieben und umbenennen (YYYYMMDD_BPlus_Export_EKEK1.csv):
-$dest = "<WORKSPACE>\userdata\bplus"
-if (!(Test-Path $dest)) { New-Item -ItemType Directory -Path $dest -Force | Out-Null }
-$newName = "$(Get-Date -Format 'yyyyMMdd')_BPlus_Export_EKEK1.csv"
-Move-Item -Path $file.FullName -Destination "$dest\$newName" -Force
-Write-Host "Verschoben nach: $dest\$newName"
-```
-
-> **Wichtig:** `<WORKSPACE>` durch den tatsaechlichen Workspace-Pfad ersetzen (z.B. `c:\Daten\Python\vobes_agent_vscode`).
-
-Die Datei wird umbenannt nach dem Schema:
-```
-YYYYMMDD_BPlus_Export_EKEK1.csv
-# Beispiel: 20260314_BPlus_Export_EKEK1.csv
-```
-
-## Haeufige Probleme und Loesungen
-
-| Problem | Loesung |
+| Flag | Beschreibung |
 |---|---|
-| Seite laedt nicht / leerer Snapshot | Laenger warten (5-8 Sek.) oder User nach Netzwerkstatus fragen |
-| Filter-Chip laesst sich nicht entfernen | Das Icon-Element innerhalb des Chips anklicken, nicht den Chip selbst |
-| Export-Dropdown erscheint nicht | Export-Button erneut klicken |
-| Keine neue Datei im Downloads-Ordner | Laenger warten, ggf. nochmal exportieren |
-| Datei nicht in userdata\bplus | Pruefen ob Move-Item fehlerfrei lief, Pfad pruefen |
-| Andere Uebersicht gewuenscht | User nach konkreter URL fragen |
+| `--stdout` | Ergebnis (SQL + Tabelle + Zeilenanzahl) auf stdout ausgeben |
+| `--no-file` | Kein Markdown-Report erzeugen (nur mit --stdout sinnvoll) |
+| `--limit N` | Max. Zeilen auf stdout (Default: 200, 0=unbegrenzt). Markdown-Datei enthaelt immer ALLE Zeilen. |
+| `--sync` | Referenzierte Tabellen vor Query synchronisieren (falls nicht fresh) |
+| `--year Y` | Jahr fuer Auto-Sync (Default: aktuelles Jahr) |
+| `--output PATH` | Pfad fuer Report-Datei (optional) |
+| `--title TEXT` | Titel des Reports (Default: "Budget-Auswertung") |
 
-## Schritt 6: CSV auswerten (optional)
+### Tabellen-Uebersicht
 
-Im Skill-Verzeichnis liegen zwei Analyse-Scripts:
-
-| Script | Eingabeformat | Beschreibung |
+| Tabelle | Inhalt | Wichtige Spalten |
 |---|---|---|
-| `analyze_bplus_api.py` | API-Export CSV (von `export_bplus_api.ps1`) | **Bevorzugt.** Nutzt API-Feldnamen (`concept`, `company`, `plannedValue`, ...) |
-| `analyze_bplus.py` | Playwright-Export CSV/Excel | Nutzt Playwright-Spaltennamen (`Konzept`, `Firma`, `Wert`, ...) |
+| `btl` | Beschaffungsvorgaenge (BMs) | concept, dev_order, ea, title, planned_value, company, status, creator |
+| `devorder` | Entwicklungsauftraege (EAs) | ea_number, title, project_family, date_from, date_until, controller |
+| `el_planning` | Eigenleistungsplanung | user_name, ea_number, pct_jan..pct_dec, year_work_hours, hourly_rate |
+| `stundensaetze` | Stundensaetze pro KST/OE | jahr, kst, oe, stundensatz |
+| `ua_leiter` | UA-Leiter pro OE | oe, ebene, mail |
 
-### analyze_bplus_api.py (fuer API-Export)
+### Beispiel-Queries
 
-**Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-bplus-export/analyze_bplus_api.py`
+```bash
+# Top-10 Firmen nach Gesamtbudget
+python scripts/budget/budget_db.py query "SELECT company, COUNT(*) AS anzahl, SUM(planned_value) AS summe FROM btl GROUP BY company ORDER BY summe DESC LIMIT 10" --stdout --no-file --sync
 
-```powershell
-# Gesamtuebersicht aller Firmen:
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv"
+# Alle Vorgaenge einer bestimmten EA mit Status
+python scripts/budget/budget_db.py query "SELECT title, planned_value, company, status FROM btl WHERE dev_order = '0043402'" --stdout --no-file
 
-# Nur eine bestimmte Firma:
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --firma 4soft
+# Join: BMs mit EA-Details (Laufzeit, Projektfamilie)
+python scripts/budget/budget_db.py query "SELECT b.concept, b.title, b.planned_value, b.company, d.project_family, d.date_until FROM btl b LEFT JOIN devorder d ON b.dev_order = d.ea_number ORDER BY b.planned_value DESC LIMIT 20" --stdout --no-file
 
-# Nur bestimmter Status:
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --status bestellt
-
-# Nach EA-Titel filtern:
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --ea "IDS.8"
-
-# Nach Projektfamilie filtern:
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --projekt MEB
-
-# Kombination:
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --firma edag --status bestellt
-
-# Top-N Firmen:
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus_api.py" "<WORKSPACE>\userdata\bplus\export.csv" --top 5
+# Status-Verteilung als Aggregation
+python scripts/budget/budget_db.py query "SELECT status, COUNT(*) AS anzahl, SUM(planned_value) AS summe FROM btl GROUP BY status ORDER BY summe DESC" --stdout --no-file
 ```
 
-### analyze_bplus.py (fuer Playwright-Export)
+### Sicherheit
 
-```powershell
-# Gesamtuebersicht aller Firmen (sortiert nach Wert):
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv"
+- **Nur SELECT/CTE** erlaubt — INSERT, UPDATE, DELETE, DROP, ALTER, ATTACH, PRAGMA werden geblockt.
+- SQL kommt als fertiger String — kein dynamisches SQL-Building noetig.
 
-# Nur eine bestimmte Firma (Teilstring, case-insensitive):
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --firma 4soft
+### Wichtig: Wann `report_bplus.py` vs. `query`
 
-# Nur bestimmter Status:
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --status bestellt
+| Situation | Tool |
+|---|---|
+| Standard-Filter (Firma, Status, EA, Projekt, OE) | `report_bplus.py` |
+| Aggregationen, JOINs, beliebige WHERE-Bedingungen | `budget_db.py query` |
+| Joins ueber mehrere Tabellen (btl + devorder + el_planning) | `budget_db.py query` |
+| User will explizit SQL-Abfrage | `budget_db.py query` |
+| Verfuegbare Jahre | `GET /ek/api/Year` |
 
-# Kombination Firma + Status:
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --firma edag --status bestellt
 
-# Top-N Firmen:
-python "<WORKSPACE>\.agents\skills\skill-budget-bplus-export\analyze_bplus.py" "<WORKSPACE>\userdata\bplus\ExportedData.csv" --top 5
-```
+### Ausgabe bei SQL-Abfragen
 
-### Ausgabe
+- Bei `--stdout --no-file`: Ergebnis direkt im Chat an den User ausgeben (Tabelle + Interpretation).
+- Bei `--stdout` (ohne `--no-file`): Zusaetzlich Report-Datei erzeugen und verlinken.
+- **Im Gegensatz zu `report_bplus.py`** darf und soll der Agent die SQL-Ergebnisse direkt im Chat praesentieren.
 
-Das Script liefert:
-- **Vorgaenge** (bei Firma-Filter): Einzelauflistung mit Konzept, Status, Wert, Titel
-- **Aufschluesselung nach Status**: Anzahl und Summe je Status
-- **Aufschluesselung nach Firma**: Anzahl und Summe je Firma (absteigend nach Wert)
-
-> **Wichtig:** `<WORKSPACE>` durch den tatsaechlichen Workspace-Pfad ersetzen.
-
-## Beispiel-Interaktionen
-
-### Beispiel 1: Standard-Export (API)
-
-**User:** "Lade mir die Vorgangsuebersicht aus BPLUS herunter."
-
-**Agent:**
-1. API-Script ausfuehren → `export_bplus_api.ps1`
-2. Ergebnis pruefen (Anzahl Datensaetze, Gesamtwert)
-3. Fertig — CSV liegt in `userdata\bplus`
-
-### Beispiel 2: Export ohne Status-Filter (API)
-
-**User:** "Lade mir die Vorgangsuebersicht aus BPLUS ohne Status-Filter herunter."
-
-**Agent:**
-1. API-Script mit `-ExcludeArchived $false` ausfuehren
-2. Ergebnis pruefen
-
-### Beispiel 3: Excel-Export (Playwright noetig)
-
-**User:** "Lade mir die Vorgangsuebersicht als Excel herunter."
-
-**Agent:**
-1. Hinweis: Excel-Export nur per Playwright moeglich
-2. Playwright-Workflow (Methode 2) ausfuehren
-3. Export als Excel waehlen
-
-### Beispiel 4: Auswertung
-
-**User:** "Wie viel wurde von EDAG bestellt?"
-
-**Agent:**
-1. API-Export ausfuehren (falls CSV nicht schon vorhanden)
-2. Auswertung → `python analyze_bplus_api.py <csv> --firma edag --status bestellt`
+Basis-URL: `https://bplus-ng-mig.r02.vwgroup.com`

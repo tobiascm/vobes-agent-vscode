@@ -5,13 +5,19 @@ description: Unterabteilungsleiter (UA-Leiter) aus BPLUS-NG abrufen. Nutze diese
 
 # Skill: BPLUS-NG Unterabteilungsleiter (UA-Leiter)
 
-Dieser Skill findet die **Leitungen** (Leitung=1) aus den BPLUS-NG InfoDepartments-Daten.
+Dieser Skill findet die **Leitungen**/**Führungskräfte** aus den BPLUS-NG OrgUnit-Daten (alle OEs mit zugeordneter Mail-Adresse).
+
+## Workflow
+
+> 1. **Sync:** `python scripts/budget_db.py sync ua_leiter` (Cache: 1 Tag, `--force` zum Erzwingen)
+> 2. **Query:** `python scripts/budget_db.py query "SELECT ..." --output result.md --open` ausfuehren
+> 3. Das Script schreibt eine **Markdown-Tabelle** in die Datei und oeffnet sie in VS Code
 
 ## Kontext
 
-- Gleiche Datenquelle wie Stundensaetze (InfoDepartments-Seite).
-- Gefiltert auf Personen mit Leitungsfunktion (`Leitung=1`).
-- Liefert OE, Ebene und Mail-Adresse.
+- Datenquelle: REST-API `OrgUnit/GetAll` (alle OEs mit Mail-Adresse und Level).
+- Jede OE mit zugeordneter Mail-Adresse wird als Leitung gefuehrt.
+- Level-Mapping: 2=Bereich, 3=Hauptabteilung, 4=Abteilung, 5=Unterabteilung.
 
 ## Wann verwenden?
 
@@ -19,55 +25,34 @@ Dieser Skill findet die **Leitungen** (Leitung=1) aus den BPLUS-NG InfoDepartmen
 - Der User sucht den **Leiter** / **Ansprechpartner** einer OE
 - Der User moechte wissen, wer eine bestimmte OE leitet
 
-## Datenstruktur
+## Tabellen-Schema (ua_leiter)
 
-| CSV-Spalte | Beschreibung | Beispiel |
-|---|---|---|
-| `oe` | Organisationseinheit | `EKEK/1` |
-| `ebene` | Hierarchie-Ebene | `Unterabteilung`, `Abteilung`, `Hauptabteilung`, `Bereich` |
-| `mail` | E-Mail der Leitung | `max.mustermann@volkswagen.de` |
+| Spalte | Typ | Beschreibung | Beispiel |
+|---|---|---|---|
+| `oe` | TEXT | Organisationseinheit | `EKEK/1` |
+| `ebene` | TEXT | Hierarchie-Ebene | `Unterabteilung`, `Abteilung`, `Hauptabteilung`, `Bereich` |
+| `mail` | TEXT | E-Mail der Leitung | `max.mustermann@volkswagen.de` |
 
-## URL
+## Beispiel-SQL-Queries
+
+```sql
+-- Alle Leitungen
+SELECT * FROM ua_leiter ORDER BY oe
+
+-- Leiter einer OE
+SELECT oe, ebene, mail FROM ua_leiter WHERE oe = 'EKEK/1'
+
+-- Alle Abteilungsleiter
+SELECT oe, mail FROM ua_leiter WHERE ebene = 'Abteilung' ORDER BY oe
+```
+
+## API-Endpunkte
 
 | Ressource | URL |
 |---|---|
-| InfoDepartments (HTML) | `https://bplus-ng-mig.r02.vwgroup.com/ek-reports/InfoDepartments.aspx?y={year}` |
+| OrgUnit (alle OEs) | `GET /ek/api/OrgUnit/GetAll?year={year}` |
 
-## Voraussetzungen
-
-- VW-Netzwerk (SSO/Kerberos)
-- PowerShell mit `Invoke-WebRequest`
-
----
-
-## Export per Script
-
-**Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-ua-leiter/export_ua_leiter.ps1`
-
-### Standard-Export (alle Leitungen, aktuelles Jahr)
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ua-leiter\export_ua_leiter.ps1"
-```
-
-### Mit Parametern
-
-```powershell
-# Bestimmte OE:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ua-leiter\export_ua_leiter.ps1" -OrgUnit "EKEK/1"
-
-# Anderes Jahr:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ua-leiter\export_ua_leiter.ps1" -Year 2025
-```
-
-### Parameter
-
-| Parameter | Default | Beschreibung |
-|---|---|---|
-| `-Year` | Aktuelles Jahr | Jahr |
-| `-OrgUnit` | (leer = alle) | OE filtern |
-| `-OutputPath` | `<WORKSPACE>\userdata\exports\YYYYMMDD_UA_Leiter[_OE].csv` | Zielpfad |
-| `-BaseUrl` | `https://bplus-ng-mig.r02.vwgroup.com` | Basis-URL |
+Basis-URL: `https://bplus-ng-mig.r02.vwgroup.com`
 
 ## Haeufige Probleme
 

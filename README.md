@@ -126,3 +126,22 @@ Damit der aber nicht für DIFFS verwendet wird, trage in deine settings.json ein
 ```
 
 Damit werden .md-Dateien beim Öffnen als Markdown-Preview angezeigt. VS Code nennt das den Markdown Preview Custom Editor
+
+## Tipps und Tricks
+
+### Skills für alle Agents
+
+orignial in -agents/skills (Github CoPilot und CODEX)
+per symlnk spiegeln in .claude/skills
+
+PowerShell
+```
+New-Item -ItemType Directory -Force .agents\skills | Out-Null
+New-Item -ItemType Directory -Force .claude | Out-Null
+
+if (Test-Path .claude\skills) {
+    Remove-Item .claude\skills -Force -Recurse
+}
+
+New-Item -ItemType Junction -Path .claude\skills -Target (Resolve-Path .agents\skills).Path
+```

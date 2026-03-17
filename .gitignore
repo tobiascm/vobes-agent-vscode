@@ -5,3 +5,6 @@ userdata/*
 *__pycache__*
 *.pyc
 *.log
+_combined/*
+config/src_zip_config.toml
+.agents/.skill-lock.json

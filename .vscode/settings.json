@@ -44,8 +44,32 @@
     },
     "chat.tools.terminal.autoReplyToPrompts": true,
     "workbench.editorAssociations": {
-        "{git}:/**/*.{md}": "vscode.markdown.preview.editor",
-        "{git-index}:/**/*.{md}": "vscode.markdown.preview.editor",
-        "*.md": "markdownForHumans.editor"
+        "{git}:/**/*.{md}": "default",
+        "{git-index}:/**/*.{md}": "default",
+        "*.md": "vscode.markdown.preview.editor",
+        "*.copilotmd": "vscode.markdown.preview.editor"
+    },
+    "markdown.styles": [
+        ".vscode/markdown-preview.css"
+    ],
+    "chat.tools.terminal.autoApprove": {
+        "/^code(\\.cmd)?\\b/i": true
+    },
+    "custom-ui-style.watch": true,
+    "custom-ui-style.stylesheet": {
+        ".interactive-session": {
+        "max-width": "unset !important",
+        "width": "100% !important",
+        "margin-left": "0 !important",
+        "margin-right": "0 !important"
+        }
+    },
+    "custom-ui-style.webview.stylesheet": {
+        ".interactive-session": {
+        "max-width": "unset !important",
+        "width": "100% !important",
+        "margin-left": "0 !important",
+        "margin-right": "0 !important"
+        }
     }
 }

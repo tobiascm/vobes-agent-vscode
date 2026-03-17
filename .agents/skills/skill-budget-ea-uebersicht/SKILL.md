@@ -1,17 +1,22 @@
 ---
 name: skill-budget-ea-uebersicht
-description: Entwicklungsauftraege (EA) aus BPLUS-NG per API abrufen und als CSV exportieren. Nutze diesen Skill wenn der User nach EA-Stammdaten, EA-Nummern, EA-Laufzeiten, Projektfamilien, Controllern oder der EA-Uebersicht fragt. NICHT verwenden fuer Fragen zu Firmen, Lieferanten, Dienstleistern, Buchungen auf EAs, Vorgaengen oder Abrufen — dafuer ist skill-budget-bplus-export zustaendig.
+description: Entwicklungsauftraege (EA) aus BPLUS-NG per API abrufen. Nutze diesen Skill wenn der User nach EA-Stammdaten, EA-Nummern, EA-Laufzeiten, Projektfamilien, Controllern oder der EA-Uebersicht fragt. NICHT verwenden fuer Fragen zu Firmen, Lieferanten, Dienstleistern, Buchungen auf EAs, Vorgaengen oder Abrufen — dafuer ist skill-budget-bplus-export zustaendig.
 ---
 
 # Skill: BPLUS-NG Entwicklungsauftraege (EA-Uebersicht)
 
-Dieser Skill laedt die **EA-Uebersicht** (Entwicklungsauftraege / DevOrders) aus BPLUS-NG per REST-API.
+Dieser Skill laedt die **EA-Uebersicht** (Entwicklungsauftraege / DevOrders) aus BPLUS-NG per REST-API in die lokale SQLite-DB.
+
+## Workflow
+
+> 1. **Sync:** `python scripts/budget_db.py sync devorder` (Cache: 1 Tag, `--force` zum Erzwingen)
+> 2. **Query:** `python scripts/budget_db.py query "SELECT ..." --output result.md --open` ausfuehren
+> 3. Das Script schreibt eine **Markdown-Tabelle** in die Datei und oeffnet sie in VS Code
 
 ## Kontext
 
 - Entspricht der Tabelle auf der BPLUS-NG Seite `InfoDevOrders.aspx`
 - Liefert EA-Nummer, Titel, Laufzeit, SOP, Projektfamilie, Controller und Hierarchie
-- Filterung nach aktiv/inaktiv und Projektfamilie moeglich
 
 ## Wann verwenden?
 
@@ -20,37 +25,49 @@ Dieser Skill laedt die **EA-Uebersicht** (Entwicklungsauftraege / DevOrders) aus
 - Der User sucht eine bestimmte **EA-Nummer** oder EAs einer **Projektfamilie**
 - Der User erwaehnt **DevOrders** oder **InfoDevOrders**
 
-# Disambiguierung: "Auf welche EA wird X gebucht?"
-- Wenn die Anfrage ein Muster wie "auf welche EA wird <Name> gebucht" oder "wo ist <Name> zugeordnet" enthaelt:
+## Disambiguierung: "Auf welche EA wird X gebucht?"
+
+- Wenn die Anfrage ein Muster wie "auf welche EA wird <Name> gebucht" enthaelt:
   1. Zuerst pruefen: Ist <Name> eine Firma/Lieferant? → `skill-budget-bplus-export` (BTL-Daten, Feld `company`)
-  2. Nur wenn kein Treffer bei company: Personenfelder pruefen → `skill-budget-ea-uebersicht`
-  3. Bei Doppeltreffern (Firma UND Person): User fragen, was gemeint ist.
+  2. Nur wenn kein Treffer bei company: Personenfelder pruefen
+  3. Bei Doppeltreffern: User fragen, was gemeint ist.
 
-## Datenstruktur
+## Tabellen-Schema (devorder)
 
-### API-Felder (JSON)
-
-| JSON-Feld | CSV-Spalte | Beschreibung | Beispiel |
+| Spalte | Typ | Beschreibung | Beispiel |
 |---|---|---|---|
-| `number` | `ea_number` | EA-Nummer | `0011953` |
-| `developmentOrderName` | `title` | Titel des EA | `MEB Antrieb Allrad/Heck ID Buzz` |
-| `active` | `active` | Aktiv-Status | `True` / `False` |
-| `dateFrom` | `date_from` | Start-Datum | `2017-10-18` |
-| `dateUntil` | `date_until` | Ende-Datum (BIS) | `2025-01-31` |
-| `sop` | `sop` | SOP-Datum | `2024-04-04` |
-| `assignedProjectFamily` | `project_family` | Projektfamilie | `A_BEV` |
-| `controller` | `controller` | Controller-Kuerzel | `VWTH3IE` |
-| `hierarchy` | `hierarchy` | TE-Hierarchie | `TE - Aggregate - Baureihe G4 - Alternative Antriebe` |
+| `ea_number` | TEXT | EA-Nummer | `0011953` |
+| `title` | TEXT | Titel des EA | `MEB Antrieb Allrad/Heck ID Buzz` |
+| `active` | BOOLEAN | Aktiv-Status | `1` / `0` |
+| `date_from` | TEXT | Start-Datum | `2017-10-18` |
+| `date_until` | TEXT | Ende-Datum | `2025-01-31` |
+| `sop` | TEXT | SOP-Datum | `2024-04-04` |
+| `project_family` | TEXT | Projektfamilie | `A_BEV` |
+| `controller` | TEXT | Controller-Kuerzel | `VWTH3IE` |
+| `hierarchy` | TEXT | TE-Hierarchie | `TE - Aggregate - ...` |
 
-### Weitere API-Felder (nicht im Standard-Export)
+## Beispiel-SQL-Queries
 
-| JSON-Feld | Beschreibung |
-|---|---|
-| `idDevelopmentOrder` | Interne ID |
-| `idProjectFamily` | Interne Projektfamilien-ID |
-| `assignedProjectFamilyActive` | Projektfamilie aktiv? |
-| `idAideeUserMainResponsible` | AIDEE-User-ID Hauptverantwortlicher |
-| `strAideeUserMainResponsible` | Name Hauptverantwortlicher |
+```sql
+-- Alle aktiven EAs
+SELECT ea_number, title, project_family, date_from, date_until
+FROM devorder WHERE active = 1 ORDER BY ea_number
+
+-- EAs einer Projektfamilie
+SELECT ea_number, title, date_until, sop
+FROM devorder WHERE project_family = 'A_BEV' AND active = 1
+
+-- EA suchen
+SELECT * FROM devorder WHERE ea_number = '0011953'
+
+-- EAs nach Projektfamilie gruppiert
+SELECT project_family, COUNT(*) as anzahl
+FROM devorder WHERE active = 1 GROUP BY project_family ORDER BY anzahl DESC
+
+-- Auslaufende EAs (Ende vor 2026)
+SELECT ea_number, title, date_until, project_family
+FROM devorder WHERE active = 1 AND date_until < '2026-01-01' ORDER BY date_until
+```
 
 ## URLs und API-Endpunkte
 
@@ -58,54 +75,6 @@ Dieser Skill laedt die **EA-Uebersicht** (Entwicklungsauftraege / DevOrders) aus
 |---|---|
 | EA-Uebersicht (Web) | `https://bplus-ng-mig.r02.vwgroup.com/ek-reports/InfoDevOrders.aspx?y={year}` |
 | API: Alle DevOrders | `https://bplus-ng-mig.r02.vwgroup.com/ek/api/DevOrder/GetAll?year={year}` |
-
-## Voraussetzungen
-
-- VW-Netzwerk (SSO/Kerberos)
-- PowerShell mit `Invoke-RestMethod`
-
----
-
-## Export per Script
-
-**Pfad:** `<WORKSPACE>/.agents/skills/skill-budget-ea-uebersicht/export_ea_uebersicht.ps1`
-
-### Standard-Export (alle aktiven EAs, aktuelles Jahr)
-
-```powershell
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ea-uebersicht\export_ea_uebersicht.ps1"
-```
-
-### Mit Parametern
-
-```powershell
-# Inkl. inaktive EAs:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ea-uebersicht\export_ea_uebersicht.ps1" -ActiveOnly $false
-
-# Bestimmte Projektfamilie:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ea-uebersicht\export_ea_uebersicht.ps1" -ProjectFamily "A_BEV"
-
-# Anderes Jahr:
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-budget-ea-uebersicht\export_ea_uebersicht.ps1" -Year 2025
-```
-
-### Parameter
-
-| Parameter | Default | Beschreibung |
-|---|---|---|
-| `-Year` | Aktuelles Jahr | Jahr |
-| `-ActiveOnly` | `$true` | Nur aktive EAs |
-| `-ProjectFamily` | (leer = alle) | Projektfamilie filtern |
-| `-OutputPath` | `userdata\exports\YYYYMMDD_EA_Uebersicht[_ProjFam][_aktiv].csv` | Zielpfad |
-| `-BaseUrl` | `https://bplus-ng-mig.r02.vwgroup.com` | Basis-URL |
-
-### Manueller Inline-Abruf (ohne Script)
-
-```powershell
-$response = Invoke-RestMethod -Uri "https://bplus-ng-mig.r02.vwgroup.com/ek/api/DevOrder/GetAll?year=2026" -UseDefaultCredentials
-$active = $response | Where-Object { $_.active -eq $true }
-$active | Select-Object number, developmentOrderName, assignedProjectFamily, dateUntil | Format-Table
-```
 
 ## Haeufige Probleme
 
