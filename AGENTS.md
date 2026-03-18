@@ -19,6 +19,17 @@
 1. `local_rag` fuer alle Wissensfragen (IMMER zuerst). Vorher IMMER Skill skill-knowledge-bordnetz-vobes laden.
 2. `mcp-atlassian` NUR fuer Lese-/Schreiboperationen auf Confluence/Jira. Vorher IMMER Skill aus Punkt 2 laden.
 
+# Modus-Erkennung (MCP-Verfuegbarkeit)
+
+Bevor ein Skill geladen wird, der einen MCP-Server benoetigt, MUSS geprueft werden, ob die MCP-Tools verfuegbar sind.
+
+**Pruefmethode:** `tool_search_tool_regex` mit dem passenden Pattern aufrufen. Liefert die Suche KEINE Ergebnisse, sind die MCP-Tools nicht verfuegbar (z.B. weil der Plan-Modus aktiv ist). Wenn Ergebnis = leer → **SOFORT** folgende Meldung ausgeben und die Aufgabe abbrechen:
+
+> ⚠️ Ich bin aktuell im **Plan-Modus** und habe keinen Zugriff auf den MCP-Server `{server_name}`, der fuer diese Aufgabe benoetigt wird.
+>
+> **Loesung:** Bitte wechsle in den **Agent-Modus** (ueber das Modus-Dropdown oben im Chat) und stelle die Frage dort erneut.
+
+
 # Use-Cases
 
 - Protokoll erstellen | ueberarbeiten und in Confluence speichern  
@@ -40,3 +51,5 @@
 → PFLICHT: Skill `$skill-budget-eigenleistung-el` laden und befolgen.
 - Plausibilisierung | Begruendung | BM-Text | Aufwandsplausibilisierung | Nachfrage Controller | warum wird X benoetigt | Aufwaende begruenden  
 → PFLICHT: Skill `$skill-budget-plausibilisierung` laden und befolgen.
+- Webseite oeffnen | Intranet-Seite durchsuchen | Screenshot von Seite | Daten von Webseite extrahieren | Formular auf Webseite ausfuellen (per Playwright MCP, nicht dev-browser)  
+→ PFLICHT: Skill `$skill-browse-intranet` laden und befolgen.
