@@ -8,3 +8,5 @@ userdata/*
 _combined/*
 config/src_zip_config.toml
 .agents/.skill-lock.json
+.claude/commands/*
+.specify/*
