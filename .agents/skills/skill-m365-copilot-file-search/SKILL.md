@@ -1,11 +1,11 @@
 ---
-name: skill-copilot-search
-description: "M365 Copilot Search ueber Graph Beta API ausfuehren. Durchsucht SharePoint, OneDrive und weitere M365-Quellen mit Copilot-Ranking. Nutze diesen Skill wenn der User nach Dokumenten, Praesentationen, PDFs oder Dateien im SharePoint / OneDrive suchen moechte, die ueber die normale Suche hinausgehen. Trigger: SharePoint durchsuchen, Dokument finden, M365 Suche, Copilot Suche, finde Datei in SharePoint, OneDrive durchsuchen, suche in M365."
+name: skill-m365-copilot-file-search
+description: "M365 Copilot File Search ueber Graph Beta API ausfuehren. Durchsucht SharePoint und OneDrive mit Copilot-optimiertem Ranking. Nutze diesen Skill wenn der User nach Dokumenten, Praesentationen, PDFs oder Dateien im SharePoint / OneDrive suchen moechte, die ueber die normale Suche hinausgehen. Trigger: SharePoint durchsuchen, Dokument finden, M365 Suche, Copilot Suche, finde Datei in SharePoint, OneDrive durchsuchen, suche in M365."
 ---
 
-# Skill: M365 Copilot Search (Graph Beta API)
+# Skill: M365 Copilot File Search (Graph Beta API)
 
-Durchsucht **SharePoint, OneDrive und weitere M365-Quellen** ueber den Graph Beta Copilot Search Endpoint mit Copilot-optimiertem Ranking.
+Durchsucht **SharePoint und OneDrive** ueber den Graph Beta Copilot Search Endpoint mit Copilot-optimiertem Ranking.
 
 > **Dokumentation:** [docs/m365-copilot-api-research.md](../../docs/m365-copilot-api-research.md)
 
@@ -14,7 +14,7 @@ Durchsucht **SharePoint, OneDrive und weitere M365-Quellen** ueber den Graph Bet
 - Der User moechte **Dokumente in SharePoint oder OneDrive** finden
 - Der User sucht nach **Praesentationen, PDFs, Excel-Dateien** im M365-Oekosystem
 - Der User fragt: "Finde die Datei zu X", "Gibt es ein Dokument ueber Y im SharePoint?"
-- Der User moechte die **M365 Copilot Search** nutzen (gleiche Suchergebnisse wie im BizChat)
+- Der User moechte die **M365 Copilot File Search** nutzen (gleiche Suchergebnisse wie im BizChat)
 
 ## Wann NICHT verwenden?
 

@@ -24,7 +24,7 @@ via Playwright MCP. Kein Token-Transfer, kein Python-HTTP-Client.
 
 | Aufgabe | Stattdessen verwenden |
 |---------|-----------------------|
-| Dateien in SharePoint/OneDrive suchen | `$skill-copilot-search` |
+| Dateien in SharePoint/OneDrive suchen | `$skill-m365-copilot-file-search` |
 | Dateiinhalt direkt lesen | `$skill-m365-file-reader` |
 | Confluence/Jira lesen | `mcp-atlassian` oder `local_rag` |
 | Generische Webseiteninteraktion | `$skill-browse-intranet` |

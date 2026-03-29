@@ -15,13 +15,13 @@ Liest **Dateien aus SharePoint und OneDrive** ueber die Graph API und gibt den I
 - Der User hat eine **SharePoint-URL** und will wissen, was drin steht
 - Der User moechte eine **PPTX, XLSX, DOCX, PDF oder ein Bild** aus M365 verarbeiten
 - Der User fragt: "Was steht in der Datei X?", "Lies die Praesentation aus dem SharePoint"
-- Nach einer `$skill-copilot-search` den gefundenen Treffer **tatsaechlich lesen**
+- Nach einer `$skill-m365-copilot-file-search` den gefundenen Treffer **tatsaechlich lesen**
 
 ## Wann NICHT verwenden?
 
 | Aufgabe | Stattdessen verwenden |
 |---------|-----------------------|
-| Datei in SharePoint/OneDrive **suchen** | `$skill-copilot-search` |
+| Datei in SharePoint/OneDrive **suchen** | `$skill-m365-copilot-file-search` |
 | Confluence/Jira lesen | `local_rag` oder `mcp-atlassian` |
 | Lokale Dateien lesen | `read_file` Tool direkt |
 | Webseiten oeffnen/navigieren | `$skill-browse-intranet` |
@@ -40,7 +40,7 @@ Liest **Dateien aus SharePoint und OneDrive** ueber die Graph API und gibt den I
 
 ## Voraussetzungen
 
-1. **Graph API Token** — gleicher Token-Cache wie `$skill-copilot-search`
+1. **Graph API Token** — gleicher Token-Cache wie `$skill-m365-copilot-file-search`
 2. **Python-Pakete:** `requests`, `python-pptx`, `openpyxl`, `python-docx` (alle vorinstalliert)
 3. **Optional:** `pdfplumber` (fuer PDF), `Pillow` (fuer Bild-Dimensionen)
 
@@ -73,7 +73,7 @@ python scripts/m365_file_reader.py read "b!MVdXi...|01XAS2D2..."
 
 ### Schritt 2: Token erneuern (nur bei Exit 2)
 
-Gleicher Token-Refresh wie in `$skill-copilot-search`:
+Gleicher Token-Refresh wie in `$skill-m365-copilot-file-search`:
 
 **2a.** M365 Copilot oeffnen:
 ```
