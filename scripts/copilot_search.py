@@ -74,11 +74,26 @@ def cmd_check_token() -> None:
 
 
 def cmd_cache_token(token: str, exp: str | None = None) -> None:
-    """Speichert einen Token im Cache."""
+    """Speichert einen Token im Cache nach Validierung gegen Graph API."""
     if exp is None:
         exp_ts = _decode_jwt_exp(token)
     else:
         exp_ts = int(exp)
+    # Validate token against Graph API before caching
+    try:
+        r = requests.get(
+            "https://graph.microsoft.com/v1.0/me",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=10,
+        )
+        if r.status_code == 401:
+            print("TOKEN_EXPIRED", file=sys.stderr)
+            print("Token ist serverseitig ungueltig (401). Bitte neuen Token holen.", file=sys.stderr)
+            sys.exit(2)
+        if r.status_code != 200:
+            print(f"WARNING: Token-Validierung ergab HTTP {r.status_code}", file=sys.stderr)
+    except requests.RequestException as e:
+        print(f"WARNING: Token-Validierung fehlgeschlagen: {e}", file=sys.stderr)
     _save_token(token, exp_ts)
     remaining = int(exp_ts - time.time())
     print(f"Token cached (expires in {remaining // 60}m {remaining % 60}s)")

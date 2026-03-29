@@ -64,5 +64,7 @@ Bevor ein Skill geladen wird, der einen MCP-Server benoetigt, MUSS geprueft werd
 → PFLICHT: Skill `$skill-deep-research` laden und befolgen. Fuer mehrstufige, quellenuebergreifende Recherchen mit Evidenzsammlung und strukturiertem Abschlussbericht. Delegiert alle Browser-Interaktionen an `skill-browse-intranet`.
 - M365 Copilot Search | SharePoint durchsuchen | Dokument in SharePoint finden | OneDrive durchsuchen | M365 Suche | Copilot Suche | finde Datei in SharePoint  
 → PFLICHT: Skill `$skill-copilot-search` laden und befolgen. Nutzt Graph Beta API ueber Playwright NAA-Token.
+- M365 Copilot Chat | frage Copilot | schicke diesen Prompt an Copilot | lasse M365 Copilot das beantworten  
+→ PFLICHT: Skill `$skill-m365-copilot-chat` laden und befolgen.
 - M365 Datei lesen | Inhalt einer SharePoint-Datei | PPTX aus OneDrive lesen | Excel aus SharePoint als CSV | PDF aus SharePoint extrahieren | Bild aus OneDrive herunterladen | was steht in der Datei  
 → PFLICHT: Skill `$skill-m365-file-reader` laden und befolgen. Liest PPTX, XLSX, DOCX, PDF und Bilder ueber Graph API.

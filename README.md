@@ -84,6 +84,7 @@ Konfiguriert in `.vscode/mcp.json`:
 | `skill-update-confluence-page` | Standardisierter Ablauf zum Aktualisieren von Confluence-Seiten |
 | `skill-jira-sys-flow` | Informationen aus dem Jira-Projekt SYS-FLOW abrufen |
 | `skill-deep-research` | Mehrstufige, quellenuebergreifende Recherche mit Evidenzsammlung und strukturiertem Abschlussbericht |
+| `skill-m365-copilot-chat` | M365 Copilot Chat via Graph Beta: Conversation anlegen, Prompt senden, Antwort zurueckgeben |
 
 ## VS Code Tasks
 

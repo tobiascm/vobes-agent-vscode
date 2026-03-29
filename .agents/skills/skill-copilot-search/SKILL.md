@@ -91,10 +91,10 @@ async () => {
 }
 ```
 
-**2c.** Token cachen und Search erneut ausfuehren:
+**2c.** Token cachen (mit automatischer Validierung) und Search erneut ausfuehren:
 
 ```bash
-# Token cachen
+# Token cachen — prueft automatisch gegen /v1.0/me
 python scripts/copilot_search.py cache-token TOKEN_AUS_2B
 
 # Search erneut
@@ -104,6 +104,12 @@ python scripts/copilot_search.py search "SUCHBEGRIFF"
 **Fehlerbehandlung:**
 - `NAA not ready` → `mcp_playwright_browser_wait_for` mit 3s, dann Retry (max. 2x)
 - `Token request failed` → M365-Session abgelaufen, User muss sich neu anmelden
+- `cache-token` liefert **Exit 2** (Token serverseitig ungueltig trotz gueltigem JWT-Claim):
+  1. M365-Seite neu laden (`mcp_playwright_browser_navigate` erneut)
+  2. 5 Sekunden warten
+  3. Token erneut via NAA holen (Schritt 2b)
+  4. `cache-token` erneut ausfuehren
+  5. Maximal **2 Versuche** — danach Fehler an User melden
 
 ### Schritt 3: Ergebnisse praesentieren
 

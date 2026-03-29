@@ -101,11 +101,19 @@ async () => {
 }
 ```
 
-**2c.** Token cachen und erneut lesen:
+**2c.** Token cachen (mit automatischer Validierung) und erneut lesen:
 ```bash
 python scripts/copilot_search.py cache-token TOKEN_AUS_2B
 python scripts/m365_file_reader.py read "URL_ODER_NAME"
 ```
+
+`cache-token` prueft den Token jetzt automatisch gegen `/v1.0/me`.
+Bei **Exit 2** (Token serverseitig ungueltig trotz gueltigem JWT-Claim):
+1. M365-Seite neu laden (`mcp_playwright_browser_navigate` erneut)
+2. 5 Sekunden warten
+3. Token erneut via NAA holen (Schritt 2b)
+4. `cache-token` erneut ausfuehren
+5. Maximal **2 Versuche** — danach Fehler an User melden
 
 ### Optionaler Download
 
