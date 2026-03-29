@@ -9,7 +9,7 @@ VS Code Workspace mit KI-Agent-Konfiguration für die VOBES/Bordnetz-Entwicklung
 | **AGENTS.md** | Steuerungsdatei für den KI-Agent (Skill-Routing, Tool-Prioritäten, Regeln) |
 | **Local RAG** | Lokaler MCP-Server für Wissensabfragen zu VOBES, VEC, KBL, Prozessen u. a. |
 | **MCP Atlassian** | Docker-basierter MCP-Server für Confluence- und Jira-Operationen |
-| **Skills** | 5 domänenspezifische Skills unter `.agents/skills/` |
+| **Skills** | Domänenspezifische Skills unter `.agents/skills/` |
 
 ## Quick Start
 
@@ -48,7 +48,8 @@ Ctrl+Shift+P → "Tasks: Run Task" → "MCP Atlassian: Start"
 │   ├── skill-important-pages-links-and-urls/  # Standard-Links & Referenzseiten
 │   ├── skill-protokoll-confluence/      # Protokollseiten erstellen/speichern
 │   ├── skill-update-confluence-page/    # Confluence-Seiten aktualisieren
-│   └── skill-jira-sys-flow/             # SYS-FLOW Jira-Board abfragen
+│   ├── skill-jira-sys-flow/             # SYS-FLOW Jira-Board abfragen
+│   └── skill-deep-research/            # Quellenuebergreifende Deep Research
 ├── .vscode/
 │   ├── mcp.json                       # MCP-Server-Konfiguration (local-rag, mcp-atlassian)
 │   ├── tasks.json                     # VS Code Tasks
@@ -82,6 +83,8 @@ Konfiguriert in `.vscode/mcp.json`:
 | `skill-protokoll-confluence` | Protokollseiten für Regeltermine erstellen und in Confluence speichern |
 | `skill-update-confluence-page` | Standardisierter Ablauf zum Aktualisieren von Confluence-Seiten |
 | `skill-jira-sys-flow` | Informationen aus dem Jira-Projekt SYS-FLOW abrufen |
+| `skill-deep-research` | Mehrstufige, quellenuebergreifende Recherche mit Evidenzsammlung und strukturiertem Abschlussbericht |
+| `skill-m365-copilot-chat` | M365 Copilot Chat via Graph Beta: Conversation anlegen, Prompt senden, Antwort zurueckgeben |
 
 ## VS Code Tasks
 

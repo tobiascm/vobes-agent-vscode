@@ -8,3 +8,9 @@ userdata/*
 _combined/*
 config/src_zip_config.toml
 .agents/.skill-lock.json
+.claude/commands/*
+.specify/templates/*
+.specify/scripts/*
+.specify/init-options.json
+specs/001-docs-spec-deep/checklists/requirements.md
+.export/*

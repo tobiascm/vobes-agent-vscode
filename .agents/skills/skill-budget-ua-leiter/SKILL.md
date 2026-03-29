@@ -5,6 +5,8 @@ description: Unterabteilungsleiter (UA-Leiter) aus BPLUS-NG abrufen. Nutze diese
 
 # Skill: BPLUS-NG Unterabteilungsleiter (UA-Leiter)
 
+> **Hinweis:** Fuer allgemeine Personensuche, Chef-/Vorgesetztenfragen und Org-Hierarchien ist `$skill-personensuche-groupfind` der primaere Skill. Dieser Skill hier ist NUR fuer **Budget-spezifische OE→Mail-Zuordnung** (welche Mail-Adresse gehoert zu welcher OE-Leitung in BPLUS-NG).
+
 Dieser Skill findet die **Leitungen**/**Führungskräfte** aus den BPLUS-NG OrgUnit-Daten (alle OEs mit zugeordneter Mail-Adresse).
 
 ## Workflow
