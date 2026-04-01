@@ -56,7 +56,69 @@ python scripts/copilot_search.py search "SUCHBEGRIFF"
 - **Exit 2** → `TOKEN_EXPIRED` auf stderr. Weiter zu Schritt 2.
 - **Exit 1** → sonstiger Fehler (Meldung auf stderr).
 
-### Schritt 2: Token via Playwright NAA holen (nur bei Exit 2)
+### Schritt 2: Token holen (nur bei Exit 2)
+
+Es gibt **zwei Token-Quellen**. Beide funktionieren fuer Copilot Search.
+
+#### Option A: Teams-Token aus localStorage (bevorzugt — mehr Scopes)
+
+**2a.** Teams Web oeffnen:
+
+```
+mcp_playwright_browser_navigate(url="https://teams.microsoft.com/v2/")
+```
+
+**2b.** Token extrahieren (vorerst nur in Variable):
+
+```javascript
+// via mcp_playwright_browser_evaluate
+async () => {
+  const msalTokenKeysRaw = localStorage.getItem('msal.token.keys.5e3ce6c0-2b1f-4285-8d4b-75ee78787346');
+  if (!msalTokenKeysRaw) return JSON.stringify({ error: 'No MSAL token keys' });
+  const keys = JSON.parse(msalTokenKeysRaw);
+  for (const atKey of (keys.accessToken || [])) {
+    const atRaw = localStorage.getItem(atKey);
+    if (atRaw) {
+      const atData = JSON.parse(atRaw);
+      if (atData.target && atData.target.includes('graph.microsoft.com')) {
+        const token = atData.secret;
+        const parts = token.split('.');
+        const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+        return JSON.stringify({ token: token, exp: payload.exp, source: 'teams-web' });
+      }
+    }
+  }
+  return JSON.stringify({ error: 'No Graph token found' });
+}
+```
+
+**2c.** Token validieren und cachen (mit Fehlerbehandlung):
+
+```bash
+# TOKEN_AUS_2B ist der Token aus dem JavaScript-Ergebnis
+python scripts/copilot_search.py cache-token TOKEN_AUS_2B
+```
+
+Dieses Kommando:
+- Validiert den Token gegen `/v1.0/me`
+- Speichert ihn nur bei erfolgreicher Validierung
+- Exit **0** → Token gecacht. Weiter zu 2d.
+- Exit **2** → `TOKEN_EXPIRED` auf stderr. Token ist serverseitig ungueltig (401).
+
+**2d.** Search erneut ausfuehren:
+
+```bash
+python scripts/copilot_search.py search "SUCHBEGRIFF"
+```
+
+Das Script prueft automatisch die gecachte Token-Datei.
+
+**Fehlerbehandlung:**
+- `No MSAL token keys` → Teams-Session nicht aktiv, User muss sich in Teams anmelden
+- `No Graph token found` → Seite neu laden und erneut versuchen
+- `TOKEN_EXPIRED` bei cache-token → Token ist serverseitig ungueltig. Seite neu laden und Schritte 2b-2c wiederholen.
+
+#### Option B: NAA-Token aus M365 Copilot (Fallback)
 
 **2a.** M365 Copilot oeffnen:
 
@@ -130,14 +192,15 @@ Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an 
 
 | Parameter | Wert |
 |-----------|------|
-| **Endpoint** | `POST https://graph.microsoft.com/beta/copilot/microsoft.graph.search` |
+| **Endpoint** | `POST https://graph.microsoft.com/beta/copilot/search` |
 | **Auth** | Bearer Token (Graph API, `aud: https://graph.microsoft.com`) |
-| **App-ID** | `c0ab8ce9-e9a0-42e7-b064-33d422df41f1` (M365ChatClient) |
+| **App-ID** | `c0ab8ce9-e9a0-42e7-b064-33d422df41f1` (M365ChatClient) oder `5e3ce6c0-...` (Teams Web) |
 | **Request-Body** | `{"query": "<Suchanfrage>"}` |
 | **Response** | `{"searchHits": [{webUrl, resourceType, preview}]}` |
 | **Typische Treffer** | 25 pro Anfrage |
 | **Quellen** | SharePoint, OneDrive, weitere M365-Inhalte |
 | **Token-Laufzeit** | ca. 1 Stunde |
+
 
 ## Haeufige Fehler
 
@@ -158,3 +221,11 @@ Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an 
 "KBL VEC Datenmodell"
 "Projektplanung 2026"
 ```
+
+### Warum dieser Endpoint statt `/v1.0/search/query`?
+
+Der Copilot-Endpoint liefert **semantisch erweiterte Ergebnisse**. Beispiel fuer Query `AMOB@EK-corona.pdf`:
+- **Copilot Search**: 6 Treffer — exakte Datei + 5 thematisch verwandte Dokumente
+- **Graph Search** (`/v1.0/search/query`, `driveItem`): 1 Treffer — nur exakter Dateiname-Match
+
+Fuer Dateisuche ist der Copilot-Endpoint deutlich besser, weil er semantischen Kontext mitbringt und verwandte Dokumente findet, nicht nur exakte Keyword-Matches.

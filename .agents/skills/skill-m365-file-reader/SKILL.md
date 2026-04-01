@@ -7,7 +7,7 @@ description: "Dateien aus SharePoint und OneDrive ueber die Graph API lesen. Unt
 
 Liest **Dateien aus SharePoint und OneDrive** ueber die Graph API und gibt den Inhalt als Text aus — ohne Browser, ohne Download-Dialog.
 
-> **Script:** `scripts/m365_file_reader.py`
+> **Script:** `scripts/m365_file_reader.py`, Pfad relativ zum **Repo-Root**
 
 ## Wann verwenden?
 
@@ -31,7 +31,7 @@ Liest **Dateien aus SharePoint und OneDrive** ueber die Graph API und gibt den I
 | Format | Ausgabe |
 |--------|---------|
 | **.pptx** | Text pro Folie (inkl. Tabellen und Notes) |
-| **.xlsx / .xls** | Alle Sheets als CSV (Semikolon-getrennt) |
+| **.xlsx / .xls** | Alle Sheets als CSV (Semikolon-getrennt), ausgegeben als einzelne `### Sheet:`-Abschnitte auf stdout |
 | **.docx** | Volltext mit Ueberschriften (Heading 1/2/3) |
 | **.pdf** | Text pro Seite (benoetigt `pdfplumber`) |
 | **.png/.jpg/.jpeg/.gif/.bmp/.tiff/.svg/.webp** | Auto-Download nach `userdata/tmp/` + Bild-Metadaten (Abmessungen, Modus) |
@@ -59,6 +59,8 @@ python scripts/m365_file_reader.py read "https://volkswagengroup.sharepoint.com/
 ```bash
 python scripts/m365_file_reader.py read "BN-SK_Abkündigung_CHD-LD_Toolsuite_20260316_tcm.pptx"
 ```
+
+Hinweis: Bei exaktem Dateinamen kann `read "<dateiname>"` die Datei direkt finden; ein separater `search`-Aufruf ist dann nicht erforderlich.
 
 **C) driveId|itemId (aus vorheriger Suche):**
 ```bash
