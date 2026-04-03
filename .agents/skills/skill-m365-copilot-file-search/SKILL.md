@@ -7,7 +7,7 @@ description: "M365 Copilot File Search ueber Graph Beta API ausfuehren. Durchsuc
 
 Durchsucht **SharePoint und OneDrive** ueber den Graph Beta Copilot Search Endpoint mit Copilot-optimiertem Ranking.
 
-> **Dokumentation:** [docs/m365-copilot-api-research.md](../../docs/m365-copilot-api-research.md)
+> **Dokumentation:** [docs/Analyse-m365-copilot-api-research.md](../../docs/Analyse-m365-copilot-api-research.md)
 
 ## Wann verwenden?
 
@@ -43,137 +43,24 @@ Falls keine Ergebnisse → Skill nicht nutzbar (Plan-Modus oder MCP nicht gestar
 
 ## Workflow
 
-> **Script:** `scripts/copilot_search.py` — Token-Caching, Search-Aufruf und Formatierung in einem Script.
+> **Scripts:** `.agents/skills/skill-m365-copilot-file-search/copilot_file_search.py` + `scripts/m365_copilot_graph_token.py` — Search, automatische Token-Beschaffung via Playwright MCP/NAA, Caching und Formatierung.
 
 ### Schritt 1: Search ausfuehren
 
 ```bash
-# via run_in_terminal
-python scripts/copilot_search.py search "SUCHBEGRIFF"
+python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "SUCHBEGRIFF"
 ```
 
 - **Exit 0** → Ergebnisse werden als Markdown-Tabelle ausgegeben. Fertig.
-- **Exit 2** → `TOKEN_EXPIRED` auf stderr. Weiter zu Schritt 2.
-- **Exit 1** → sonstiger Fehler (Meldung auf stderr).
-
-### Schritt 2: Token holen (nur bei Exit 2)
-
-Es gibt **zwei Token-Quellen**. Beide funktionieren fuer Copilot Search.
-
-#### Option A: Teams-Token aus localStorage (bevorzugt — mehr Scopes)
-
-**2a.** Teams Web oeffnen:
-
-```
-mcp_playwright_browser_navigate(url="https://teams.microsoft.com/v2/")
-```
-
-**2b.** Token extrahieren (vorerst nur in Variable):
-
-```javascript
-// via mcp_playwright_browser_evaluate
-async () => {
-  const msalTokenKeysRaw = localStorage.getItem('msal.token.keys.5e3ce6c0-2b1f-4285-8d4b-75ee78787346');
-  if (!msalTokenKeysRaw) return JSON.stringify({ error: 'No MSAL token keys' });
-  const keys = JSON.parse(msalTokenKeysRaw);
-  for (const atKey of (keys.accessToken || [])) {
-    const atRaw = localStorage.getItem(atKey);
-    if (atRaw) {
-      const atData = JSON.parse(atRaw);
-      if (atData.target && atData.target.includes('graph.microsoft.com')) {
-        const token = atData.secret;
-        const parts = token.split('.');
-        const payload = JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
-        return JSON.stringify({ token: token, exp: payload.exp, source: 'teams-web' });
-      }
-    }
-  }
-  return JSON.stringify({ error: 'No Graph token found' });
-}
-```
-
-**2c.** Token validieren und cachen (mit Fehlerbehandlung):
+- Das Script ruft intern automatisch `python scripts/m365_copilot_graph_token.py ensure` auf.
+- Der Token wird ueber Playwright MCP + `nestedAppAuthService.GetToken(...)` geholt, lokal gegen `/v1.0/me` validiert und in `userdata/tmp/.graph_token_cache.json` gespeichert.
+- Fuer einen garantiert frischen Token:
 
 ```bash
-# TOKEN_AUS_2B ist der Token aus dem JavaScript-Ergebnis
-python scripts/copilot_search.py cache-token TOKEN_AUS_2B
+python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "SUCHBEGRIFF" --force
 ```
 
-Dieses Kommando:
-- Validiert den Token gegen `/v1.0/me`
-- Speichert ihn nur bei erfolgreicher Validierung
-- Exit **0** → Token gecacht. Weiter zu 2d.
-- Exit **2** → `TOKEN_EXPIRED` auf stderr. Token ist serverseitig ungueltig (401).
-
-**2d.** Search erneut ausfuehren:
-
-```bash
-python scripts/copilot_search.py search "SUCHBEGRIFF"
-```
-
-Das Script prueft automatisch die gecachte Token-Datei.
-
-**Fehlerbehandlung:**
-- `No MSAL token keys` → Teams-Session nicht aktiv, User muss sich in Teams anmelden
-- `No Graph token found` → Seite neu laden und erneut versuchen
-- `TOKEN_EXPIRED` bei cache-token → Token ist serverseitig ungueltig. Seite neu laden und Schritte 2b-2c wiederholen.
-
-#### Option B: NAA-Token aus M365 Copilot (Fallback)
-
-**2a.** M365 Copilot oeffnen:
-
-```
-mcp_playwright_browser_navigate(url="https://m365.cloud.microsoft/chat")
-```
-
-**3 Sekunden warten** (damit `nestedAppAuthService` verfuegbar wird).
-
-**2b.** Token extrahieren:
-
-```javascript
-// via mcp_playwright_browser_evaluate
-async () => {
-  const nas = window.nestedAppAuthService;
-  if (!nas) return { error: 'NAA not ready — page not fully loaded' };
-
-  const result = await nas.handleRequest({
-    method: 'GetToken',
-    requestId: 'copilot-search-' + Date.now(),
-    tokenParams: {
-      clientId: 'c0ab8ce9-e9a0-42e7-b064-33d422df41f1',
-      resource: 'https://graph.microsoft.com',
-      scope: 'https://graph.microsoft.com/.default'
-    }
-  }, new URL(window.location.href));
-
-  if (!result.success || !result.token?.access_token) {
-    return { error: 'Token request failed', details: result.error };
-  }
-  return { success: true, token: result.token.access_token };
-}
-```
-
-**2c.** Token cachen (mit automatischer Validierung) und Search erneut ausfuehren:
-
-```bash
-# Token cachen — prueft automatisch gegen /v1.0/me
-python scripts/copilot_search.py cache-token TOKEN_AUS_2B
-
-# Search erneut
-python scripts/copilot_search.py search "SUCHBEGRIFF"
-```
-
-**Fehlerbehandlung:**
-- `NAA not ready` → `mcp_playwright_browser_wait_for` mit 3s, dann Retry (max. 2x)
-- `Token request failed` → M365-Session abgelaufen, User muss sich neu anmelden
-- `cache-token` liefert **Exit 2** (Token serverseitig ungueltig trotz gueltigem JWT-Claim):
-  1. M365-Seite neu laden (`mcp_playwright_browser_navigate` erneut)
-  2. 5 Sekunden warten
-  3. Token erneut via NAA holen (Schritt 2b)
-  4. `cache-token` erneut ausfuehren
-  5. Maximal **2 Versuche** — danach Fehler an User melden
-
-### Schritt 3: Ergebnisse praesentieren
+### Schritt 2: Ergebnisse praesentieren
 
 Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an den User weitergeben.
 
@@ -181,10 +68,13 @@ Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an 
 
 | Befehl | Zweck |
 |--------|-------|
-| `python scripts/copilot_search.py search "query"` | Suche ausfuehren (Cache → API → Markdown) |
-| `python scripts/copilot_search.py search "query" --token TOKEN` | Suche mit explizitem Token (wird auch gecacht) |
-| `python scripts/copilot_search.py cache-token TOKEN [EXP]` | Token in Cache speichern |
-| `python scripts/copilot_search.py check-token` | Cache-Status pruefen |
+| `python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "query"` | Suche ausfuehren (auto Resolver → API → Markdown) |
+| `python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "query" --force` | Suche mit frischem NAA-Token, Cache ignorieren |
+| `python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "query" --token TOKEN` | Debug-only: Suche mit explizitem Token |
+| `python scripts/m365_copilot_graph_token.py ensure` | Gueltigen Token sicherstellen (Cache zuerst) |
+| `python scripts/m365_copilot_graph_token.py ensure --force` | Frischen Token via MCP/NAA erzwingen |
+| `python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py check-token` | Cache-Status pruefen |
+| `python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py cache-token TOKEN [EXP]` | Debug-only: Token manuell in Cache speichern |
 
 ---
 
@@ -194,7 +84,7 @@ Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an 
 |-----------|------|
 | **Endpoint** | `POST https://graph.microsoft.com/beta/copilot/search` |
 | **Auth** | Bearer Token (Graph API, `aud: https://graph.microsoft.com`) |
-| **App-ID** | `c0ab8ce9-e9a0-42e7-b064-33d422df41f1` (M365ChatClient) oder `5e3ce6c0-...` (Teams Web) |
+| **App-ID** | `c0ab8ce9-e9a0-42e7-b064-33d422df41f1` (M365ChatClient, NAA via Copilot) |
 | **Request-Body** | `{"query": "<Suchanfrage>"}` |
 | **Response** | `{"searchHits": [{webUrl, resourceType, preview}]}` |
 | **Typische Treffer** | 25 pro Anfrage |
@@ -208,7 +98,7 @@ Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an 
 |--------|---------|---------|
 | `NAA not ready` | Seite nicht geladen | `mcp_playwright_browser_wait_for` mit 3s, dann Retry |
 | `Token request failed` | Session abgelaufen | User muss sich in M365 neu anmelden |
-| `401 Unauthorized` | Token abgelaufen | Schritt 2 erneut ausfuehren |
+| `401 Unauthorized` | Token abgelaufen | Search erneut starten oder `--force` verwenden |
 | `403 Forbidden` | Keine Copilot-Lizenz | User braucht M365 Copilot Lizenz |
 | `CORS Error` (bei Python) | Sydney-NanoProxy | Nur im Browser ausfuehrbar, NICHT per Python/requests |
 

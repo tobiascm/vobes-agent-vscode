@@ -46,7 +46,7 @@
     "workbench.editorAssociations": {
         "{git}:/**/*.{md}": "default",
         "{git-index}:/**/*.{md}": "default",
-        "*.md": "vscode.markdown.preview.editor",
+        "*.md": "default",
         "*.copilotmd": "vscode.markdown.preview.editor"
     },
     "markdown.styles": [
