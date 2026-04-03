@@ -21,7 +21,7 @@ Token-Caching:
     Nur Tokens mit Mail.Read Scope funktionieren (Teams-Token).
     Token-Laufzeit: ca. 1 Stunde.
     Bei fehlendem/abgelaufenem Token versucht das Script jetzt selbst,
-    ueber scripts/m365_mail_search_token.py einen frischen Teams-Token
+    ueber .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py einen frischen Teams-Token
     zu beschaffen, bevor Exit-Code 2 zurueckgegeben wird.
 
 Exit-Codes:
