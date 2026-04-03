@@ -7,9 +7,9 @@ Ziel:
 - sonst Teams in Edge oeffnen und auf aktualisierte MSAL-Eintraege warten
 
 Usage:
-    python scripts/m365_mail_search_token.py fetch
-    python scripts/m365_mail_search_token.py fetch --force
-    python scripts/m365_mail_search_token.py check-token
+    python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py fetch
+    python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py fetch --force
+    python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py check-token
 """
 
 from __future__ import annotations
@@ -28,8 +28,12 @@ from typing import Any
 import requests
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+REPO_ROOT = Path(__file__).resolve().parents[4]
+REPO_SCRIPTS_DIR = REPO_ROOT / "scripts"
+for path in (SCRIPT_DIR, REPO_SCRIPTS_DIR):
+    path_str = str(path)
+    if path_str not in sys.path:
+        sys.path.insert(0, path_str)
 
 from m365_copilot_graph_token import (
     McpError,
@@ -47,7 +51,6 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
 CACHE_FILE_TEAMS = REPO_ROOT / "userdata" / "tmp" / ".graph_token_cache_teams.json"
 CLIENT_ID = "5e3ce6c0-2b1f-4285-8d4b-75ee78787346"
 TEAMS_URL = "https://teams.microsoft.com/v2/"
