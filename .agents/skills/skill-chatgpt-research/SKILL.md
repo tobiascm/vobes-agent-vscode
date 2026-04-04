@@ -32,6 +32,7 @@ Das Script uebernimmt:
 - optional Aktivierung von **Laengeres Nachdenken**
 - Prompt senden
 - Antwort pollend auf Vollstaendigkeit pruefen
+- bei Research-Laeufen bis zu **30 Minuten** auf die Antwort warten
 - genau **einen** Prompt pro Lauf, ohne automatischen Follow-up
 - minuetliche Mini-Statusmeldungen auf `stderr`
 - HTML-Extraktion direkt neben der Markdown-Datei
@@ -100,7 +101,11 @@ Wichtige Optionen:
 | `--output/-o` | Ziel-MD-Datei |
 | `--thinking` | versucht `Laengeres Nachdenken` zu aktivieren |
 | `--reuse-chat` | bestehenden Chat weiterverwenden statt neuen Startzustand zu erzwingen |
-| `--timeout-seconds` | Timeout pro Antwort, Standard: 1800 Sekunden |
+| `--timeout-seconds` | Timeout pro Antwort, Standard: 1800 Sekunden = **30 Minuten** |
+
+Wichtig:
+- ChatGPT-Research kann je nach Last und Thema bis zu **30 Minuten** dauern.
+- Der Agent wartet im Standardlauf entsprechend lange und bricht erst nach Ablauf dieses Timeouts mit Exit `4` ab.
 
 Der Tab wird durch `run` **nie automatisch** geschlossen. Wenn keine Folgefrage mehr noetig ist, rufe danach explizit auf:
 

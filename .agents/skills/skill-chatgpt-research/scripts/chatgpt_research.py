@@ -66,6 +66,7 @@ EXIT_INVALID_HTML = 6
 
 DEFAULT_CHAT_URL = "https://chatgpt.com/"
 DEFAULT_TIMEOUT_SECONDS = 1800
+DEFAULT_TIMEOUT_MINUTES = DEFAULT_TIMEOUT_SECONDS // 60
 DEFAULT_POLL_INTERVAL_SECONDS = 3
 CHATGPT_MIN_INTERVAL_SECONDS = 30
 GATE_LOCK_PATH = PROJECT_ROOT / "userdata" / "tmp" / "chatgpt_rate_gate.lock"
@@ -953,7 +954,9 @@ def _poll_for_completed_message(
 
         _call_tool_with_retry(client, "browser_wait_for", {"time": poll_interval_seconds})
 
-    raise TimeoutError("ChatGPT-Antwort wurde nicht rechtzeitig fertig.")
+    raise TimeoutError(
+        f"ChatGPT-Antwort wurde nicht innerhalb von {timeout_seconds} Sekunden fertig."
+    )
 
 
 def _extract_last_assistant_html(client: McpStdioClient, raw_html_out: Path) -> Path:
@@ -1081,6 +1084,12 @@ def cmd_run(options: RunOptions) -> None:
         baseline = int(state.get("assistantCount", 0))
         _submit_prompt(client, options.question)
         _call_tool_with_retry(client, "browser_wait_for", {"time": 2})
+        print(
+            "ChatGPT-Research kann bis zu "
+            f"{options.timeout_seconds // 60} Minuten dauern; "
+            "der Agent wartet bis zum konfigurierten Timeout.",
+            file=sys.stderr,
+        )
 
         _poll_for_completed_message(
             client,
@@ -1166,7 +1175,10 @@ def main() -> None:
         "--timeout-seconds",
         type=int,
         default=DEFAULT_TIMEOUT_SECONDS,
-        help="Maximale Wartezeit pro Antwort",
+        help=(
+            "Maximale Wartezeit pro Antwort "
+            f"(Default: {DEFAULT_TIMEOUT_SECONDS} Sekunden = {DEFAULT_TIMEOUT_MINUTES} Minuten)"
+        ),
     )
     run.add_argument(
         "--poll-interval-seconds",
