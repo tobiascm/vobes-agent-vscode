@@ -10,7 +10,13 @@ Stellt eine Frage an **ChatGPT** via **Playwright MCP Bridge** und speichert die
 Der Standardweg ist **ein einziger Python-Aufruf**:
 
 ```bash
-python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run --question "FRAGE" --thinking
+python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run --question "FRAGE"
+```
+
+Fuer eine echte Folgefrage im zuletzt erfolgreichen Chat:
+
+```bash
+python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run --question "FOLGEFRAGE" --follow-up
 ```
 
 Zum expliziten Aufraeumen danach:
@@ -27,18 +33,21 @@ Der Agent soll dabei **nur diesen Python-Aufruf** verwenden:
 Das Script uebernimmt:
 - Start des Playwright MCP Servers im **Bridge Mode**
 - Navigation zu `https://chatgpt.com/`
+- optional Wiederaufnahme des zuletzt erfolgreichen konkreten Chat-URLs fuer echte Folgefragen
 - globalen Schutz gegen zu viele ChatGPT-Anfragen
 - Login-/Textbox-Pruefung
-- optional Aktivierung von **Laengeres Nachdenken**
+- Aktivierung von **Laengeres Nachdenken** als festem Run-Standard
+- Readiness-Loop bis die Texteingabe wirklich wieder verfuegbar ist
 - Prompt senden
 - Antwort pollend auf Vollstaendigkeit pruefen
 - Abschluss nur nach echtem Ruhefenster und Mindestinhalt erkennen
 - bei Research-Laeufen bis zu **30 Minuten** auf die Antwort warten
 - genau **einen** Prompt pro Lauf, ohne automatischen Follow-up
-- minuetliche Mini-Statusmeldungen auf `stderr`
+- auf `stdout` klare Schrittmeldungen wie `ChatGPT wird geöffnet...`, `Prompt abgeschickt...` und waehrend der Laufzeit `ChatGPT recherchiert noch, bitte warten...`
 - HTML-Extraktion direkt neben der Markdown-Datei
 - Markdown-Ausgabe nach `tmp/`
-- minimales Ergebnis-JSON direkt auf `stdout`
+- menschenlesbare Abschluss-/Fehlermeldungen mit Verweis auf die Markdown-Datei
+- automatisches Schliessen des verwendeten ChatGPT-Tabs nach jedem `run`
 - optionales explizites Schliessen des aktuellen ChatGPT-Tabs ueber eigenes `close`-Subcommand
 
 Globaler Schutz:
@@ -90,7 +99,6 @@ Wenn `doctor` mit Exit-Code `3` endet:
 ```bash
 python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run \
   --question "FRAGE" \
-  --thinking \
   --output tmp/DATEINAME.md
 ```
 
@@ -100,9 +108,8 @@ Wichtige Optionen:
 |---|---|
 | `--question/-q` | Pflichtfrage an ChatGPT |
 | `--output/-o` | Ziel-MD-Datei |
-| `--thinking` | versucht `Laengeres Nachdenken` zu aktivieren |
+| `--follow-up` | stellt die Frage im zuletzt erfolgreichen konkreten Chat statt in einem neuen Chat |
 | `--quick` | Kurzantwort-Modus fuer Tests / kleine Antworten; schnellere Abschluss-Schwellen |
-| `--reuse-chat` | bestehenden Chat weiterverwenden statt neuen Startzustand zu erzwingen |
 | `--timeout-seconds` | Timeout pro Antwort, Standard: 1800 Sekunden = **30 Minuten** |
 | `--completion-stable-seconds` | benoetigte Ruhezeit ohne Textaenderung vor Abschluss, Default: `15` |
 | `--completion-min-chars` | Mindestlaenge fuer fruehen Abschluss ohne sichtbaren Generierungsindikator, Default: `200` |
@@ -110,13 +117,15 @@ Wichtige Optionen:
 
 Wichtig:
 - ChatGPT-Research kann je nach Last und Thema bis zu **30 Minuten** dauern.
+- `run` arbeitet immer im Modus **Laengeres Nachdenken**.
+- Vor dem Prompt wartet ein Readiness-Loop standardmaessig bis zu **30 Sekunden**, bis die Textbox wirklich wieder verfuegbar ist. Das ist besonders fuer lange bestehende Chats wichtig.
 - Der Agent wartet im Standardlauf entsprechend lange und bricht erst nach Ablauf dieses Timeouts mit Exit `4` ab.
 - Ein kurzer Einleitungssatz gilt nicht mehr sofort als fertig; das Script wartet standardmaessig auf mindestens `15` Sekunden stabilen Inhalt und blockt sehr kurze Zwischenstaende.
-- Im langen `--thinking`-Modus wird ein sichtbares `TL;DR`/`Fazit` zusaetzlich als starkes Abschluss-Indiz genutzt. Fehlt das, wartet der Wrapper deutlich laenger, bevor er einen stabilen Zwischenstand akzeptiert.
+- Im Thinking-Modus wird ein sichtbares `TL;DR`/`Fazit` zusaetzlich als starkes Abschluss-Indiz genutzt. Fehlt das, wartet der Wrapper deutlich laenger, bevor er einen stabilen Zwischenstand akzeptiert.
 - Zusaetzlich injiziert der Wrapper standardmaessig ein Abschluss-Token `---fertig---`. Sobald dieses am Antwortende erscheint, kann der Lauf deutlich frueher und zuverlaessiger als abgeschlossen erkannt werden.
 - Fuer kurze Testprompts oder 2-3 Zeilen Antwort `--quick` verwenden. Dann sind die Abschluss-Schwellen deutlich kuerzer und das Script beendet frueher, sobald der kurze Inhalt stabil ist.
 
-Der Tab wird durch `run` **nie automatisch** geschlossen. Wenn keine Folgefrage mehr noetig ist, rufe danach explizit auf:
+Der durch `run` verwendete ChatGPT-Tab wird nach dem Lauf automatisch geschlossen. Das explizite `close`-Subcommand brauchst du nur noch, wenn du einen separat offen gebliebenen Tab manuell schliessen willst:
 
 ```bash
 python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py close
@@ -127,17 +136,9 @@ python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py close
 Standardmaessig:
 - Markdown: `tmp/YYYYMMDD_chatgpt_<slug>.md`
 - Roh-HTML: gleiches Verzeichnis und gleicher Basisname wie Markdown, nur `.html`
-- `stdout`: minimales JSON-Ergebnis
-
-Das Ergebnis auf `stdout` ist absichtlich minimal:
-
-```json
-{
-  "output_md": "tmp/DATEINAME.md",
-  "output_chars": 6842,
-  "raw_html_out": "tmp/DATEINAME.html"
-}
-```
+- waehrend `run` auf `stdout`: Schrittmeldungen wie `ChatGPT wird geöffnet...` oder bei `--follow-up` `Gespeicherter Chat wird geöffnet...`, dann `Prompt abgeschickt...` und danach `ChatGPT recherchiert noch, bitte warten...`
+- nach Erfolg auf `stdout`: menschenlesbarer `OK:`-Einzeiler mit Verweis auf die Markdown-Datei
+- nach Fehler auf `stderr`: menschenlesbarer `Fehler:`-Einzeiler mit Verweis auf die vorgesehene Markdown-Datei
 
 ## Fallback / Debug
 
@@ -156,11 +157,15 @@ python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py convert
   --thinking
 ```
 
-Falls der ChatGPT-Tab danach nicht mehr gebraucht wird:
+Falls ein ChatGPT-Tab separat manuell geschlossen werden soll:
 
 ```bash
 python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py close
 ```
+
+Hinweis zu Folgefragen:
+- `--follow-up` verwendet ausschliesslich die zuletzt erfolgreich gespeicherte konkrete Chat-URL aus `tmp/`.
+- Wenn kein wiederverwendbarer letzter Chat gespeichert ist, bricht das Script mit einer klaren Fehlermeldung ab.
 
 ## Fehlerbehandlung
 
@@ -168,7 +173,7 @@ python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py close
 |---------|-----------|---------|
 | Bridge/MCP nicht startbar | Exit `2` | VS Code MCP / Extension / Token pruefen |
 | Nicht eingeloggt | Exit `3` | User in `chatgpt.com` einloggen |
-| `Target page, context or browser has been closed` | Fehler-JSON / `stderr` | Script versucht einmal automatisch zu resetten |
+| `Target page, context or browser has been closed` | Fehlerzeile auf `stderr` | Script versucht einmal automatisch zu resetten |
 | Antwort-Timeout | Exit `4` | hoehere `--timeout-seconds` oder Seite manuell pruefen |
-| HTML unbrauchbar | Exit `6` | Roh-HTML und JSON-Fehler pruefen |
+| HTML unbrauchbar | Exit `6` | Roh-HTML und Fehlermeldung pruefen |
 | Tab soll geschlossen werden | `close` | `python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py close` |

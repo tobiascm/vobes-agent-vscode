@@ -6,7 +6,7 @@ stores the answer as Markdown.
 
 Usage:
     python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py doctor
-    python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run --question "..." --thinking
+    python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run --question "..."
     python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py close
     python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py convert INPUT_HTML --question "..."
 
@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 # Windows UTF-8
 if sys.platform == "win32":
@@ -79,8 +80,15 @@ SHORT_NO_GENERATION_GRACE_SECONDS = 20
 CHATGPT_MIN_INTERVAL_SECONDS = 30
 GATE_LOCK_PATH = PROJECT_ROOT / "userdata" / "tmp" / "chatgpt_rate_gate.lock"
 GATE_STATE_PATH = PROJECT_ROOT / "userdata" / "tmp" / "chatgpt_rate_gate.json"
+FOLLOWUP_STATE_PATH = PROJECT_ROOT / "tmp" / "chatgpt_followup_state.json"
 LOCK_ACQUIRE_TIMEOUT_SECONDS = 60.0
 LOCK_POLL_INTERVAL_SECONDS = 0.1
+DEFAULT_READINESS_TIMEOUT_SECONDS = 30
+DEFAULT_READINESS_POLL_INTERVAL_SECONDS = 1
+RUN_WAIT_MESSAGE = "ChatGPT recherchiert noch, bitte warten..."
+RUN_OPENING_MESSAGE = "ChatGPT wird geöffnet..."
+RUN_FOLLOWUP_OPENING_MESSAGE = "Gespeicherter Chat wird geöffnet..."
+RUN_PROMPT_SENT_MESSAGE = "Prompt abgeschickt..."
 
 REQUIRED_TOOLS = {
     "browser_navigate",
@@ -406,6 +414,18 @@ def _extract_text_content(result: dict[str, Any]) -> str:
     return "\n".join(line for line in lines if line).strip()
 
 
+_TAB_LINE_RE = re.compile(r"- (\d+):.*\]\((https?://[^)]+)\)")
+
+
+def _parse_tab_list(text: str) -> list[tuple[int, str]]:
+    """Parse browser_tabs list output into (index, url) pairs."""
+    return [
+        (int(m.group(1)), m.group(2))
+        for line in text.splitlines()
+        if (m := _TAB_LINE_RE.match(line))
+    ]
+
+
 def _extract_playwright_result_text(text: str) -> str:
     """Unwrap Playwright MCP markdown reports to the actual tool result payload."""
     match = re.search(r"### Result\s*(.*?)\s*(?:\n### |\Z)", text, flags=re.DOTALL)
@@ -559,6 +579,53 @@ def _error_meta(raw_html_out: Path, error: str) -> dict[str, Any]:
     }
 
 
+def _normalize_url(url: str) -> str:
+    return url.strip()
+
+
+def _is_followup_chat_url(url: str) -> bool:
+    normalized = _normalize_url(url)
+    if not normalized:
+        return False
+    parsed = urlsplit(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return False
+    return parsed.path not in {"", "/"}
+
+
+def _load_followup_state(state_path: Path = FOLLOWUP_STATE_PATH) -> dict[str, Any]:
+    if not state_path.exists():
+        return {}
+    try:
+        raw = state_path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return {}
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError, TypeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_followup_state(url: str, out_path: Path, state_path: Path = FOLLOWUP_STATE_PATH) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "last_chat_url": _normalize_url(url),
+        "saved_at": datetime.now().isoformat(),
+        "output_md": _rel_for_display(out_path),
+    }
+    state_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _load_followup_url(state_path: Path = FOLLOWUP_STATE_PATH) -> str:
+    data = _load_followup_state(state_path)
+    url = str(data.get("last_chat_url", "") or "").strip()
+    if not _is_followup_chat_url(url):
+        raise RuntimeError(
+            f"Kein wiederverwendbarer letzter Chat gespeichert: {_rel_for_display(state_path)}"
+        )
+    return url
+
+
 # ---------------------------------------------------------------------------
 # Global prompt gate
 # ---------------------------------------------------------------------------
@@ -674,11 +741,59 @@ def _apply_global_prompt_gate() -> None:
     reservation = _reserve_global_chatgpt_slot()
     wait_seconds = float(reservation["wait_seconds"])
     if wait_seconds > 0:
-        print(
-            f"Globales ChatGPT-Limit aktiv, warte {wait_seconds:.1f}s bis zum naechsten Slot",
-            file=sys.stderr,
-        )
         time.sleep(wait_seconds)
+
+
+def _print_run_wait_message() -> None:
+    print(RUN_WAIT_MESSAGE)
+
+
+def _print_run_opening_message() -> None:
+    print(RUN_OPENING_MESSAGE)
+
+
+def _print_run_followup_opening_message() -> None:
+    print(RUN_FOLLOWUP_OPENING_MESSAGE)
+
+
+def _print_run_prompt_sent_message() -> None:
+    print(RUN_PROMPT_SENT_MESSAGE)
+
+
+def _close_chat_tab_safely(client: McpStdioClient) -> None:
+    """Close ChatGPT tab(s) by URL.  Falls back to browser_close."""
+    try:
+        result = client.call_tool("browser_tabs", {"action": "list"})
+        text = _extract_text_content(result)
+        tabs = _parse_tab_list(text)
+        indices = [idx for idx, url in tabs if "chatgpt.com" in url]
+        if indices:
+            for idx in sorted(indices, reverse=True):
+                try:
+                    client.call_tool(
+                        "browser_tabs", {"action": "close", "index": idx},
+                    )
+                except Exception as exc:
+                    print(
+                        f"[close] Tab {idx} schliessen fehlgeschlagen: {exc}",
+                        file=sys.stderr,
+                    )
+            return
+    except Exception as exc:
+        print(f"[close] Tab-Liste nicht verfuegbar: {exc}", file=sys.stderr)
+    # Fallback: close whatever page the MCP context currently points to
+    try:
+        client.call_tool("browser_close", {})
+    except Exception as exc:
+        print(f"[close] browser_close fehlgeschlagen: {exc}", file=sys.stderr)
+
+
+def _format_run_success(out_path: Path, content: str) -> str:
+    return f"OK: {_rel_for_display(out_path)} ({len(content)} Zeichen)"
+
+
+def _format_run_error(out_path: Path, exc: Exception) -> str:
+    return f"Fehler: {exc} | Markdown-Ziel: {_rel_for_display(out_path)}"
 
 
 # ---------------------------------------------------------------------------
@@ -705,7 +820,7 @@ class RunOptions:
     completion_stable_seconds: int
     completion_min_chars: int
     no_generation_grace_seconds: int
-    reuse_chat: bool
+    follow_up: bool
 
 
 class McpError(RuntimeError):
@@ -1013,6 +1128,36 @@ def _open_new_chat(client: McpStdioClient, chat_url: str) -> None:
     _call_tool_with_retry(client, "browser_wait_for", {"time": 2})
 
 
+def _wait_for_prompt_readiness(
+    client: McpStdioClient,
+    *,
+    initial_state: dict[str, Any] | None = None,
+    timeout_seconds: int = DEFAULT_READINESS_TIMEOUT_SECONDS,
+    poll_interval_seconds: int = DEFAULT_READINESS_POLL_INTERVAL_SECONDS,
+    context: str = "ChatGPT",
+) -> dict[str, Any]:
+    state = initial_state
+    if state and state.get("hasTextbox"):
+        return state
+
+    deadline = time.time() + timeout_seconds
+    last_state = state or {}
+
+    while time.time() < deadline:
+        raw = _tool_text_with_retry(client, "browser_evaluate", {"function": DOM_STATE_JS})
+        last_state = _parse_json_text(raw, f"{context} DOM state")
+        if last_state.get("hasTextbox"):
+            return last_state
+        _call_tool_with_retry(client, "browser_wait_for", {"time": poll_interval_seconds})
+
+    url = last_state.get("url") or "unbekannt"
+    title = last_state.get("title") or "unbekannt"
+    raise RuntimeError(
+        f"ChatGPT-Textbox wurde nicht innerhalb von {timeout_seconds} Sekunden bereit. "
+        f"URL: {url} | Titel: {title}"
+    )
+
+
 def _submit_prompt(client: McpStdioClient, prompt: str) -> None:
     code = _js_return(
         "{"
@@ -1165,29 +1310,7 @@ def _poll_for_completed_message(
         has_completion_sentinel = _has_completion_sentinel(preview, tail_preview)
 
         if now_ts >= next_status_at:
-            elapsed_seconds = int(now_ts - started_at)
-            elapsed_mm = elapsed_seconds // 60
-            elapsed_ss = elapsed_seconds % 60
-            preview_text = preview.replace("\n", " ").strip()
-            preview_text = re.sub(r"\s+", " ", preview_text)
-            if assistant_count <= baseline_count:
-                message = f"Status {elapsed_mm:02d}:{elapsed_ss:02d}: noch keine Assistant-Antwort sichtbar"
-            else:
-                quiet_seconds = 0 if last_change_at is None else int(max(0, now_ts - last_change_at))
-                message = (
-                    f"Status {elapsed_mm:02d}:{elapsed_ss:02d}: len={last_len}, "
-                    f"generating={'ja' if is_generating else 'nein'}, "
-                    f"quiet={quiet_seconds}s, "
-                    f"progress_stub={'ja' if looks_like_progress else 'nein'}, "
-                    f"tldr={'ja' if has_tldr_marker else 'nein'}, "
-                    f"sentinel={'ja' if has_completion_sentinel else 'nein'}"
-                )
-                if preview_text:
-                    tail_preview = preview_text[-140:]
-                    if len(preview_text) > len(tail_preview):
-                        tail_preview = f"...{tail_preview}"
-                    message += f" | Preview: {tail_preview}"
-            print(message, file=sys.stderr)
+            _print_run_wait_message()
             next_status_at += 60
 
         if assistant_count > baseline_count:
@@ -1340,20 +1463,29 @@ def cmd_run(options: RunOptions) -> None:
 
     config = _load_playwright_server_config()
     client: McpStdioClient | None = None
+    navigation_target = options.chat_url
 
     try:
+        if options.follow_up:
+            navigation_target = _load_followup_url()
+            _print_run_followup_opening_message()
+        else:
+            _print_run_opening_message()
         client, _, state, _ = _start_client_and_fetch_state(
             config,
-            options.chat_url,
+            navigation_target,
         )
+        state = _wait_for_prompt_readiness(client, initial_state=state)
         if not state.get("hasTextbox"):
             raise PermissionError("ChatGPT ist nicht eingeloggt oder die Textbox fehlt.")
 
-        if not options.reuse_chat and int(state.get("assistantCount", 0)) > 0:
+        if not options.follow_up and int(state.get("assistantCount", 0)) > 0:
             _open_new_chat(client, options.chat_url)
-            state = _parse_json_text(
-                _tool_text_with_retry(client, "browser_evaluate", {"function": DOM_STATE_JS}),
-                "DOM state after new chat",
+            state = _wait_for_prompt_readiness(
+                client,
+                timeout_seconds=DEFAULT_READINESS_TIMEOUT_SECONDS,
+                poll_interval_seconds=DEFAULT_READINESS_POLL_INTERVAL_SECONDS,
+                context="ChatGPT new chat",
             )
             if not state.get("hasTextbox"):
                 raise PermissionError("Neue Chat-Seite geladen, aber keine Textbox gefunden.")
@@ -1373,17 +1505,11 @@ def cmd_run(options: RunOptions) -> None:
         )
         baseline = int(state.get("assistantCount", 0))
         _submit_prompt(client, _prompt_with_completion_sentinel(options.question))
+        _print_run_prompt_sent_message()
+        _print_run_wait_message()
         _call_tool_with_retry(client, "browser_wait_for", {"time": 2})
-        print(
-            "ChatGPT-Research kann bis zu "
-            f"{options.timeout_seconds // 60} Minuten dauern; "
-            "der Agent wartet bis zum konfigurierten Timeout. "
-            f"Abschlusslogik: stabil={completion_stable_seconds}s, "
-            f"min_chars={completion_min_chars}, grace={no_generation_grace_seconds}s.",
-            file=sys.stderr,
-        )
 
-        _poll_for_completed_message(
+        final_state = _poll_for_completed_message(
             client,
             baseline_count=baseline,
             thinking=options.thinking,
@@ -1401,25 +1527,29 @@ def cmd_run(options: RunOptions) -> None:
             output,
             options.thinking,
         )
+        final_url = str(final_state.get("url", "") or "").strip()
+        if _is_followup_chat_url(final_url):
+            _save_followup_state(final_url, out_path)
 
-        print(_json_dumps(_success_meta(raw_html_out, out_path, content)))
+        print(_format_run_success(out_path, content))
     except PermissionError as exc:
-        print(_json_dumps(_error_meta(raw_html_out, str(exc))))
+        print(_format_run_error(output, exc), file=sys.stderr)
         sys.exit(EXIT_LOGIN_REQUIRED)
     except TimeoutError as exc:
-        print(_json_dumps(_error_meta(raw_html_out, str(exc))))
+        print(_format_run_error(output, exc), file=sys.stderr)
         sys.exit(EXIT_RESPONSE_TIMEOUT)
     except McpError as exc:
-        print(_json_dumps(_error_meta(raw_html_out, str(exc))))
+        print(_format_run_error(output, exc), file=sys.stderr)
         sys.exit(EXIT_MCP_UNAVAILABLE)
     except RuntimeError as exc:
-        print(_json_dumps(_error_meta(raw_html_out, str(exc))))
+        print(_format_run_error(output, exc), file=sys.stderr)
         sys.exit(EXIT_INVALID_HTML)
     except Exception as exc:
-        print(_json_dumps(_error_meta(raw_html_out, str(exc))))
+        print(_format_run_error(output, exc), file=sys.stderr)
         sys.exit(EXIT_GENERAL_ERROR)
     finally:
         if client:
+            _close_chat_tab_safely(client)
             client.close()
 
 
@@ -1460,11 +1590,6 @@ def main() -> None:
         "-o",
         default=None,
         help="Ausgabepfad (Default: tmp/YYYYMMDD_chatgpt_SLUG.md)",
-    )
-    run.add_argument(
-        "--thinking",
-        action="store_true",
-        help="Versucht 'Laengeres Nachdenken' zu aktivieren",
     )
     run.add_argument(
         "--quick",
@@ -1518,9 +1643,9 @@ def main() -> None:
         ),
     )
     run.add_argument(
-        "--reuse-chat",
+        "--follow-up",
         action="store_true",
-        help="Bestehenden Chat weiterverwenden statt auf die Startseite zu gehen",
+        help="Folgefrage im zuletzt erfolgreichen Chat stellen",
     )
 
     args = parser.parse_args()
@@ -1536,7 +1661,7 @@ def main() -> None:
             RunOptions(
                 question=args.question,
                 output=Path(args.output) if args.output else None,
-                thinking=args.thinking,
+                thinking=True,
                 quick=args.quick,
                 chat_url=args.chat_url,
                 timeout_seconds=args.timeout_seconds,
@@ -1544,7 +1669,7 @@ def main() -> None:
                 completion_stable_seconds=args.completion_stable_seconds,
                 completion_min_chars=args.completion_min_chars,
                 no_generation_grace_seconds=args.no_generation_grace_seconds,
-                reuse_chat=args.reuse_chat,
+                follow_up=args.follow_up,
             )
         )
 
