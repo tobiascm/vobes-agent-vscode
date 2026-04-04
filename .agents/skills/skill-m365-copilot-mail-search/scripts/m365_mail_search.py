@@ -7,6 +7,7 @@ Usage:
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff"
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --size 25
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --date-order
+    python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --only-summary
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --token TOKEN
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID --save-attachments
@@ -35,6 +36,7 @@ import base64
 import os
 import sys
 import time
+import unicodedata
 from pathlib import Path
 
 import re
@@ -65,6 +67,9 @@ if sys.platform == "win32":
 
 SEARCH_URL = "https://graph.microsoft.com/v1.0/search/query"
 DEFAULT_PAGE_SIZE = 10
+SEARCH_OUTPUT_DIR = REPO_ROOT / "tmp"
+BODY_PREVIEW_LINES = 10
+NOISE_TERMS = ("INTERNAL",)
 
 
 # ---------------------------------------------------------------------------
@@ -140,9 +145,10 @@ def _clean_search_snippet(text: str, limit: int = 160) -> str:
     """Bereinigt Search-Snippets aus Graph und macht sie kompakt lesbar."""
     if not text:
         return "-"
-    cleaned = text.replace("<c0>", "**").replace("</c0>", "**")
+    cleaned = text.replace("<c0>", "").replace("</c0>", "")
     cleaned = cleaned.replace("<ddd/>", "...")
     cleaned = cleaned.replace("\r", " ").replace("\n", " ")
+    cleaned = _strip_noise_terms(cleaned)
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
     if not cleaned:
         return "-"
@@ -160,6 +166,14 @@ def _format_email_contact(contact: dict | None) -> str:
     return name or address or "-"
 
 
+def _format_display_name(contact: dict | None) -> str:
+    """Gibt nur den Anzeigenamen zurueck, ohne Mailadresse."""
+    if not isinstance(contact, dict):
+        return "-"
+    name = (contact.get("name") or "").strip()
+    return name or "-"
+
+
 def _format_email_recipient_list(entries: list | None) -> str:
     """Formatiert replyTo/sender/from-Listen fuer kompakte Ausgabe."""
     if not entries:
@@ -173,18 +187,257 @@ def _format_email_recipient_list(entries: list | None) -> str:
     return "; ".join(formatted) if formatted else "-"
 
 
-def _format_bool(value: object) -> str:
-    """Gibt boolesche Werte explizit und fehlende Werte neutral aus."""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return "-"
+def _format_display_name_list(entries: list | None) -> str:
+    """Formatiert Empfaengerlisten nur mit Anzeigenamen."""
+    if not entries:
+        return "-"
+    formatted = []
+    for entry in entries:
+        rendered = _format_display_name((entry or {}).get("emailAddress", {}))
+        if rendered != "-":
+            formatted.append(rendered)
+    return "; ".join(formatted) if formatted else "-"
+
+
+def _strip_html_tags(text: str) -> str:
+    """Entfernt HTML-Tags in kurzen Inline-Fragmenten."""
+    cleaned = re.sub(r"<[^>]+>", "", text)
+    cleaned = (
+        cleaned.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+    )
+    return cleaned.strip()
+
+
+def _strip_noise_terms(text: str) -> str:
+    """Entfernt bekannte Rauschworte komplett aus Texten."""
+    cleaned = text
+    for term in NOISE_TERMS:
+        cleaned = re.sub(rf"\b{re.escape(term)}\b", "", cleaned, flags=re.IGNORECASE)
+    return cleaned
+
+
+def _strip_email_addresses(text: str) -> str:
+    """Entfernt Mailadressen aus Vorschauzeilen, behaelt Anzeigenamen aber bei."""
+    cleaned = re.sub(r"\s*<[^<>\s]+@[^<>\s]+>\s*", "", text)
+    cleaned = re.sub(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", "", cleaned)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned)
+    return cleaned.strip()
+
+
+def _slugify_filename(text: str, limit: int = 80) -> str:
+    """Erzeugt einen robusten ASCII-Dateinamen aus der Suchanfrage."""
+    normalized = unicodedata.normalize("NFKD", text)
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", ascii_text).strip("_").lower()
+    if not slug:
+        slug = "mail_search"
+    return slug[:limit].rstrip("_") or "mail_search"
+
+
+def _build_search_output_path(query: str) -> Path:
+    """Baut den Pfad fuer die gespeicherte Suchausgabe in tmp/."""
+    SEARCH_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    slug = _slugify_filename(query)
+    return SEARCH_OUTPUT_DIR / f"{timestamp}_mail_search_{slug}.md"
+
+
+def _get_first_nonempty_lines(text: str, max_lines: int = BODY_PREVIEW_LINES) -> list[str]:
+    """Extrahiert die ersten nichtleeren Zeilen aus einem Text."""
+    cleaned_lines = []
+    for raw_line in text.splitlines():
+        line = _strip_noise_terms(raw_line)
+        line = _strip_email_addresses(line)
+        line = re.sub(r"\s{2,}", " ", line.strip())
+        if not line:
+            continue
+        if line.lower().startswith("von:") or line.startswith("-----Ursprünglicher Termin"):
+            break
+        cleaned_lines.append(line)
+        if len(cleaned_lines) >= max_lines:
+            break
+    return cleaned_lines
+
+
+def _fetch_message_search_context(message_id: str, token: str, max_lines: int = BODY_PREVIEW_LINES) -> dict[str, str]:
+    """Laedt Mail-Kontext fuer Search-Treffer: Preview, CC und Body-Rohdaten."""
+    if not message_id or message_id == "-":
+        return {
+            "body_preview": "(Body konnte nicht geladen werden)",
+            "cc": "-",
+            "body_raw": "",
+            "body_type": "text",
+        }
+
+    url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}"
+    params = {"$select": "body,ccRecipients"}
+
+    try:
+        r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=15)
+    except requests.RequestException:
+        return {
+            "body_preview": "(Body konnte nicht geladen werden)",
+            "cc": "-",
+            "body_raw": "",
+            "body_type": "text",
+        }
+
+    if r.status_code != 200:
+        return {
+            "body_preview": "(Body konnte nicht geladen werden)",
+            "cc": "-",
+            "body_raw": "",
+            "body_type": "text",
+        }
+
+    msg = r.json()
+    body_raw = msg.get("body", {}).get("content", "")
+    body_type = msg.get("body", {}).get("contentType", "text")
+    cc_value = _format_display_name_list(msg.get("ccRecipients"))
+    if body_type == "html":
+        body_text = _html_to_text(body_raw)
+    else:
+        body_text = body_raw.strip()
+
+    lines = _get_first_nonempty_lines(body_text, max_lines)
+    if not lines:
+        body_preview = "(Kein Body-Inhalt verfuegbar)"
+    else:
+        body_preview = "\n".join(lines)
+    return {
+        "body_preview": body_preview,
+        "cc": cc_value,
+        "body_raw": body_raw,
+        "body_type": body_type,
+    }
+
+
+def _escape_markdown_link_label(text: str) -> str:
+    """Escaped nur die Zeichen, die Markdown-Linklabels stoeren."""
+    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
+def _attachment_name(att: dict) -> str:
+    """Liefert einen robusten Anzeigenamen fuer Attachments."""
+    name = (att.get("name") or "").strip()
+    if name:
+        return name
+    content_id = (att.get("contentId") or "").strip()
+    if content_id:
+        return content_id
+    return "attachment"
+
+
+def _attachment_type(att: dict) -> str:
+    """Normalisiert den Graph-Typ fuer Entscheidungen im Search-Output."""
+    raw = (att.get("@odata.type") or "").strip()
+    if raw.endswith("fileAttachment"):
+        return "fileAttachment"
+    if raw.endswith("referenceAttachment"):
+        return "referenceAttachment"
+    if raw.endswith("itemAttachment"):
+        return "itemAttachment"
+    return raw or "attachment"
+
+
+def _extract_attachment_link_entries(message_id: str, attachments: list[dict]) -> list[dict[str, str]]:
+    """Erzeugt verlinkbare Attachment-Eintraege fuer .md und STDOUT."""
+    entries: list[dict[str, str]] = []
+    for att in attachments:
+        att_type = _attachment_type(att)
+        name = _attachment_name(att)
+        url = ""
+        if att_type == "fileAttachment":
+            att_id = (att.get("id") or "").strip()
+            if att_id:
+                url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/attachments/{att_id}/$value"
+        elif att_type == "referenceAttachment":
+            url = (att.get("sourceUrl") or "").strip()
+        if not url:
+            continue
+        entries.append({"name": name, "url": url})
+    return entries
+
+
+def _extract_cloud_links_from_body(body_raw: str, body_type: str) -> list[dict[str, str]]:
+    """Extrahiert SharePoint-/OneDrive-Dateilinks aus Mail-HTML als Fallback."""
+    if body_type.lower() != "html" or not body_raw:
+        return []
+
+    entries: list[dict[str, str]] = []
+    pattern = re.compile(r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', flags=re.IGNORECASE | re.DOTALL)
+    for href, raw_label in pattern.findall(body_raw):
+        url = href.strip()
+        if not url:
+            continue
+        url_lower = url.lower()
+        if not (
+            "sharepoint.com" in url_lower
+            or "1drv.ms" in url_lower
+            or "onedrive.live.com" in url_lower
+        ):
+            continue
+        label = _strip_html_tags(raw_label)
+        label = _strip_email_addresses(label)
+        label = re.sub(r"\s{2,}", " ", label).strip()
+        if not label or "." not in label:
+            continue
+        entries.append({"name": label, "url": url})
+    return entries
+
+
+def _merge_attachment_entries(*groups: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Fasst Attachment-Eintraege zusammen und vermeidet Duplikate."""
+    merged: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for group in groups:
+        for entry in group:
+            key = (entry["name"], entry["url"])
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(entry)
+    return merged
+
+
+def _fetch_attachment_link_entries(message_id: str, token: str) -> tuple[list[dict[str, str]], str | None]:
+    """Laedt nur Attachment-Metadaten und baut daraus verlinkbare Eintraege."""
+    if not message_id or message_id == "-":
+        return [], None
+
+    url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/attachments"
+    attachments: list[dict] = []
+    while url:
+        try:
+            r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+        except requests.RequestException:
+            return [], "Konnten nicht geladen werden"
+
+        if r.status_code != 200:
+            return [], "Konnten nicht geladen werden"
+
+        data = r.json()
+        attachments.extend(data.get("value", []) or [])
+        url = (data.get("@odata.nextLink") or "").strip() or None
+
+    return _extract_attachment_link_entries(message_id, attachments), None
 
 
 # ---------------------------------------------------------------------------
 # CMD: search
 # ---------------------------------------------------------------------------
 
-def cmd_search(query: str, token: str | None = None, size: int = DEFAULT_PAGE_SIZE, top_results: bool = True) -> None:
+def cmd_search(
+    query: str,
+    token: str | None = None,
+    size: int = DEFAULT_PAGE_SIZE,
+    top_results: bool = True,
+    only_summary: bool = False,
+) -> None:
     """Fuehrt Mail-Suche aus. Exit-Code 2 bei fehlendem/abgelaufenem Token."""
     token = _resolve_token(token)
 
@@ -240,42 +493,92 @@ def cmd_search(query: str, token: str | None = None, size: int = DEFAULT_PAGE_SI
             total = container.get("total", 0)
             hits.extend(container.get("hits") or [])
 
-    # Formatieren
-    print(f'### Mail-Suche: "{query}"\n')
-    print(f"**{total} Treffer** (zeige {len(hits)})\n")
+    output_path = _build_search_output_path(query)
+    output_lines = [f'# Mail-Suche: "{query}"', "", f"**{total} Treffer** (zeige {len(hits)})", ""]
 
     if not hits:
+        output_lines.append("Keine Mails gefunden.")
+        output_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+        rel_path = output_path.relative_to(REPO_ROOT)
+        print(f'Mail-Suche: "{query}"')
         print("Keine Mails gefunden.")
+        print(f"Detaildatei mit Links gespeichert in: {rel_path}")
         return
+
+    print(f'### Mail-Suche: "{query}"\n')
+    print(f"**{total} Treffer** (zeige {len(hits)})\n")
 
     for i, hit in enumerate(hits, 1):
         res = hit.get("resource", {})
         hit_id = hit.get("hitId", "-")
         subject = _truncate_text((res.get("subject") or "-").strip() or "-", 160)
         summary = _clean_search_snippet(hit.get("summary", ""), 180)
-        body_preview = _clean_search_snippet(res.get("bodyPreview", ""), 220)
+        search_ctx = _fetch_message_search_context(hit_id, token)
+        body_preview = search_ctx["body_preview"] if not only_summary else ""
         received = (res.get("receivedDateTime") or "").strip() or "-"
-        has_attachments = _format_bool(res.get("hasAttachments"))
+        attachment_entries = []
+        attachment_error = None
+        if res.get("hasAttachments"):
+            attachment_entries, attachment_error = _fetch_attachment_link_entries(hit_id, token)
+        cloud_entries = _extract_cloud_links_from_body(search_ctx["body_raw"], search_ctx["body_type"])
+        attachment_entries = _merge_attachment_entries(attachment_entries, cloud_entries)
         importance = (res.get("importance") or "").strip() or "-"
-        reply_to = _format_email_recipient_list(res.get("replyTo"))
-        from_value = _format_email_contact((res.get("from") or {}).get("emailAddress"))
+        reply_to = _format_display_name_list(res.get("replyTo"))
+        from_value = _format_display_name((res.get("from") or {}).get("emailAddress"))
+        cc_value = search_ctx["cc"]
         web_url = (res.get("webLink") or "").strip()
-        web_link_display = f"[Link oeffnen]({web_url})" if web_url else "-"
+        web_link_display = web_url or "-"
+
+        output_lines.append(f"## Treffer {i}")
+        output_lines.append(f"- receivedDateTime: {received}")
+        output_lines.append(f"- from: {from_value}")
+        output_lines.append(f"- replyTo: {reply_to}")
+        if cc_value != "-":
+            output_lines.append(f"- cc: {cc_value}")
+        if importance.lower() != "normal":
+            output_lines.append(f"- importance: {importance}")
+        output_lines.append(f"- subject: {subject}")
+        if attachment_entries:
+            output_lines.append("- attachments:")
+            for entry in attachment_entries:
+                label = _escape_markdown_link_label(entry["name"])
+                output_lines.append(f"  - [{label}]({entry['url']})")
+        elif attachment_error:
+            output_lines.append("- attachments:")
+            output_lines.append("  - _(Konnten nicht geladen werden)_")
+        if only_summary:
+            output_lines.append(f"- summary: {summary}")
+        else:
+            output_lines.append("- bodyPreview:")
+            for line in body_preview.splitlines():
+                output_lines.append(f"  {line}")
+        output_lines.append(f"- webLink: {web_link_display}")
+        output_lines.append("")
 
         print(f"#### Treffer {i}")
-        print(f"- `hitId`: `{hit_id}`")
-        print(f"- `subject`: {subject}")
-        print(f"- `summary`: {summary}")
-        print(f"- `bodyPreview`: {body_preview}")
-        print(f"- `receivedDateTime`: {received}")
-        print(f"- `hasAttachments`: {has_attachments}")
-        print(f"- `importance`: {importance}")
-        print(f"- `replyTo`: {reply_to}")
-        print(f"- `from`: {from_value}")
-        print(f"- `webLink`: {web_link_display}")
+        print(f"- receivedDateTime: {received}")
+        print(f"- from: {from_value}")
+        print(f"- replyTo: {reply_to}")
+        if cc_value != "-":
+            print(f"- cc: {cc_value}")
+        if importance.lower() != "normal":
+            print(f"- importance: {importance}")
+        print(f"- subject: {subject}")
+        if attachment_entries:
+            print("- attachments:")
+            for entry in attachment_entries:
+                print(f"  - {entry['name']}")
+        if only_summary:
+            print(f"- summary: {summary}")
+        else:
+            print("- bodyPreview:")
+            for line in body_preview.splitlines():
+                print(f"  {line}")
         print()
 
-    print()
+    output_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+    rel_path = output_path.relative_to(REPO_ROOT)
+    print(f"Detaildatei mit Links gespeichert in: {rel_path}")
 
 
 # ---------------------------------------------------------------------------
@@ -538,12 +841,13 @@ def main() -> None:
 
     if cmd == "search":
         if len(sys.argv) < 3:
-            print("Usage: python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search \"Suchbegriff\" [--size N] [--date-order] [--token TOKEN]")
+            print("Usage: python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search \"Suchbegriff\" [--size N] [--date-order] [--only-summary] [--token TOKEN]")
             sys.exit(1)
         query = sys.argv[2]
         token = None
         size = DEFAULT_PAGE_SIZE
         top_results = "--date-order" not in sys.argv
+        only_summary = "--only-summary" in sys.argv
         if "--token" in sys.argv:
             idx = sys.argv.index("--token")
             if idx + 1 < len(sys.argv):
@@ -552,7 +856,7 @@ def main() -> None:
             idx = sys.argv.index("--size")
             if idx + 1 < len(sys.argv):
                 size = int(sys.argv[idx + 1])
-        cmd_search(query, token, size, top_results)
+        cmd_search(query, token, size, top_results, only_summary)
 
     elif cmd == "read":
         if len(sys.argv) < 3:

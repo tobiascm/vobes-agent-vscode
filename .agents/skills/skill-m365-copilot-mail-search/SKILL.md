@@ -66,19 +66,24 @@ python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py
 # Optional: mehr Ergebnisse (max 25)
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "SUCHBEGRIFF" --size 25
 
-# Optional: Top-Result-Hybridranking aktivieren
-python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "SUCHBEGRIFF" --top-results
+# Optional: reine Datums-Sortierung statt Default-Hybridranking
+python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "SUCHBEGRIFF" --date-order
+
+# Optional: nur Search-Snippets ausgeben, ohne Mail-Bodies nachzuladen
+python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "SUCHBEGRIFF" --only-summary
 ```
 
-- **Optional:** `--top-results` aktiviert das Hybridranking der Search API fuer `message`:
+- **Default-Verhalten:** Die Search API liefert fuer `message` mit `enableTopResults=true` eine hybride Ergebnisliste:
   die ersten **3 Nachrichten nach Relevanz**, der Rest nach **Date/Time**.
-- Ohne `--top-results` nutzt das Script die normale Sortierung des Endpoints.
+- `--date-order` deaktiviert dieses Hybridranking und nutzt fuer alle Treffer die normale Datumssortierung des Endpoints.
+- Standardmaessig laedt das Script fuer jeden Treffer die Mail nach und zeigt `bodyPreview` als erste **10** nichtleere Body-Zeilen.
+- `--only-summary` zeigt statt `bodyPreview` nur `summary` aus dem Search-Response und spart die zusaetzlichen Mail-Nachlade-Calls.
 - Das Script versucht den Mail-Token jetzt **selbststaendig** zu beschaffen:
   - vorhandenen Cache nutzen
   - Teams-LocalStorage scannen
   - falls moeglich per Refresh-Token neuen Access-Token holen
   - falls noetig Teams in Edge oeffnen und auf aktualisierte MSAL-Eintraege warten
-- **Exit 0** → Ergebnisse werden als Markdown-Tabelle ausgegeben. Fertig.
+- **Exit 0** → Die Suchtreffer werden auf STDOUT ausgegeben; zusaetzlich wird eine Markdown-Datei unter `tmp/` erzeugt.
 - **Exit 2** → `TOKEN_EXPIRED` oder `NO_MAIL_SCOPE` auf stderr. Dann ist auch der Python-Resolver gescheitert. Nur dann manuell weiter zu Schritt 2.
 - **Exit 1** → sonstiger Fehler (Meldung auf stderr).
 
@@ -140,9 +145,10 @@ python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py
 
 ### Schritt 3: Einzelne Mail vollstaendig lesen
 
-Die Search API liefert im Suchmodus bereits mehrere Metadaten und Vorschautexte, unter anderem `hitId`, `summary`,
-`subject`, `bodyPreview`, `receivedDateTime`, `hasAttachments`, `importance`, `replyTo`, `from` und `webLink`.
-Fuer den kompletten Body:
+Die Search API liefert im Suchmodus mehrere Metadaten und Such-Snippets. Standardmaessig laedt das Script fuer
+jeden Treffer zusaetzlich die eigentliche Mail per `hitId` nach und schreibt die ersten **10** nichtleeren
+Body-Zeilen als `bodyPreview` in STDOUT und in die Ergebnisdatei unter `tmp/`.
+Mit `--only-summary` wird stattdessen nur `summary` aus dem Search-Response ausgegeben. Fuer den kompletten Body:
 
 ```bash
 # MESSAGE_ID ist die hitId aus dem Suchergebnis
@@ -202,19 +208,33 @@ for slide in prs.slides:
 
 ### Schritt 4: Ergebnisse praesentieren
 
-Das Script gibt die Treffer als kompakte Markdown-Bloecke aus und zeigt dabei standardmaessig:
-`hitId`, `summary`, `subject`, `bodyPreview`, `receivedDateTime`, `hasAttachments`, `importance`, `replyTo`, `from`
-und `webLink`.
+Das Script gibt die Suchtreffer auf STDOUT als kompakte Markdown-Bloecke aus mit:
+`subject`, `receivedDateTime`, `replyTo`, `from` und bei Vorhandensein `cc` sowie genau einem Vorschaufeld:
+- standardmaessig `bodyPreview` (erste 10 Mail-Zeilen)
+- mit `--only-summary` nur `summary`
+- wenn verlinkbare Anhaenge vorhanden sind, zusaetzlich `attachments:` mit den reinen Namen
+- `importance` nur dann, wenn der Wert ungleich `normal` ist
 
-Ausgabe direkt an den User weitergeben.
+Mailadressen im `bodyPreview` werden dabei entfernt, sodass z. B. `Max Mustermann <max@firma.de>` nur als `Max Mustermann` erscheint.
+Sobald eine Vorschauzeile mit `Von:` oder `-----Ursprünglicher Termin` beginnt, endet das `bodyPreview` vor dieser Zeile, damit keine weitergeleitete oder vorherige Mail in die Treffer-Vorschau hineinlaeuft.
+
+Zusaetzlich legt das Script eine Markdown-Datei in `tmp/` ab. Diese Datei enthaelt dieselben Treffer inklusive
+`webLink` sowie einer `attachments:`-Linkliste fuer verlinkbare Datei-, Inline- und Referenz-Anhaenge
+(inkl. OneDrive-/SharePoint-Referenzen), damit spaeter bei Bedarf gezielt geladen werden kann.
+
+Falls Outlook Cloud-Dateien nur im HTML-Body verlinkt und nicht sauber als `referenceAttachment` geliefert werden, versucht das Script zusaetzlich SharePoint-/OneDrive-Links aus den HTML-Links der Mail als Attachment-Eintraege zu erkennen.
+
+Personenfelder wie `from` und `replyTo` werden nur als Anzeigename gespeichert, ohne Mailadresse.
+Rauschworte wie `INTERNAL` werden aus `summary` und `bodyPreview` entfernt.
 
 ### Script-Befehle (Referenz)
 
 | Befehl | Zweck |
 |--------|-------|
-| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query"` | Mail-Suche (10 Treffer, Standard-Sortierung des Endpoints) |
+| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query"` | Mail-Suche (10 Treffer, Default: erste 3 nach Relevanz, Rest nach Date/Time) |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query" --size 25` | Mail-Suche (max 25 Treffer) |
-| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query" --top-results` | Mail-Suche mit Hybridranking (erste 3 nach Relevanz, Rest nach Date/Time) |
+| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query" --date-order` | Mail-Suche nur nach Datum statt Hybridranking |
+| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query" --only-summary` | Nur `summary` ausgeben, keine Mail-Bodies pro Treffer nachladen |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query" --token TOKEN` | Suche mit explizitem Token |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py fetch` | Mail-Token mit Mail.Read aktiv beschaffen |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py check-token` | Cache-Status des dedizierten Mail-Token-Resolvers pruefen |
