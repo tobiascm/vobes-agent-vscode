@@ -99,7 +99,44 @@ TRANSIENT_BRIDGE_ERROR_PATTERNS = (
 
 DOM_STATE_JS = r"""
 () => {
-  const textarea = document.querySelector('#prompt-textarea, textarea');
+  const composerSelectors = [
+    '#prompt-textarea',
+    'textarea',
+    '[contenteditable="true"]#prompt-textarea',
+    '[role="textbox"][contenteditable="true"]',
+    'div.ProseMirror[contenteditable="true"]',
+    '[data-testid*="composer"] [contenteditable="true"]',
+    'form [contenteditable="true"]',
+    'main [contenteditable="true"]',
+  ];
+  const isVisible = (el) => {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (!style || style.visibility === 'hidden' || style.display === 'none') return false;
+    const rect = el.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  let composer = null;
+  let composerSelector = null;
+  const composerCandidates = [];
+  for (const selector of composerSelectors) {
+    const elements = [...document.querySelectorAll(selector)];
+    for (const element of elements) {
+      const visible = isVisible(element);
+      composerCandidates.push({
+        selector,
+        tag: element.tagName,
+        visible,
+        disabled: !!element.disabled,
+        readOnly: !!element.readOnly,
+        contentEditable: !!element.isContentEditable,
+      });
+      if (!composer && visible && !element.disabled && !element.readOnly) {
+        composer = element;
+        composerSelector = selector;
+      }
+    }
+  }
   const assistants = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
   const lastAssistant = assistants.length ? assistants[assistants.length - 1] : null;
   const lastText = lastAssistant ? (lastAssistant.innerText || '').trim() : '';
@@ -111,6 +148,15 @@ DOM_STATE_JS = r"""
   const buttonText = buttons
     .map((btn) => [btn.getAttribute('aria-label') || '', btn.innerText || ''].join(' ').trim())
     .join(' | ');
+  const sendButtons = buttons
+    .filter((btn) => isVisible(btn))
+    .map((btn) => ({
+      aria: btn.getAttribute('aria-label') || '',
+      text: (btn.innerText || '').trim(),
+      disabled: !!btn.disabled,
+      testid: btn.getAttribute('data-testid') || '',
+    }))
+    .filter((btn) => /send|senden/i.test([btn.aria, btn.text, btn.testid].join(' ')));
   const activeThinking = !!document.querySelector('button.__composer-pill-remove[aria-label*="Nachdenken"]')
     || buttons.some((btn) => (btn.innerText || '').includes('Entfernen') && (btn.innerText || '').includes('Nachdenken'));
   const stopHints = [
@@ -123,7 +169,12 @@ DOM_STATE_JS = r"""
   return JSON.stringify({
     url: location.href,
     title: document.title,
-    hasTextbox: !!textarea,
+    hasTextbox: !!composer,
+    composerSelector,
+    composerTag: composer ? composer.tagName : null,
+    composerIsContentEditable: composer ? !!composer.isContentEditable : false,
+    composerCandidates: composerCandidates.slice(0, 12),
+    sendButtons: sendButtons.slice(0, 6),
     assistantCount: assistants.length,
     lastAssistantLength: lastText.length,
     lastAssistantHash: lastHash,
@@ -967,21 +1018,115 @@ def _submit_prompt(client: McpStdioClient, prompt: str) -> None:
         "{"
         f"const prompt = {json.dumps(prompt)};"
         r"""
-  const textarea = page.locator('#prompt-textarea, textarea').last();
-  if (await textarea.count() === 0) {
-    return JSON.stringify({error: 'TEXTBOX_NOT_FOUND'});
+  const composerSelectors = [
+    '#prompt-textarea',
+    'textarea',
+    '[contenteditable="true"]#prompt-textarea',
+    '[role="textbox"][contenteditable="true"]',
+    'div.ProseMirror[contenteditable="true"]',
+    '[data-testid*="composer"] [contenteditable="true"]',
+    'form [contenteditable="true"]',
+    'main [contenteditable="true"]',
+  ];
+  const isLocatorVisible = async (locator) => {
+    try {
+      return await locator.evaluate((el) => {
+        const style = window.getComputedStyle(el);
+        if (!style || style.visibility === 'hidden' || style.display === 'none') return false;
+        const rect = el.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+    } catch (e) {
+      return false;
+    }
+  };
+  const findComposer = async () => {
+    for (const selector of composerSelectors) {
+      const matches = page.locator(selector);
+      const count = await matches.count();
+      for (let i = count - 1; i >= 0; i -= 1) {
+        const locator = matches.nth(i);
+        if (await isLocatorVisible(locator)) {
+          return { locator, selector };
+        }
+      }
+    }
+    return null;
+  };
+  const composer = await findComposer();
+  if (!composer) {
+    return JSON.stringify({
+      error: 'TEXTBOX_NOT_FOUND',
+      selectorsTried: composerSelectors,
+      url: page.url(),
+      title: await page.title(),
+    });
   }
-  await textarea.click();
-  await textarea.fill(prompt);
-  await textarea.press('Enter');
-  return JSON.stringify({submitted: true});
+  const textbox = composer.locator;
+  await textbox.click();
+  await textbox.focus();
+  try {
+    await page.keyboard.press('Control+A');
+  } catch (e) {}
+  try {
+    await page.keyboard.press('Meta+A');
+  } catch (e) {}
+  try {
+    await page.keyboard.press('Backspace');
+  } catch (e) {}
+
+  let fillMethod = 'fill';
+  try {
+    await textbox.fill(prompt);
+  } catch (e) {
+    fillMethod = 'insertText';
+    await page.keyboard.insertText(prompt);
+  }
+
+  const sendCandidates = [
+    page.locator('button[data-testid="send-button"]'),
+    page.getByRole('button', { name: /send|senden/i }),
+    page.locator('button[aria-label*="Send"], button[aria-label*="Senden"]'),
+  ];
+  let submittedVia = 'Enter';
+  let sendButtonFound = false;
+  for (const candidate of sendCandidates) {
+    const count = await candidate.count();
+    for (let i = 0; i < count; i += 1) {
+      const button = candidate.nth(i);
+      const visible = await isLocatorVisible(button);
+      const disabled = await button.isDisabled().catch(() => false);
+      if (visible && !disabled) {
+        sendButtonFound = true;
+        submittedVia = 'button';
+        await button.click();
+        break;
+      }
+    }
+    if (sendButtonFound) break;
+  }
+  if (!sendButtonFound) {
+    await textbox.press('Enter');
+  }
+
+  return JSON.stringify({
+    submitted: true,
+    submittedVia,
+    fillMethod,
+    composerSelector: composer.selector,
+  });
 }
 """
     )
     raw = _tool_text_with_retry(client, "browser_run_code", {"code": code})
     data = _parse_json_text(raw, "prompt submit")
     if data.get("error") == "TEXTBOX_NOT_FOUND":
-        raise RuntimeError("ChatGPT-Textbox wurde nicht gefunden.")
+        details = {
+            key: data.get(key)
+            for key in ("url", "title", "selectorsTried")
+            if data.get(key) is not None
+        }
+        raise RuntimeError(f"ChatGPT-Textbox wurde nicht gefunden. Details: {details}")
 
 
 def _poll_for_completed_message(
