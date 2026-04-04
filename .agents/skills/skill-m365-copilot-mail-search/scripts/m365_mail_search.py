@@ -6,7 +6,7 @@ Benoetigt einen Token mit Mail.Read Scope (z.B. Teams-Web-Token).
 Usage:
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff"
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --size 25
-    python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --top-results
+    python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --date-order
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --token TOKEN
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID --save-attachments
@@ -15,10 +15,9 @@ Usage:
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py check-token
 
 Token-Caching:
-    Nutzt die gleichen Cache-Dateien wie copilot_search.py.
-    Prueft zuerst den Teams-Token (.graph_token_cache_teams.json),
-    dann den Copilot-Token (.graph_token_cache.json).
-    Nur Tokens mit Mail.Read Scope funktionieren (Teams-Token).
+    Nutzt ausschliesslich den separaten Resolver
+    .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py.
+    Nur Tokens mit Mail.Read Scope funktionieren.
     Token-Laufzeit: ca. 1 Stunde.
     Bei fehlendem/abgelaufenem Token versucht das Script jetzt selbst,
     ueber .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py einen frischen Teams-Token
@@ -33,7 +32,6 @@ Exit-Codes:
 from __future__ import annotations
 
 import base64
-import json
 import os
 import sys
 import time
@@ -53,6 +51,11 @@ for path in (SCRIPT_DIR, REPO_SCRIPTS_DIR):
         sys.path.insert(0, path_str)
 
 from m365_mail_search_token import TokenAcquisitionError, fetch_graph_token
+from m365_mail_search_token import (
+    _decode_jwt_payload as _decode_mail_jwt_payload,
+    _has_required_scope,
+    _load_cached_token as _load_mail_cached_token,
+)
 
 # Windows UTF-8
 if sys.platform == "win32":
@@ -60,10 +63,7 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
-CACHE_FILE = REPO_ROOT / "userdata" / "tmp" / ".graph_token_cache.json"
-CACHE_FILE_TEAMS = REPO_ROOT / "userdata" / "tmp" / ".graph_token_cache_teams.json"
 SEARCH_URL = "https://graph.microsoft.com/v1.0/search/query"
-MIN_TOKEN_LIFETIME = 120  # Sekunden Restlaufzeit minimum
 DEFAULT_PAGE_SIZE = 10
 
 
@@ -71,43 +71,9 @@ DEFAULT_PAGE_SIZE = 10
 # Token helpers
 # ---------------------------------------------------------------------------
 
-def _decode_jwt_payload(token: str) -> dict:
-    """Dekodiert JWT-Payload ohne externe Libs."""
-    parts = token.split(".")
-    if len(parts) != 3:
-        raise ValueError("Invalid JWT format")
-    payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
-    return json.loads(base64.urlsafe_b64decode(payload_b64))
-
-
 def _has_mail_scope(token: str) -> bool:
     """Prueft ob der Token Mail.Read oder Mail.ReadWrite Scope hat."""
-    try:
-        payload = _decode_jwt_payload(token)
-        scopes = {s.lower() for s in payload.get("scp", "").split()}
-        return "mail.read" in scopes or "mail.readwrite" in scopes
-    except (ValueError, KeyError):
-        return False
-
-
-def _load_cached_token() -> str | None:
-    """Laedt Token mit Mail.Read Scope aus Cache. Teams-Cache zuerst."""
-    for path in (CACHE_FILE_TEAMS, CACHE_FILE):
-        if not path.exists():
-            continue
-        try:
-            raw = path.read_text("utf-8")
-            # browser_evaluate filename speichert als doppelt-quoteten String
-            if raw.startswith('"'):
-                raw = json.loads(raw)
-            cache = json.loads(raw)
-            if cache.get("exp", 0) > time.time() + MIN_TOKEN_LIFETIME:
-                token = cache["token"]
-                if _has_mail_scope(token):
-                    return token
-        except (json.JSONDecodeError, KeyError, OSError, ValueError):
-            pass
-    return None
+    return _has_required_scope(token, ("Mail.Read",)) or _has_required_scope(token, ("Mail.ReadWrite",))
 
 
 def _resolve_token(explicit_token: str | None = None) -> str:
@@ -125,9 +91,10 @@ def _resolve_token(explicit_token: str | None = None) -> str:
             sys.exit(2)
         return explicit_token
 
-    cached = _load_cached_token()
+    cached = _load_mail_cached_token(("Mail.Read",))
     if cached:
-        return cached
+        token, _exp = cached
+        return token
 
     try:
         token, _exp, _source = fetch_graph_token(required_scopes=("Mail.Read",))
@@ -144,41 +111,80 @@ def _resolve_token(explicit_token: str | None = None) -> str:
 
 def cmd_check_token() -> None:
     """Prueft ob ein gueltiger Token mit Mail.Read im Cache liegt."""
-    token = _load_cached_token()
-    if token:
-        payload = _decode_jwt_payload(token)
-        exp = payload.get("exp", 0)
+    cached = _load_mail_cached_token(("Mail.Read",))
+    if cached:
+        token, exp = cached
+        payload = _decode_mail_jwt_payload(token)
         remaining = int(exp - time.time())
         scopes = payload.get("scp", "").split()
         mail_scopes = [s for s in scopes if s.lower().startswith("mail.")]
         print(f"VALID (expires in {remaining // 60}m {remaining % 60}s)")
         print(f"Mail-Scopes: {', '.join(mail_scopes)}")
     else:
-        # Pruefe ob ueberhaupt ein Token da ist (ohne Mail.Read)
-        for path in (CACHE_FILE_TEAMS, CACHE_FILE):
-            if not path.exists():
-                continue
-            try:
-                raw = path.read_text("utf-8")
-                if raw.startswith('"'):
-                    raw = json.loads(raw)
-                cache = json.loads(raw)
-                if cache.get("exp", 0) > time.time() + MIN_TOKEN_LIFETIME:
-                    print("NO_MAIL_SCOPE", file=sys.stderr)
-                    print("Token vorhanden aber ohne Mail.Read Scope.", file=sys.stderr)
-                    print("Bitte Teams-Token holen (teams.microsoft.com/v2/).", file=sys.stderr)
-                    sys.exit(2)
-            except (json.JSONDecodeError, KeyError, OSError, ValueError):
-                pass
         print("EXPIRED_OR_MISSING", file=sys.stderr)
         sys.exit(2)
+
+
+# ---------------------------------------------------------------------------
+# Search result formatting
+# ---------------------------------------------------------------------------
+
+def _truncate_text(text: str, limit: int) -> str:
+    """Kuerzt Text fuer kompakte Markdown-Ausgabe."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
+def _clean_search_snippet(text: str, limit: int = 160) -> str:
+    """Bereinigt Search-Snippets aus Graph und macht sie kompakt lesbar."""
+    if not text:
+        return "-"
+    cleaned = text.replace("<c0>", "**").replace("</c0>", "**")
+    cleaned = cleaned.replace("<ddd/>", "...")
+    cleaned = cleaned.replace("\r", " ").replace("\n", " ")
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    if not cleaned:
+        return "-"
+    return _truncate_text(cleaned, limit)
+
+
+def _format_email_contact(contact: dict | None) -> str:
+    """Formatiert ein emailAddress-Objekt robust."""
+    if not isinstance(contact, dict):
+        return "-"
+    name = (contact.get("name") or "").strip()
+    address = (contact.get("address") or "").strip()
+    if name and address:
+        return f"{name} <{address}>"
+    return name or address or "-"
+
+
+def _format_email_recipient_list(entries: list | None) -> str:
+    """Formatiert replyTo/sender/from-Listen fuer kompakte Ausgabe."""
+    if not entries:
+        return "-"
+    formatted = []
+    for entry in entries:
+        email_address = (entry or {}).get("emailAddress", {})
+        rendered = _format_email_contact(email_address)
+        if rendered != "-":
+            formatted.append(rendered)
+    return "; ".join(formatted) if formatted else "-"
+
+
+def _format_bool(value: object) -> str:
+    """Gibt boolesche Werte explizit und fehlende Werte neutral aus."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return "-"
 
 
 # ---------------------------------------------------------------------------
 # CMD: search
 # ---------------------------------------------------------------------------
 
-def cmd_search(query: str, token: str | None = None, size: int = DEFAULT_PAGE_SIZE, top_results: bool = False) -> None:
+def cmd_search(query: str, token: str | None = None, size: int = DEFAULT_PAGE_SIZE, top_results: bool = True) -> None:
     """Fuehrt Mail-Suche aus. Exit-Code 2 bei fehlendem/abgelaufenem Token."""
     token = _resolve_token(token)
 
@@ -242,40 +248,32 @@ def cmd_search(query: str, token: str | None = None, size: int = DEFAULT_PAGE_SI
         print("Keine Mails gefunden.")
         return
 
-    print("| # | Datum | Von | Betreff | Vorschau |")
-    print("|---|-------|-----|---------|----------|")
-
     for i, hit in enumerate(hits, 1):
         res = hit.get("resource", {})
-        subject = res.get("subject", "?")
-        if len(subject) > 60:
-            subject = subject[:57] + "..."
+        hit_id = hit.get("hitId", "-")
+        subject = _truncate_text((res.get("subject") or "-").strip() or "-", 160)
+        summary = _clean_search_snippet(hit.get("summary", ""), 180)
+        body_preview = _clean_search_snippet(res.get("bodyPreview", ""), 220)
+        received = (res.get("receivedDateTime") or "").strip() or "-"
+        has_attachments = _format_bool(res.get("hasAttachments"))
+        importance = (res.get("importance") or "").strip() or "-"
+        reply_to = _format_email_recipient_list(res.get("replyTo"))
+        from_value = _format_email_contact((res.get("from") or {}).get("emailAddress"))
+        web_url = (res.get("webLink") or "").strip()
+        web_link_display = f"[Link oeffnen]({web_url})" if web_url else "-"
 
-        # Sender
-        sender = res.get("from", {}).get("emailAddress", {})
-        from_name = sender.get("name", sender.get("address", "?"))
-        if len(from_name) > 25:
-            from_name = from_name[:22] + "..."
-
-        # Datum
-        received = res.get("receivedDateTime", "")
-        date_str = received[:10] if received else "?"
-
-        # Preview
-        preview = hit.get("summary", "")
-        # HTML-Tags entfernen
-        preview = preview.replace("<c0>", "**").replace("</c0>", "**")
-        preview = preview.replace("<ddd/>", "...")
-        if len(preview) > 100:
-            preview = preview[:97] + "..."
-
-        # Web-URL
-        web_url = res.get("webLink", "")
-
-        if web_url:
-            print(f"| {i} | {date_str} | {from_name} | [{subject}]({web_url}) | {preview} |")
-        else:
-            print(f"| {i} | {date_str} | {from_name} | {subject} | {preview} |")
+        print(f"#### Treffer {i}")
+        print(f"- `hitId`: `{hit_id}`")
+        print(f"- `subject`: {subject}")
+        print(f"- `summary`: {summary}")
+        print(f"- `bodyPreview`: {body_preview}")
+        print(f"- `receivedDateTime`: {received}")
+        print(f"- `hasAttachments`: {has_attachments}")
+        print(f"- `importance`: {importance}")
+        print(f"- `replyTo`: {reply_to}")
+        print(f"- `from`: {from_value}")
+        print(f"- `webLink`: {web_link_display}")
+        print()
 
     print()
 
@@ -540,12 +538,12 @@ def main() -> None:
 
     if cmd == "search":
         if len(sys.argv) < 3:
-            print("Usage: python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search \"Suchbegriff\" [--size N] [--top-results] [--token TOKEN]")
+            print("Usage: python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search \"Suchbegriff\" [--size N] [--date-order] [--token TOKEN]")
             sys.exit(1)
         query = sys.argv[2]
         token = None
         size = DEFAULT_PAGE_SIZE
-        top_results = "--top-results" in sys.argv
+        top_results = "--date-order" not in sys.argv
         if "--token" in sys.argv:
             idx = sys.argv.index("--token")
             if idx + 1 < len(sys.argv):

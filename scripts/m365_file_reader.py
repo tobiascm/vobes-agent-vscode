@@ -11,7 +11,7 @@ Befehle:
              --download PFAD  Optional: Datei zusaetzlich lokal speichern
 
 Token:
-    Nutzt den gleichen Token-Cache wie copilot_search.py.
+    Nutzt den gleichen Token-Cache wie copilot_file_search.py.
     Bei abgelaufenem Token: Exit-Code 2 (Agent holt neuen via NAA).
 
 Unterstuetzte Formate:
@@ -26,15 +26,19 @@ Unterstuetzte Formate:
 """
 
 import csv
-import json
 import os
 import sys
-import time
 from io import BytesIO, StringIO
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 import requests
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from m365_copilot_graph_token import TokenResolverError, ensure_token
 
 # Windows-Konsolen-Encoding auf UTF-8 setzen
 if sys.platform == "win32":
@@ -42,34 +46,17 @@ if sys.platform == "win32":
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
-CACHE_FILE = Path(__file__).resolve().parent.parent / "userdata" / "tmp" / ".graph_token_cache.json"
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
-MIN_TOKEN_LIFETIME = 120
-
-
-# ---------------------------------------------------------------------------
-# Token helpers (shared logic with copilot_search.py)
-# ---------------------------------------------------------------------------
-
-def _load_cached_token() -> str | None:
-    if not CACHE_FILE.exists():
-        return None
-    try:
-        with open(CACHE_FILE) as f:
-            cache = json.load(f)
-        if cache.get("exp", 0) > time.time() + MIN_TOKEN_LIFETIME:
-            return cache["token"]
-    except (json.JSONDecodeError, KeyError, OSError):
-        pass
-    return None
 
 
 def _require_token() -> str:
-    token = _load_cached_token()
-    if not token:
-        print("TOKEN_EXPIRED", file=sys.stderr)
+    try:
+        token, _exp, _source = ensure_token()
+        return token
+    except TokenResolverError as exc:
+        print(exc.code, file=sys.stderr)
+        print(str(exc), file=sys.stderr)
         sys.exit(2)
-    return token
 
 
 def _headers(token: str) -> dict:
@@ -169,139 +156,22 @@ def _get_metadata(drive_id: str, item_id: str, token: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Format-spezifische Parser
+# Format-spezifische Parser (aus file_parsers.py)
 # ---------------------------------------------------------------------------
 
-def _parse_pptx(data: bytes) -> str:
-    from pptx import Presentation
-    prs = Presentation(BytesIO(data))
-    lines = []
-    for i, slide in enumerate(prs.slides, 1):
-        texts = []
-        for shape in slide.shapes:
-            if shape.has_text_frame:
-                for para in shape.text_frame.paragraphs:
-                    t = para.text.strip()
-                    if t:
-                        texts.append(t)
-            if shape.has_table:
-                for row in shape.table.rows:
-                    row_texts = [cell.text.strip() for cell in row.cells]
-                    texts.append(" | ".join(row_texts))
-        # Notes
-        if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
-            notes = slide.notes_slide.notes_text_frame.text.strip()
-            if notes:
-                texts.append(f"[Notes: {notes}]")
-        if texts:
-            lines.append(f"\n### Folie {i}\n")
-            lines.extend(texts)
-    return "\n".join(lines)
-
-
-def _parse_xlsx(data: bytes) -> str:
-    from openpyxl import load_workbook
-    wb = load_workbook(BytesIO(data), read_only=True, data_only=True)
-    lines = []
-    for ws in wb.worksheets:
-        lines.append(f"\n### Sheet: {ws.title}\n")
-        lines.append("```csv")
-        has_rows = False
-        for row in ws.iter_rows(max_row=500, values_only=True):
-            has_rows = True
-            row_strs = [str(c) if c is not None else "" for c in row]
-            escaped = []
-            for val in row_strs:
-                if ";" in val or "\n" in val or '"' in val:
-                    escaped.append('"' + val.replace('"', '""') + '"')
-                else:
-                    escaped.append(val)
-            lines.append(";".join(escaped))
-        if not has_rows:
-            lines.append("_(leer)_")
-        lines.append("```")
-    wb.close()
-    return "\n".join(lines)
-
-
-def _parse_docx(data: bytes) -> str:
-    from docx import Document
-    doc = Document(BytesIO(data))
-    lines = []
-    for para in doc.paragraphs:
-        t = para.text.strip()
-        if not t:
-            continue
-        style = para.style.name if para.style else ""
-        if "Heading 1" in style:
-            lines.append(f"\n# {t}")
-        elif "Heading 2" in style:
-            lines.append(f"\n## {t}")
-        elif "Heading 3" in style:
-            lines.append(f"\n### {t}")
-        else:
-            lines.append(t)
-    return "\n".join(lines)
-
-
-def _parse_csv_content(data: bytes) -> str:
-    text = data.decode("utf-8-sig", errors="replace")
-    reader = csv.reader(StringIO(text), delimiter=";")
-    rows = []
-    for i, row in enumerate(reader):
-        if i >= 200:
-            rows.append(["_(... gekuerzt nach 200 Zeilen)_"])
-            break
-        rows.append(row)
-    if not rows:
-        return "_(leer)_"
-    max_cols = max(len(r) for r in rows)
-    for r in rows:
-        r.extend([""] * (max_cols - len(r)))
-    lines = []
-    lines.append("| " + " | ".join(rows[0]) + " |")
-    lines.append("| " + " | ".join(["---"] * max_cols) + " |")
-    for row in rows[1:]:
-        lines.append("| " + " | ".join(row) + " |")
-    return "\n".join(lines)
-
-
-def _parse_pdf(data: bytes) -> str:
-    try:
-        import pdfplumber
-    except ImportError:
-        return "_(PDF-Extraktion benoetigt 'pdfplumber': pip install pdfplumber)_"
-    lines = []
-    with pdfplumber.open(BytesIO(data)) as pdf:
-        for i, page in enumerate(pdf.pages, 1):
-            text = page.extract_text()
-            if text and text.strip():
-                lines.append(f"\n### Seite {i}\n")
-                lines.append(text.strip())
-    return "\n".join(lines) if lines else "_(Kein extrahierbarer Text im PDF)_"
-
-
-def _parse_plaintext(data: bytes) -> str:
-    return data.decode("utf-8-sig", errors="replace")
-
-
-def _parse_image(data: bytes, name: str) -> str:
-    lines = [f"_(Bilddatei: {name}, {len(data):,} bytes)_"]
-    suffix = Path(name).suffix.lower()
-    lines.append(f"- **Format:** {suffix}")
-    try:
-        from PIL import Image
-        img = Image.open(BytesIO(data))
-        w, h = img.size
-        mode = img.mode
-        lines.append(f"- **Abmessungen:** {w} x {h} px")
-        lines.append(f"- **Modus:** {mode}")
-    except ImportError:
-        lines.append("_(Dimensionen benoetigen 'Pillow': pip install Pillow)_")
-    except Exception:
-        pass
-    lines.append("\n_Bild wurde geladen. Nutze --download um es an einem bestimmten Ort zu speichern._")
-    return "\n".join(lines)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from file_parsers import (
+    convert_bytes,
+    parse_csv_content as _parse_csv_content,
+    parse_docx as _parse_docx,
+    parse_image as _parse_image,
+    parse_pdf as _parse_pdf,
+    parse_plaintext as _parse_plaintext,
+    parse_pptx as _parse_pptx,
+    parse_xlsx as _parse_xlsx,
+    IMAGE_EXTS,
+    PARSERS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -375,24 +245,8 @@ def cmd_read(target: str, download_path: str | None = None) -> None:
 
     # Format-spezifisch parsen
     suffix = Path(name).suffix.lower()
-    image_exts = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".tif", ".svg", ".webp"}
-    parsers = {
-        ".pptx": _parse_pptx,
-        ".xlsx": _parse_xlsx,
-        ".xls": _parse_xlsx,
-        ".docx": _parse_docx,
-        ".csv": _parse_csv_content,
-        ".pdf": _parse_pdf,
-        ".txt": _parse_plaintext,
-        ".md": _parse_plaintext,
-        ".json": _parse_plaintext,
-        ".xml": _parse_plaintext,
-        ".html": _parse_plaintext,
-        ".htm": _parse_plaintext,
-        ".log": _parse_plaintext,
-    }
 
-    parser = parsers.get(suffix)
+    parser = PARSERS.get(suffix)
     if parser:
         print("---\n")
         try:
@@ -400,7 +254,7 @@ def cmd_read(target: str, download_path: str | None = None) -> None:
         except Exception as e:
             print(f"ERROR beim Parsen ({suffix}): {e}", file=sys.stderr)
             print(f"_(Datei wurde geladen ({len(data)} bytes), aber das Parsen schlug fehl.)_")
-    elif suffix in image_exts:
+    elif suffix in IMAGE_EXTS:
         if not download_path:
             auto_path = Path(__file__).resolve().parent.parent / "userdata" / "tmp" / name
             auto_path.parent.mkdir(parents=True, exist_ok=True)

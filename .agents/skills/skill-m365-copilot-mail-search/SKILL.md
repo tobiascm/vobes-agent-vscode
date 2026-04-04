@@ -1,6 +1,6 @@
 ---
 name: skill-m365-copilot-mail-search
-description: "M365 Mail Search ueber Graph Search API ausfuehren. Durchsucht Outlook-Mails im Postfach des Users. Benoetigt Teams-Token. Mail suchen, Outlook durchsuchen, finde Mail zu, habe ich eine Mail von, Mail-Suche, E-Mail finden, nach Mail suchen, Postfach durchsuchen."
+description: "M365 Mail Search ueber Graph Search API ausfuehren. Durchsucht Outlook-Mails im Postfach des Users. Benoetigt den separaten Teams-/Mail-Resolver. Mail suchen, Outlook durchsuchen, finde Mail zu, habe ich eine Mail von, Mail-Suche, E-Mail finden, nach Mail suchen, Postfach durchsuchen."
 ---
 
 # Skill: M365 Mail Search (Graph Search API)
@@ -28,7 +28,7 @@ Durchsucht **Outlook-Mails** ueber den Graph Search API Endpoint `/v1.0/search/q
 
 | Kriterium | Mail Search (dieser Skill) | Outlook COM Skills |
 |-----------|---------------------------|-------------------|
-| **Zugang** | Graph API + Teams-Token | Outlook COM (lokal) |
+| **Zugang** | Graph API + separater Mail-Resolver | Outlook COM (lokal) |
 | **Voraussetzung** | Playwright MCP + Teams-Session | Outlook muss laufen |
 | **Suchbereich** | Serverseitig, alle Ordner | Lokaler Outlook-Cache |
 | **Geschwindigkeit** | Schnell (API-Call) | Abhaengig von Cache-Groesse |
@@ -41,7 +41,7 @@ Durchsucht **Outlook-Mails** ueber den Graph Search API Endpoint `/v1.0/search/q
 
 1. **Playwright MCP Server** muss aktiv sein (fuer Token-Beschaffung)
 2. **Teams-Web-Session** muss im Browser aktiv sein (SSO ueber Browser Extension)
-3. Token muss **Mail.Read** Scope haben (nur Teams-Web-Token)
+3. Token muss **Mail.Read** Scope haben (bereitgestellt ueber `m365_mail_search_token.py`)
 
 ### Pruefen ob MCP verfuegbar
 
@@ -66,11 +66,14 @@ python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py
 # Optional: mehr Ergebnisse (max 25)
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "SUCHBEGRIFF" --size 25
 
-# Optional: nach Relevanz statt nach Datum sortieren
+# Optional: Top-Result-Hybridranking aktivieren
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "SUCHBEGRIFF" --top-results
 ```
 
-- Das Script versucht den Teams-Graph-Token jetzt **selbststaendig** zu beschaffen:
+- **Optional:** `--top-results` aktiviert das Hybridranking der Search API fuer `message`:
+  die ersten **3 Nachrichten nach Relevanz**, der Rest nach **Date/Time**.
+- Ohne `--top-results` nutzt das Script die normale Sortierung des Endpoints.
+- Das Script versucht den Mail-Token jetzt **selbststaendig** zu beschaffen:
   - vorhandenen Cache nutzen
   - Teams-LocalStorage scannen
   - falls moeglich per Refresh-Token neuen Access-Token holen
@@ -79,9 +82,9 @@ python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py
 - **Exit 2** → `TOKEN_EXPIRED` oder `NO_MAIL_SCOPE` auf stderr. Dann ist auch der Python-Resolver gescheitert. Nur dann manuell weiter zu Schritt 2.
 - **Exit 1** → sonstiger Fehler (Meldung auf stderr).
 
-### Schritt 2: Teams-Token holen (nur bei Exit 2)
+### Schritt 2: Mail-Token holen (nur bei Exit 2)
 
-Der Teams-Web-Token ist die **einzige** Token-Quelle fuer Mail-Suche. Dieser Schritt ist jetzt nur noch der **Fallback**, wenn `m365_mail_search.py` im Skill-Ordner ihn nicht selbst aufloesen konnte.
+Der separate Resolver `m365_mail_search_token.py` ist die **einzige** Token-Quelle fuer Mail-Suche. Dieser Schritt ist jetzt nur noch der **Fallback**, wenn `m365_mail_search.py` im Skill-Ordner ihn nicht selbst aufloesen konnte.
 
 **2a.** Teams Web oeffnen:
 
@@ -133,11 +136,13 @@ python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py
 **Fehlerbehandlung:**
 - `No MSAL token keys` → Teams-Session nicht aktiv, User muss sich in Teams anmelden
 - `No Graph token found` → Seite neu laden und erneut versuchen
-- `NO_MAIL_SCOPE` → Token hat keinen Mail.Read Scope. Nur der Teams-Token funktioniert, nicht der Copilot-Token (NAA).
+- `NO_MAIL_SCOPE` → Token hat keinen Mail.Read Scope. Mail-Suche funktioniert nur ueber den separaten Mail-Resolver, nicht ueber den Copilot-Token (NAA).
 
 ### Schritt 3: Einzelne Mail vollstaendig lesen
 
-Die Search API liefert nur Subject, Sender und Preview. Fuer den kompletten Body:
+Die Search API liefert im Suchmodus bereits mehrere Metadaten und Vorschautexte, unter anderem `hitId`, `summary`,
+`subject`, `bodyPreview`, `receivedDateTime`, `hasAttachments`, `importance`, `replyTo`, `from` und `webLink`.
+Fuer den kompletten Body:
 
 ```bash
 # MESSAGE_ID ist die hitId aus dem Suchergebnis
@@ -197,7 +202,9 @@ for slide in prs.slides:
 
 ### Schritt 4: Ergebnisse praesentieren
 
-Das Script gibt die Treffer als Markdown-Tabelle aus mit: Datum, Absender, Betreff (verlinkt), Vorschau.
+Das Script gibt die Treffer als kompakte Markdown-Bloecke aus und zeigt dabei standardmaessig:
+`hitId`, `summary`, `subject`, `bodyPreview`, `receivedDateTime`, `hasAttachments`, `importance`, `replyTo`, `from`
+und `webLink`.
 
 Ausgabe direkt an den User weitergeben.
 
@@ -205,10 +212,11 @@ Ausgabe direkt an den User weitergeben.
 
 | Befehl | Zweck |
 |--------|-------|
-| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query"` | Mail-Suche (10 Treffer) |
+| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query"` | Mail-Suche (10 Treffer, Standard-Sortierung des Endpoints) |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query" --size 25` | Mail-Suche (max 25 Treffer) |
+| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query" --top-results` | Mail-Suche mit Hybridranking (erste 3 nach Relevanz, Rest nach Date/Time) |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "query" --token TOKEN` | Suche mit explizitem Token |
-| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py fetch` | Teams-Token fuer Mail.Read aktiv beschaffen |
+| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py fetch` | Mail-Token mit Mail.Read aktiv beschaffen |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py check-token` | Cache-Status des dedizierten Mail-Token-Resolvers pruefen |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID"` | Vollstaendige Mail laden (Body, To, Cc) |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --save-attachments` | Mail laden + Anhaenge nach userdata/tmp/ speichern |
@@ -229,6 +237,9 @@ Ausgabe direkt an den User weitergeben.
 | **Response** | `{"value": [{"hitsContainers": [{"total": N, "hits": [...]}]}]}` |
 | **Max Treffer** | 25 pro Anfrage |
 | **Token-Laufzeit** | ca. 1 Stunde |
+
+Bei `entityTypes=["message"]` und `enableTopResults=true` liefert der Endpoint keine vollstaendige Relevanzsortierung ueber alle Treffer, sondern eine hybride Liste:
+die ersten **3 Nachrichten nach Relevanz**, die restlichen Treffer nach **Date/Time**.
 
 ### Warum `/v1.0/search/query` statt `/beta/copilot/microsoft.graph.search`?
 
@@ -254,10 +265,10 @@ Der `queryString` unterstuetzt **KQL (Keyword Query Language)**:
 
 | Fehler | Ursache | Loesung |
 |--------|---------|---------|
-| `NO_MAIL_SCOPE` | Token hat keinen Mail.Read Scope | Teams-Token holen (Schritt 2) |
-| `TOKEN_EXPIRED` | Kein gueltiger Token im Cache | Teams-Token holen (Schritt 2) |
-| `401 Unauthorized` | Token serverseitig abgelaufen | Teams-Token neu holen |
-| `403 Forbidden` | Token ohne Mail.Read oder Endpoint blockiert | Erst `$skill-m365-graph-scope-probe` zur Scope-Diagnose verwenden, danach Teams-Token neu holen |
+| `NO_MAIL_SCOPE` | Token hat keinen Mail.Read Scope | Mail-Token holen (Schritt 2) |
+| `TOKEN_EXPIRED` | Kein gueltiger Token im Cache | Mail-Token holen (Schritt 2) |
+| `401 Unauthorized` | Token serverseitig abgelaufen | Mail-Token neu holen |
+| `403 Forbidden` | Token ohne Mail.Read oder Endpoint blockiert | Erst `$skill-m365-graph-scope-probe` zur Scope-Diagnose verwenden, danach Mail-Token neu holen |
 | `No MSAL token keys` | Teams-Session nicht aktiv | User muss sich in Teams Web anmelden |
 
 ## Beispiel-Suchanfragen

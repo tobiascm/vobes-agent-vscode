@@ -17,9 +17,7 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
-import time
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -41,10 +39,14 @@ def _discover_project_root(start_dir: Path) -> Path:
 
 
 PROJECT_ROOT = _discover_project_root(Path(__file__).resolve().parent)
+REPO_SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+if str(REPO_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(REPO_SCRIPTS_DIR))
+
+from m365_copilot_graph_token import TokenResolverError, _get_cached_token_if_valid, ensure_token
+
 CACHE_FILE = PROJECT_ROOT / "userdata" / "tmp" / ".graph_token_cache.json"
-RESOLVER_SCRIPT = PROJECT_ROOT / "scripts" / "m365_copilot_graph_token.py"
 SEARCH_URL = "https://graph.microsoft.com/beta/copilot/search"
-MIN_TOKEN_LIFETIME = 120
 
 
 def _decode_jwt_exp(token: str) -> int:
@@ -56,21 +58,6 @@ def _decode_jwt_exp(token: str) -> int:
     payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
     payload = json.loads(base64.urlsafe_b64decode(payload_b64))
     return int(payload["exp"])
-
-
-def _load_cached_token() -> str | None:
-    if not CACHE_FILE.exists():
-        return None
-    try:
-        raw = CACHE_FILE.read_text("utf-8")
-        if raw.startswith('"'):
-            raw = json.loads(raw)
-        cache = json.loads(raw)
-        if cache.get("exp", 0) > time.time() + MIN_TOKEN_LIFETIME:
-            return cache["token"]
-    except (json.JSONDecodeError, KeyError, OSError, ValueError):
-        pass
-    return None
 
 
 def _save_token(token: str, exp: int, source: str = "manual-debug") -> None:
@@ -88,36 +75,10 @@ def _delete_cache() -> None:
         pass
 
 
-def _run_resolver(force: bool = False) -> None:
-    args = [sys.executable, str(RESOLVER_SCRIPT), "ensure"]
-    if force:
-        args.append("--force")
-
-    result = subprocess.run(
-        args,
-        cwd=PROJECT_ROOT,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
-    if result.returncode == 0:
-        return
-
-    if result.stdout.strip():
-        print(result.stdout.strip(), file=sys.stderr)
-    if result.stderr.strip():
-        print(result.stderr.strip(), file=sys.stderr)
-    sys.exit(result.returncode)
-
-
 def cmd_check_token() -> None:
-    token = _load_cached_token()
-    if token:
-        raw = CACHE_FILE.read_text("utf-8")
-        if raw.startswith('"'):
-            raw = json.loads(raw)
-        exp = json.loads(raw)["exp"]
+    cached = _get_cached_token_if_valid()
+    if cached:
+        _token, exp, _source = cached
         remaining = int(exp - time.time())
         print(f"VALID (expires in {remaining // 60}m {remaining % 60}s)")
     else:
@@ -173,11 +134,11 @@ def cmd_search(query: str, token: str | None = None, force: bool = False) -> Non
         except ValueError:
             exp_to_cache = None
     else:
-        _run_resolver(force=force)
-        token = _load_cached_token()
-        if not token:
-            print("TOKEN_EXPIRED", file=sys.stderr)
-            print("Kein gueltiger Token vorhanden. Resolver hat keinen Cache geschrieben.", file=sys.stderr)
+        try:
+            token, _exp, _source = ensure_token(force=force)
+        except TokenResolverError as exc:
+            print(exc.code, file=sys.stderr)
+            print(str(exc), file=sys.stderr)
             sys.exit(2)
 
     response = _execute_search_request(token, query)

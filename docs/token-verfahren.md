@@ -1,0 +1,13 @@
+| Skill | Auth-Art | Tokenquelle / Verfahren | Relevante Scopes | Cache / Speicherung | Refresh / Erneuerung |
+|---|---|---|---|---|---|
+| `skill-m365-copilot-file-search` | Graph Bearer Token | Zentral ueber `scripts/m365_copilot_graph_token.py` via Copilot NAA (`nestedAppAuthService.GetToken(...)`) | Graph, `aud=https://graph.microsoft.com` | `userdata/tmp/.graph_token_cache.json` | `ensure` / `ensure --force`, Validierung gegen `/v1.0/me` |
+| `skill-m365-file-reader` | Graph Bearer Token | Nutzt denselben zentralen Resolver wie File Search: `scripts/m365_copilot_graph_token.py` | Graph, `scope=https://graph.microsoft.com/.default` | `userdata/tmp/.graph_token_cache.json` | Zentral ueber `m365_copilot_graph_token.py` |
+| `skill-m365-copilot-mail-search` | Graph Bearer Token | Bewusste Ausnahme: separater Resolver `.agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py` | `Mail.Read` oder `Mail.ReadWrite` | `userdata/tmp/.graph_token_cache_teams.json` | Automatisch per `m365_mail_search_token.py`, inkl. Refresh-Token-/Teams-Reopen-Pfad |
+| `skill-m365-graph-scope-probe` | Graph Bearer Token | Standardmaessig zentral ueber `scripts/m365_copilot_graph_token.py`; optional expliziter Token via `--token` | analysiert u.a. `Mail.Read`, `Chat.Read`, `ChannelMessage.Read.All` | kein eigener Cache; nutzt den Copilot-Cache indirekt ueber den Resolver | kein eigener Produktiv-Refresh; Resolver oder expliziter Token |
+| `skill-m365-copilot-chat` | Browser-Session | Kein Token-Transfer, keine Python-HTTP-Calls; Browser ist Auth-Proxy | keine expliziten Scopes im Skill | kein Token-Cache | Session muss im Browser aktiv sein |
+| `skill-chatgpt-research` | Playwright Bridge + Browser-Login | Kein ChatGPT-Bearer-Token, aber Pflicht: `PLAYWRIGHT_MCP_EXTENSION_TOKEN` fuer Bridge Mode | keine OAuth-Scopes im Skill | Env-Var, keine Cache-Datei im Skill | kein Token-Refresh im Skill; Browser-Login auf `chatgpt.com` erforderlich |
+| `skill-browse-intranet` | Browser-SSO | Kerberos/NTLM/SSO ueber Browser Extension und Session-Cookies | keine | keine | bestehende Browser-Session |
+| `skill-te-regelwerk` | Browser-SSO | Kerberos/NTLM im authentifizierten Browser-Kontext | keine | keine | bestehende iProject-/SSO-Session |
+| `skill-personensuche-groupfind` | Browser-Session | Keycloak/CloudIDP im Browser-Kontext | keine | keine | bestehende Browser-Session |
+| `skill-budget-bplus-export` | nicht dokumentiert als Token-Skill | kein explizites Tokenverfahren in `SKILL.md` | n/a | n/a | n/a |
+| `skill-budget-eigenleistung-el` | nicht dokumentiert als Token-Skill | kein explizites Tokenverfahren in `SKILL.md` | n/a | n/a | n/a |
