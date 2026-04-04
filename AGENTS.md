@@ -66,5 +66,15 @@ Bevor ein Skill geladen wird, der einen MCP-Server benoetigt, MUSS geprueft werd
 → PFLICHT: Skill `$skill-m365-copilot-file-search` laden und befolgen. Nutzt Graph Beta API ueber Playwright NAA-Token.
 - M365 Copilot Chat | frage Copilot | schicke diesen Prompt an Copilot | lasse M365 Copilot das beantworten  
 → PFLICHT: Skill `$skill-m365-copilot-chat` laden und befolgen.
-- M365 Datei lesen | Inhalt einer SharePoint-Datei | PPTX aus OneDrive lesen | Excel aus SharePoint als CSV | PDF aus SharePoint extrahieren | Bild aus OneDrive herunterladen | was steht in der Datei  
+- M365 Datei lesen | Inhalt einer SharePoint-Datei | PPTX aus OneDrive lesen | Excel aus SharePoint als CSV | PDF aus SharePoint extrahieren | Bild aus OneDrive herunterladen | was steht in der Datei
 → PFLICHT: Skill `$skill-m365-file-reader` laden und befolgen. Liest PPTX, XLSX, DOCX, PDF und Bilder ueber Graph API.
+- M365 Mail Search | Mail suchen | Outlook durchsuchen | finde Mail zu | habe ich eine Mail von | Mail-Suche | E-Mail finden | Postfach durchsuchen
+→ PFLICHT: Skill `$skill-m365-copilot-mail-search` laden und befolgen. Durchsucht Outlook-Mails ueber Graph Search API. Benoetigt Teams-Token mit Mail.Read Scope.
+- Graph Scopes pruefen | 403 Forbidden Ursache | fehlende Scopes | Token-Diagnose | Graph Probe
+→ PFLICHT: Skill `$skill-m365-graph-scope-probe` laden und befolgen. Diagnose fuer Graph-Token, fehlende Scopes und 401/403 bei M365-Skills.
+- Outlook Mail Thread | verwandte Mails | thematisch aehnliche Mails | Mail-Kontext erweitern | wer hat noch ueber X geschrieben
+→ PFLICHT: Skill `$skill-outlook-search-related-emails` laden und befolgen. Findet Thread-Mails (mode=thread) oder verwandte Mails ausserhalb des Threads (mode=related). Benoetigt Entry-ID und Store-ID der Seed-Mail.
+- Outlook Mail vollstaendig lesen | vollstaendiger Mail-Body | alle Empfaenger anzeigen | Mail nachladen
+→ PFLICHT: Skill `$skill-outlook-read-email` laden und befolgen. Laedt eine konkrete Mail per Entry-ID vollstaendig nach. Typischerweise nach skill-outlook-search-related-emails als Folgeschritt.
+- ChatGPT Research | frage ChatGPT | ChatGPT antworten lassen | was sagt ChatGPT zu | schicke Frage an ChatGPT
+→ PFLICHT: Skill `$skill-chatgpt-research` laden und befolgen. Stellt Frage an ChatGPT via Playwright CDP und speichert Antwort als Markdown.
