@@ -68,6 +68,14 @@ DEFAULT_CHAT_URL = "https://chatgpt.com/"
 DEFAULT_TIMEOUT_SECONDS = 1800
 DEFAULT_TIMEOUT_MINUTES = DEFAULT_TIMEOUT_SECONDS // 60
 DEFAULT_POLL_INTERVAL_SECONDS = 3
+DEFAULT_COMPLETION_STABLE_SECONDS = 15
+DEFAULT_COMPLETION_MIN_CHARS = 200
+DEFAULT_NO_GENERATION_GRACE_SECONDS = 90
+DEFAULT_THINKING_TLDR_GRACE_SECONDS = 300
+DEFAULT_COMPLETION_SENTINEL = "---fertig---"
+SHORT_COMPLETION_STABLE_SECONDS = 6
+SHORT_COMPLETION_MIN_CHARS = 0
+SHORT_NO_GENERATION_GRACE_SECONDS = 20
 CHATGPT_MIN_INTERVAL_SECONDS = 30
 GATE_LOCK_PATH = PROJECT_ROOT / "userdata" / "tmp" / "chatgpt_rate_gate.lock"
 GATE_STATE_PATH = PROJECT_ROOT / "userdata" / "tmp" / "chatgpt_rate_gate.json"
@@ -95,6 +103,10 @@ DOM_STATE_JS = r"""
   const assistants = [...document.querySelectorAll('[data-message-author-role="assistant"]')];
   const lastAssistant = assistants.length ? assistants[assistants.length - 1] : null;
   const lastText = lastAssistant ? (lastAssistant.innerText || '').trim() : '';
+  let lastHash = 0;
+  for (let i = 0; i < lastText.length; i += 1) {
+    lastHash = ((lastHash * 31) + lastText.charCodeAt(i)) | 0;
+  }
   const buttons = [...document.querySelectorAll('button')];
   const buttonText = buttons
     .map((btn) => [btn.getAttribute('aria-label') || '', btn.innerText || ''].join(' ').trim())
@@ -114,7 +126,9 @@ DOM_STATE_JS = r"""
     hasTextbox: !!textarea,
     assistantCount: assistants.length,
     lastAssistantLength: lastText.length,
+    lastAssistantHash: lastHash,
     lastAssistantPreview: lastText.slice(0, 200),
+    lastAssistantTailPreview: lastText.slice(-200),
     thinkingActive: activeThinking,
     isGenerating,
   });
@@ -369,6 +383,7 @@ def _read_html_from_file(path_value: str | Path) -> str:
 
 def _build_markdown_document(question: str, html: str, thinking: bool) -> str:
     markdown = _html_to_markdown(html)
+    markdown = _strip_completion_sentinel(markdown)
     if not markdown or len(markdown) < 20:
         raise RuntimeError("Konvertierte Markdown-Antwort ist leer oder zu kurz.")
 
@@ -421,6 +436,69 @@ def _success_meta(raw_html_out: Path, out_path: Path, content: str) -> dict[str,
         "output_chars": len(content),
         "raw_html_out": _rel_for_display(raw_html_out),
     }
+
+
+def _looks_like_progress_stub(text: str) -> bool:
+    sample = re.sub(r"\s+", " ", text or "").strip().lower()
+    if not sample:
+        return False
+    patterns = (
+        r"^i[’']?m checking\b",
+        r"^i am checking\b",
+        r"^i[’']?m looking\b",
+        r"^i am looking\b",
+        r"^i[’']?m reviewing\b",
+        r"^i am reviewing\b",
+        r"^i[’']?m gathering\b",
+        r"^i am gathering\b",
+        r"^let me\b",
+        r"^first,? i[’']?ll\b",
+        r"^first,? i will\b",
+        r"^zuerst\b",
+        r"^ich prüfe\b",
+        r"^ich recherchiere\b",
+        r"^ich schaue\b",
+    )
+    return any(re.search(pattern, sample) for pattern in patterns)
+
+
+def _has_tldr_marker(*texts: str) -> bool:
+    sample = " ".join(texts).lower()
+    sample = re.sub(r"\s+", " ", sample).strip()
+    if not sample:
+        return False
+    patterns = (
+        r"\btl\s*;?\s*dr\b",
+        r"\btoo long;?\s*didn[’']?t read\b",
+        r"\bkurzfassung\b",
+        r"\bfazit\b",
+        r"\bkurz gesagt\b",
+        r"\bin einem satz\b",
+    )
+    return any(re.search(pattern, sample) for pattern in patterns)
+
+
+def _prompt_with_completion_sentinel(prompt: str) -> str:
+    sentinel = DEFAULT_COMPLETION_SENTINEL
+    if sentinel in prompt:
+        return prompt
+    instruction = (
+        "\n\nWichtig: Beende deine finale Antwort mit der exakten Zeile "
+        f"{sentinel} "
+        "und verwende diese Markierung nicht vorher."
+    )
+    return prompt.rstrip() + instruction
+
+
+def _has_completion_sentinel(*texts: str) -> bool:
+    sentinel = DEFAULT_COMPLETION_SENTINEL.lower()
+    return any(sentinel in (text or "").lower() for text in texts)
+
+
+def _strip_completion_sentinel(text: str) -> str:
+    sentinel = re.escape(DEFAULT_COMPLETION_SENTINEL)
+    cleaned = re.sub(rf"\n?\s*{sentinel}\s*$", "", text.strip(), flags=re.IGNORECASE)
+    return cleaned.strip()
 
 
 def _error_meta(raw_html_out: Path, error: str) -> dict[str, Any]:
@@ -569,9 +647,13 @@ class RunOptions:
     question: str
     output: Path | None
     thinking: bool
+    quick: bool
     chat_url: str
     timeout_seconds: int
     poll_interval_seconds: int
+    completion_stable_seconds: int
+    completion_min_chars: int
+    no_generation_grace_seconds: int
     reuse_chat: bool
 
 
@@ -906,13 +988,18 @@ def _poll_for_completed_message(
     client: McpStdioClient,
     *,
     baseline_count: int,
+    thinking: bool,
     timeout_seconds: int,
     poll_interval_seconds: int,
+    completion_stable_seconds: int,
+    completion_min_chars: int,
+    no_generation_grace_seconds: int,
 ) -> dict[str, Any]:
     started_at = time.time()
     deadline = started_at + timeout_seconds
-    previous_length = -1
-    stable_rounds = 0
+    previous_signature: str | None = None
+    last_change_at: float | None = None
+    saw_generating = False
     next_status_at = started_at + 60
 
     while time.time() < deadline:
@@ -921,41 +1008,94 @@ def _poll_for_completed_message(
 
         assistant_count = int(state.get("assistantCount", 0))
         last_len = int(state.get("lastAssistantLength", 0))
+        last_hash = int(state.get("lastAssistantHash", 0))
+        preview = str(state.get("lastAssistantPreview", ""))
+        tail_preview = str(state.get("lastAssistantTailPreview", ""))
         is_generating = bool(state.get("isGenerating"))
         now_ts = time.time()
+        if is_generating:
+            saw_generating = True
+        looks_like_progress = _looks_like_progress_stub(preview)
+        has_tldr_marker = _has_tldr_marker(preview, tail_preview)
+        has_completion_sentinel = _has_completion_sentinel(preview, tail_preview)
 
         if now_ts >= next_status_at:
             elapsed_seconds = int(now_ts - started_at)
             elapsed_mm = elapsed_seconds // 60
             elapsed_ss = elapsed_seconds % 60
-            preview = str(state.get("lastAssistantPreview", "")).replace("\n", " ").strip()
-            preview = re.sub(r"\s+", " ", preview)
+            preview_text = preview.replace("\n", " ").strip()
+            preview_text = re.sub(r"\s+", " ", preview_text)
             if assistant_count <= baseline_count:
                 message = f"Status {elapsed_mm:02d}:{elapsed_ss:02d}: noch keine Assistant-Antwort sichtbar"
             else:
-                message = f"Status {elapsed_mm:02d}:{elapsed_ss:02d}: ChatGPT antwortet noch"
-                if preview:
-                    tail_preview = preview[-140:]
-                    if len(preview) > len(tail_preview):
+                quiet_seconds = 0 if last_change_at is None else int(max(0, now_ts - last_change_at))
+                message = (
+                    f"Status {elapsed_mm:02d}:{elapsed_ss:02d}: len={last_len}, "
+                    f"generating={'ja' if is_generating else 'nein'}, "
+                    f"quiet={quiet_seconds}s, "
+                    f"progress_stub={'ja' if looks_like_progress else 'nein'}, "
+                    f"tldr={'ja' if has_tldr_marker else 'nein'}, "
+                    f"sentinel={'ja' if has_completion_sentinel else 'nein'}"
+                )
+                if preview_text:
+                    tail_preview = preview_text[-140:]
+                    if len(preview_text) > len(tail_preview):
                         tail_preview = f"...{tail_preview}"
                     message += f" | Preview: {tail_preview}"
             print(message, file=sys.stderr)
             next_status_at += 60
 
         if assistant_count > baseline_count:
-            if last_len == previous_length and last_len > 0:
-                stable_rounds += 1
-            else:
-                stable_rounds = 0
-                previous_length = last_len
+            current_signature = f"{last_len}:{last_hash}"
+            if current_signature != previous_signature:
+                previous_signature = current_signature
+                last_change_at = now_ts
 
-            if not is_generating and stable_rounds >= 1:
+            quiet_seconds = 0.0 if last_change_at is None else max(0.0, now_ts - last_change_at)
+            has_enough_content = last_len >= completion_min_chars
+            grace_elapsed = (now_ts - started_at) >= no_generation_grace_seconds
+            completion_gate_open = (
+                saw_generating
+                or has_enough_content
+                or grace_elapsed
+                or has_completion_sentinel
+            )
+            short_answer_in_long_mode = completion_min_chars > 0 and last_len < (completion_min_chars * 2)
+            requires_extra_confirmation = looks_like_progress or short_answer_in_long_mode
+            required_quiet_seconds = completion_stable_seconds
+            if requires_extra_confirmation:
+                required_quiet_seconds = max(required_quiet_seconds, no_generation_grace_seconds)
+            thinking_tldr_pending = thinking and completion_min_chars > 0 and not has_tldr_marker
+            if thinking_tldr_pending:
+                required_quiet_seconds = max(required_quiet_seconds, DEFAULT_THINKING_TLDR_GRACE_SECONDS)
+            if has_completion_sentinel:
+                required_quiet_seconds = max(float(poll_interval_seconds), 3.0)
+
+            if (
+                not is_generating
+                and quiet_seconds >= required_quiet_seconds
+                and completion_gate_open
+            ):
                 return state
 
         _call_tool_with_retry(client, "browser_wait_for", {"time": poll_interval_seconds})
 
     raise TimeoutError(
         f"ChatGPT-Antwort wurde nicht innerhalb von {timeout_seconds} Sekunden fertig."
+    )
+
+
+def _resolve_completion_settings(options: RunOptions) -> tuple[int, int, int]:
+    if options.quick:
+        return (
+            SHORT_COMPLETION_STABLE_SECONDS,
+            SHORT_COMPLETION_MIN_CHARS,
+            SHORT_NO_GENERATION_GRACE_SECONDS,
+        )
+    return (
+        options.completion_stable_seconds,
+        options.completion_min_chars,
+        options.no_generation_grace_seconds,
     )
 
 
@@ -1047,6 +1187,11 @@ def cmd_run(options: RunOptions) -> None:
     raw_html_out = _html_output_path(output)
     raw_html_out.parent.mkdir(parents=True, exist_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
+    (
+        completion_stable_seconds,
+        completion_min_chars,
+        no_generation_grace_seconds,
+    ) = _resolve_completion_settings(options)
 
     config = _load_playwright_server_config()
     client: McpStdioClient | None = None
@@ -1082,20 +1227,26 @@ def cmd_run(options: RunOptions) -> None:
             "DOM state before first prompt",
         )
         baseline = int(state.get("assistantCount", 0))
-        _submit_prompt(client, options.question)
+        _submit_prompt(client, _prompt_with_completion_sentinel(options.question))
         _call_tool_with_retry(client, "browser_wait_for", {"time": 2})
         print(
             "ChatGPT-Research kann bis zu "
             f"{options.timeout_seconds // 60} Minuten dauern; "
-            "der Agent wartet bis zum konfigurierten Timeout.",
+            "der Agent wartet bis zum konfigurierten Timeout. "
+            f"Abschlusslogik: stabil={completion_stable_seconds}s, "
+            f"min_chars={completion_min_chars}, grace={no_generation_grace_seconds}s.",
             file=sys.stderr,
         )
 
         _poll_for_completed_message(
             client,
             baseline_count=baseline,
+            thinking=options.thinking,
             timeout_seconds=options.timeout_seconds,
             poll_interval_seconds=options.poll_interval_seconds,
+            completion_stable_seconds=completion_stable_seconds,
+            completion_min_chars=completion_min_chars,
+            no_generation_grace_seconds=no_generation_grace_seconds,
         )
 
         _extract_last_assistant_html(client, raw_html_out)
@@ -1170,6 +1321,14 @@ def main() -> None:
         action="store_true",
         help="Versucht 'Laengeres Nachdenken' zu aktivieren",
     )
+    run.add_argument(
+        "--quick",
+        action="store_true",
+        help=(
+            "Kurzantwort-Modus fuer Tests und kleine Antworten; "
+            "verwendet schnellere Abschluss-Schwellen"
+        ),
+    )
     run.add_argument("--chat-url", default=DEFAULT_CHAT_URL, help="ChatGPT URL")
     run.add_argument(
         "--timeout-seconds",
@@ -1185,6 +1344,33 @@ def main() -> None:
         type=int,
         default=DEFAULT_POLL_INTERVAL_SECONDS,
         help="Polling-Intervall fuer DOM-Status",
+    )
+    run.add_argument(
+        "--completion-stable-seconds",
+        type=int,
+        default=DEFAULT_COMPLETION_STABLE_SECONDS,
+        help=(
+            "Wie lange der letzte Assistant-Text unveraendert bleiben muss, "
+            "bevor der Lauf als fertig gilt"
+        ),
+    )
+    run.add_argument(
+        "--completion-min-chars",
+        type=int,
+        default=DEFAULT_COMPLETION_MIN_CHARS,
+        help=(
+            "Minimale Zeichenanzahl fuer einen fruehen Abschluss, "
+            "falls kein Generierungsindikator erkannt wird"
+        ),
+    )
+    run.add_argument(
+        "--no-generation-grace-seconds",
+        type=int,
+        default=DEFAULT_NO_GENERATION_GRACE_SECONDS,
+        help=(
+            "Fallback-Wartezeit, nach der auch ohne Generierungsindikator "
+            "ein stabiler Text als fertig akzeptiert wird"
+        ),
     )
     run.add_argument(
         "--reuse-chat",
@@ -1206,9 +1392,13 @@ def main() -> None:
                 question=args.question,
                 output=Path(args.output) if args.output else None,
                 thinking=args.thinking,
+                quick=args.quick,
                 chat_url=args.chat_url,
                 timeout_seconds=args.timeout_seconds,
                 poll_interval_seconds=args.poll_interval_seconds,
+                completion_stable_seconds=args.completion_stable_seconds,
+                completion_min_chars=args.completion_min_chars,
+                no_generation_grace_seconds=args.no_generation_grace_seconds,
                 reuse_chat=args.reuse_chat,
             )
         )

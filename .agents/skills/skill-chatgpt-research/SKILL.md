@@ -32,6 +32,7 @@ Das Script uebernimmt:
 - optional Aktivierung von **Laengeres Nachdenken**
 - Prompt senden
 - Antwort pollend auf Vollstaendigkeit pruefen
+- Abschluss nur nach echtem Ruhefenster und Mindestinhalt erkennen
 - bei Research-Laeufen bis zu **30 Minuten** auf die Antwort warten
 - genau **einen** Prompt pro Lauf, ohne automatischen Follow-up
 - minuetliche Mini-Statusmeldungen auf `stderr`
@@ -100,12 +101,20 @@ Wichtige Optionen:
 | `--question/-q` | Pflichtfrage an ChatGPT |
 | `--output/-o` | Ziel-MD-Datei |
 | `--thinking` | versucht `Laengeres Nachdenken` zu aktivieren |
+| `--quick` | Kurzantwort-Modus fuer Tests / kleine Antworten; schnellere Abschluss-Schwellen |
 | `--reuse-chat` | bestehenden Chat weiterverwenden statt neuen Startzustand zu erzwingen |
 | `--timeout-seconds` | Timeout pro Antwort, Standard: 1800 Sekunden = **30 Minuten** |
+| `--completion-stable-seconds` | benoetigte Ruhezeit ohne Textaenderung vor Abschluss, Default: `15` |
+| `--completion-min-chars` | Mindestlaenge fuer fruehen Abschluss ohne sichtbaren Generierungsindikator, Default: `200` |
+| `--no-generation-grace-seconds` | Fallback-Wartezeit ohne Generierungsindikator, bevor ein stabiler Text trotzdem als fertig gilt, Default: `90` |
 
 Wichtig:
 - ChatGPT-Research kann je nach Last und Thema bis zu **30 Minuten** dauern.
 - Der Agent wartet im Standardlauf entsprechend lange und bricht erst nach Ablauf dieses Timeouts mit Exit `4` ab.
+- Ein kurzer Einleitungssatz gilt nicht mehr sofort als fertig; das Script wartet standardmaessig auf mindestens `15` Sekunden stabilen Inhalt und blockt sehr kurze Zwischenstaende.
+- Im langen `--thinking`-Modus wird ein sichtbares `TL;DR`/`Fazit` zusaetzlich als starkes Abschluss-Indiz genutzt. Fehlt das, wartet der Wrapper deutlich laenger, bevor er einen stabilen Zwischenstand akzeptiert.
+- Zusaetzlich injiziert der Wrapper standardmaessig ein Abschluss-Token `---fertig---`. Sobald dieses am Antwortende erscheint, kann der Lauf deutlich frueher und zuverlaessiger als abgeschlossen erkannt werden.
+- Fuer kurze Testprompts oder 2-3 Zeilen Antwort `--quick` verwenden. Dann sind die Abschluss-Schwellen deutlich kuerzer und das Script beendet frueher, sobald der kurze Inhalt stabil ist.
 
 Der Tab wird durch `run` **nie automatisch** geschlossen. Wenn keine Folgefrage mehr noetig ist, rufe danach explizit auf:
 
