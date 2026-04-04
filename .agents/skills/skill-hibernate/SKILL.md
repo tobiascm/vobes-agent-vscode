@@ -25,7 +25,7 @@ Plant einen Windows Scheduled Task, der den Rechner zu einer bestimmten Uhrzeit 
 Im Workspace liegt ein GUI-Script fuer interaktive Nutzung:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\scripts\windows\hibernate_scheduler.ps1"
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-hibernate\hibernate_scheduler.ps1"
 ```
 
 Alternativ als VS Code Task: **"Windows: Hibernate Scheduler"**

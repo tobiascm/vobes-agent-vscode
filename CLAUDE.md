@@ -6,6 +6,7 @@
 - Bei Budget, Finanz, Beauftragungs, Abruf Themen  **IMMER** eine neue Auswertung erzeugen, nie eine vorhandene Auswertung bzw. .md-Datei verwenden.
 - Git Commit IMMER ueber Skill `$git-commit` ausfuehren, NIEMALS manuell `git commit` aufrufen.
 - Git Push IMMER ueber Skill `$git-push` ausfuehren, NIEMALS manuell `git push` aufrufen.
+- Dateiverschiebungen und Umbenennungen IMMER mit `git mv` ausfuehren, NIEMALS per `mv`, `Move-Item` oder manuelles Loeschen + Neuerstellen, außer datei ist unversioniert.
 
 # Skill-Pflicht (MUSS vor jeder Antwort geprueft werden):
 

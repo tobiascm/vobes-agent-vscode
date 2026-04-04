@@ -58,14 +58,14 @@ Das EKEK/1 Dashboard (Page-ID `6926484665`, Space `EKEK1`) verwendet das Conflue
 Jede Sektion (z.B. "KI-Tools und Chatbots") ist eine eigene Aura-Card-Instanz mit einem JSON-Array (`cardsCollection`) fuer die einzelnen Kacheln.
 Der Seiteninhalt liegt im Confluence-Storage-Format (XML) vor — daher kann er **nicht** per Markdown bearbeitet werden.
 
-Fuer das Einfuegen neuer Kacheln nutze das Script `scripts/dashboard_add_card.py`.
+Fuer das Einfuegen neuer Kacheln nutze das Script `.agents/skills/skill-update-confluence-page/dashboard_add_card.py`.
 
 ### Workflow
 1. Seite laden: `mcp_mcp-atlassian_confluence_get_page(page_id="6926484665", convert_to_markdown=false)`
 2. Ergebnis-JSON in eine temp-Datei speichern (z.B. `userdata/tmp/page_content.json`)
 3. Script ausfuehren:
    ```
-   python scripts/dashboard_add_card.py <content_json> <output_file> --marker "<marker>" --card '<card_json>'
+   python .agents/skills/skill-update-confluence-page/dashboard_add_card.py <content_json> <output_file> --marker "<marker>" --card '<card_json>'
    ```
 4. Inhalt aus `<output_file>` lesen
 5. `mcp_mcp-atlassian_confluence_update_page(page_id="6926484665", title="EKEK/1 - Dashboard", content=<inhalt>, content_format="storage")`
@@ -96,7 +96,7 @@ Fuer das Einfuegen neuer Kacheln nutze das Script `scripts/dashboard_add_card.py
 
 ### Beispiel
 ```
-python scripts/dashboard_add_card.py userdata/tmp/page.json userdata/tmp/modified.html \
+python .agents/skills/skill-update-confluence-page/dashboard_add_card.py userdata/tmp/page.json userdata/tmp/modified.html \
   --marker "EHD Chatbot (Eddy)" \
   --card '{"title":"Mein Tool","body":"Beschreibung","color":"#66afff","icon":"faDesktop","href":"https://example.com","hrefType":"link","hrefTarget":"_blank"}'
 ```

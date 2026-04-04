@@ -58,7 +58,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}\\scripts\\windows\\hibernate_scheduler.ps1"
+        "${workspaceFolder}\\.agents\\skills\\skill-hibernate\\hibernate_scheduler.ps1"
       ],
       "presentation": {
         "reveal": "always",
