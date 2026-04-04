@@ -49,37 +49,44 @@ Jede Protokollseite MUSS:
 
 ### 4. Inhalt vorbereiten
 - Der User liefert den Protokollinhalt (Stichpunkte, Notizen, Agenda, etc.).
-- Inhalt als Markdown strukturieren.
+- Inhalt im **Confluence Wiki-Markup** strukturieren (NICHT Markdown — Markdown verliert Einrueckungsebenen auf Confluence Server/DC).
 - Typische Struktur fuer ein Protokoll:
 
-```markdown
-## Themen
+```
+h2. Themen
 
 * Thema 1 (Verantwortlicher)
-  + Detail / Ergebnis
-  + Naechste Schritte
+** Detail / Ergebnis
+** Naechste Schritte
+** *Maßnahmen*
+*** {Confluence Task-Liste hier eingerueckt — siehe Abschnitt "TODOs / Aufgaben in Protokollen"}
 * Thema 2 (Verantwortlicher)
-  + Detail / Ergebnis
-
-## Offene Punkte / TODOs
-
-| # | Aufgabe | Verantwortlich | Termin |
-|---|---------|----------------|--------|
-| 1 | ... | ... | ... |
+** Detail / Ergebnis
 ```
 
+- **Wiki-Markup Kurzreferenz:**
+  - Listen-Ebenen: `*` (L1), `**` (L2), `***` (L3), `****` (L4)
+  - Headings: `h1.`, `h2.`, `h3.` etc.
+  - Bold: `*text*` (nur inline, NICHT am Zeilenanfang — dort bedeutet `*` Listenpunkt)
+  - Links: `[Anzeigetext|https://url]`
+  - Tabellen: `||Kopf1||Kopf2||` und `|Zelle1|Zelle2|`
+
+- **TODOs** werden NICHT in einem eigenen Abschnitt gesammelt, sondern als **Unterpunkt "Maßnahmen"** direkt beim jeweiligen Thema eingefuegt — eingerueckt unter dem Thema.
+- TODOs muessen als Confluence `<ac:task-list>` angelegt werden (siehe eigener Abschnitt unten), NICHT als Markdown-Tabelle.
 - Falls der User nur Stichpunkte liefert, diese sinnvoll in die obige Struktur bringen.
 - Falls der User Rohdaten aus einem Chat/Meeting liefert, daraus ein strukturiertes Protokoll formen.
-- Bitte immer kopakt in stenoartigem Stil schreiben. Nur Fakten, präziese formuliert. Keine Verallgemeinerungen, oder vagfe oder unrpäszise Formulierungen.
+- **Einrueckungen beibehalten:** Wenn die bestehende Seite bereits eine verschachtelte Listenstruktur hat, MUESSEN die vorhandenen Einrueckungsebenen exakt erhalten bleiben. Keine Ebene darf beim Update verloren gehen oder flacher werden.
+- **Zusaetzliche Einrueckungen erlaubt:** Ergaenzungen duerfen gerne weitere Einrueckungsebenen nutzen, um die Lesbarkeit zu verbessern (z.B. Details unter einem Unterpunkt nochmals einruecken).
+- Bitte immer kompakt in stenoartigem Stil schreiben. Nur Fakten, praezise formuliert. Keine Verallgemeinerungen oder vage oder unpraezise Formulierungen.
 
 ### 5. Seite anlegen
 - Tool: `mcp_mcp-atlassian_confluence_create_page`
 - Parameter:
   - `space_key`: `"VOBES"` (bzw. `"EKEK1"` fuer KC Vibe Coding)
   - `title`: Zusammengesetzter Titel (siehe Schritt 3)
-  - `content`: Vorbereiteter Markdown-Inhalt (siehe Schritt 4)
+  - `content`: Vorbereiteter Wiki-Markup-Inhalt (siehe Schritt 4)
   - `parent_id`: ID der Sammlerseite aus der Tabelle
-  - `content_format`: `"markdown"`
+  - `content_format`: `"wiki"`
 
 ### 6. Ergebnis bestaetigen
 - Erfolgsmeldung pruefen.
@@ -97,7 +104,8 @@ Jede Protokollseite MUSS:
 - Parameter: `page_id`, `include_metadata=true`, `convert_to_markdown=true`
 
 ### 3. Inhalt anpassen
-- Aenderungen des Users in den bestehenden Markdown-Inhalt einarbeiten.
+- Aenderungen des Users in den bestehenden Inhalt einarbeiten.
+- Inhalt in **Wiki-Markup** konvertieren (Listen-Ebenen: `*`, `**`, `***`; Headings: `h2.`; Tabellen: `||Kopf||` / `|Zelle|`).
 - Struktur beibehalten, keine unnoetige Umformatierung.
 
 ### 4. Seite updaten
@@ -106,8 +114,8 @@ Jede Protokollseite MUSS:
   - Parameter:
     - `page_id`
     - `title` (unveraendert!)
-    - `content` (vollstaendiger aktualisierter Markdown-Inhalt)
-    - `content_format`: `"markdown"`
+    - `content` (vollstaendiger aktualisierter Inhalt im Wiki-Markup)
+    - `content_format`: `"wiki"`
     - `version_comment`: Kurzer Kommentar zur Aenderung
 
 ### 5. Ergebnis bestaetigen
@@ -122,6 +130,66 @@ Jede Protokollseite MUSS:
 - Bei Zweifeln am Datum: Aktuelles Datum vorschlagen und User bestaetigen lassen.
 - Titel bestehender Seiten beim Update niemals aendern.
 - Kein Mischbetrieb aus MCP und manuellen REST-Calls.
+
+## TODOs / Aufgaben in Protokollen
+
+TODOs in Protokollseiten MUESSEN als Confluence Task-List im **Storage-Format** (HTML) angelegt werden — NICHT als Markdown-Tabelle. Nur so erscheinen sie als echte Confluence-Aufgaben mit Checkbox, Zuweisung und Faelligkeitsdatum.
+
+### Storage-Format einer Task-Liste
+
+```html
+<ac:task-list>
+<ac:task>
+<ac:task-id>{fortlaufende_nummer}</ac:task-id>
+<ac:task-status>incomplete</ac:task-status>
+<ac:task-body><ac:link><ri:user ri:userkey="{userkey}"></ri:user></ac:link> {Aufgabentext} <time datetime="{YYYY-MM-DD}"></time> </ac:task-body>
+</ac:task>
+</ac:task-list>
+```
+
+### Pflichtfelder pro TODO
+
+| Element | Beschreibung | Pflicht |
+|---|---|---|
+| `<ac:task-id>` | Fortlaufende Nummer, seitenweit eindeutig | Ja |
+| `<ac:task-status>` | `incomplete` (neu) oder `complete` | Ja |
+| `<ri:user ri:userkey="...">` | Zugewiesene Person (Confluence-Userkey) | Ja, wenn Person bekannt |
+| Freitext in `<ac:task-body>` | Aufgabenbeschreibung | Ja |
+| `<time datetime="YYYY-MM-DD">` | **Faelligkeitsdatum** im ISO-Format | **Ja — IMMER angeben!** |
+
+### Regeln
+
+- **Faelligkeitsdatum ist Pflicht** — jedes TODO MUSS ein `<time datetime="...">` enthalten.
+- Falls der User kein Datum nennt, nachfragen oder einen sinnvollen Vorschlag machen (z.B. naechster Regeltermin).
+- `task-id` fortlaufend vergeben: Bei bestehenden Seiten die hoechste vorhandene ID ermitteln und ab dort weiterzaehlen.
+- `task-uuid` kann weggelassen werden — Confluence generiert sie automatisch.
+- Mehrere TODOs werden als separate `<ac:task>`-Bloecke innerhalb derselben `<ac:task-list>` angelegt.
+- Beim Update einer Seite bestehende Tasks NICHT loeschen oder ueberschreiben, sondern neue Tasks anhaengen.
+
+### Einbettung in den Seiteninhalt
+
+Da Tasks Storage-Format (HTML) benoetigen, muss beim Erstellen/Updaten der Seite darauf geachtet werden:
+
+1. **Bei `content_format="wiki"`**: Task-Liste als Raw-HTML-Block direkt einbetten (Wiki-Format unterstuetzt eingebettetes Storage-Markup).
+2. **Bei `content_format="storage"`**: Task-Liste direkt im Storage-Format schreiben.
+3. **Bei `content_format="markdown"`**: Markdown unterstuetzt KEINE Task-Makros. Falls die Seite TODOs enthaelt, auf `"wiki"` oder `"storage"` wechseln.
+
+### Beispiel: Zwei TODOs mit Zuweisung und Datum
+
+```html
+<ac:task-list>
+<ac:task>
+<ac:task-id>1</ac:task-id>
+<ac:task-status>incomplete</ac:task-status>
+<ac:task-body><ac:link><ri:user ri:userkey="4028949e6b21d06c016b2ca19cd30041"></ri:user></ac:link> Erstellt zentrale Story; andere Teams klonen/verlinken <time datetime="2026-04-16"></time> </ac:task-body>
+</ac:task>
+<ac:task>
+<ac:task-id>2</ac:task-id>
+<ac:task-status>incomplete</ac:task-status>
+<ac:task-body><ac:link><ri:user ri:userkey="402894975ee80eb60160e0bd895501a3"></ri:user></ac:link> Klont relevante Findings fuer VMDS <time datetime="2026-04-16"></time> </ac:task-body>
+</ac:task>
+</ac:task-list>
+```
 
 ## Sonderfaelle
 

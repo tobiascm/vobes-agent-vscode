@@ -8,6 +8,7 @@ description: Standardisierter Ablauf, um eine bestehende Confluence-Seite aussch
 - Für Seitenänderungen immer `mcp_mcp-atlassian_confluence_update_page` verwenden.
 - Vor dem Update den aktuellen Inhalt per `mcp_mcp-atlassian_confluence_get_page` laden.
 - Bei Tabellen den kompletten Tabellenblock im Markdown konsistent zurückschreiben.
+- **Format-Wahl:** Bei Seiten mit verschachtelten Listen (>2 Ebenen) IMMER `content_format="wiki"` verwenden. Markdown verliert auf Confluence Server/DC Einrückungsebenen. Wiki-Markup hat explizite Ebenen (`*`, `**`, `***`, `****`) und wird verlustfrei verarbeitet.
 
 ## Inputs
 
