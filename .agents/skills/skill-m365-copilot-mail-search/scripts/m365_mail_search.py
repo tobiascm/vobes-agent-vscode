@@ -1,10 +1,12 @@
-"""M365 Mail Search via Graph Search API.
+"""M365 Mail/Event Search via Graph Search API.
 
 Durchsucht Outlook-Mails ueber /v1.0/search/query mit entityTypes=[message].
-Benoetigt einen Token mit Mail.Read Scope (z.B. Teams-Web-Token).
+Mit --events werden stattdessen Outlook-Kalendereintraege ueber entityTypes=[event] gesucht.
+Mail-Suche benoetigt Mail.Read, Event-Suche benoetigt Calendars.Read.
 
 Usage:
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff"
+    python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --events
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --size 25
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --date-order
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "Suchbegriff" --only-summary
@@ -37,7 +39,10 @@ import os
 import sys
 import time
 import unicodedata
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import re
 
@@ -70,6 +75,9 @@ DEFAULT_PAGE_SIZE = 10
 SEARCH_OUTPUT_DIR = REPO_ROOT / "tmp"
 BODY_PREVIEW_LINES = 10
 NOISE_TERMS = ("INTERNAL",)
+MAIL_SCOPE_OPTIONS = (("Mail.Read",), ("Mail.ReadWrite",))
+EVENT_SCOPE_OPTIONS = (("Calendars.Read",), ("Calendars.ReadWrite",))
+EVENT_FIELDS = ["subject", "start", "iCalUId", "hasAttachments", "webLink"]
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +89,18 @@ def _has_mail_scope(token: str) -> bool:
     return _has_required_scope(token, ("Mail.Read",)) or _has_required_scope(token, ("Mail.ReadWrite",))
 
 
-def _resolve_token(explicit_token: str | None = None) -> str:
-    """Liefert einen gueltigen Mail.Read-Token.
+def _has_any_required_scope(token: str, scope_options: tuple[tuple[str, ...], ...]) -> bool:
+    """Prueft, ob ein Token mindestens eine erlaubte Scope-Kombination erfuellt."""
+    return any(_has_required_scope(token, required_scopes) for required_scopes in scope_options)
+
+
+def _resolve_token(
+    explicit_token: str | None = None,
+    scope_options: tuple[tuple[str, ...], ...] = MAIL_SCOPE_OPTIONS,
+    scope_error_code: str = "NO_MAIL_SCOPE",
+    scope_error_message: str = "Der uebergebene Token hat keinen Mail.Read Scope.",
+) -> str:
+    """Liefert einen gueltigen Graph-Token fuer die benoetigten Scopes.
 
     Reihenfolge:
     1. explizit uebergebener Token
@@ -90,24 +108,34 @@ def _resolve_token(explicit_token: str | None = None) -> str:
     3. Teams-Resolver: LocalStorage/Refresh-Token/Teams-Reopen
     """
     if explicit_token:
-        if not _has_mail_scope(explicit_token):
-            print("NO_MAIL_SCOPE", file=sys.stderr)
-            print("Der uebergebene Token hat keinen Mail.Read Scope.", file=sys.stderr)
+        if not _has_any_required_scope(explicit_token, scope_options):
+            print(scope_error_code, file=sys.stderr)
+            print(scope_error_message, file=sys.stderr)
             sys.exit(2)
         return explicit_token
 
-    cached = _load_mail_cached_token(("Mail.Read",))
-    if cached:
-        token, _exp = cached
-        return token
+    for required_scopes in scope_options:
+        cached = _load_mail_cached_token(required_scopes)
+        if cached:
+            token, _exp = cached
+            return token
 
-    try:
-        token, _exp, _source = fetch_graph_token(required_scopes=("Mail.Read",))
-        return token
-    except TokenAcquisitionError as exc:
-        print(exc.code, file=sys.stderr)
-        print(str(exc), file=sys.stderr)
+    last_exc: TokenAcquisitionError | None = None
+    for required_scopes in scope_options:
+        try:
+            token, _exp, _source = fetch_graph_token(required_scopes=required_scopes)
+            return token
+        except TokenAcquisitionError as exc:
+            last_exc = exc
+
+    if last_exc is not None:
+        print(last_exc.code, file=sys.stderr)
+        print(str(last_exc), file=sys.stderr)
         sys.exit(2)
+
+    print(scope_error_code, file=sys.stderr)
+    print(scope_error_message, file=sys.stderr)
+    sys.exit(2)
 
 
 # ---------------------------------------------------------------------------
@@ -174,6 +202,15 @@ def _format_display_name(contact: dict | None) -> str:
     return name or "-"
 
 
+def _format_display_name_or_address(contact: dict | None) -> str:
+    """Gibt bevorzugt den Anzeigenamen, sonst die Mailadresse zurueck."""
+    if not isinstance(contact, dict):
+        return "-"
+    name = (contact.get("name") or "").strip()
+    address = (contact.get("address") or "").strip()
+    return name or address or "-"
+
+
 def _format_email_recipient_list(entries: list | None) -> str:
     """Formatiert replyTo/sender/from-Listen fuer kompakte Ausgabe."""
     if not entries:
@@ -238,12 +275,17 @@ def _slugify_filename(text: str, limit: int = 80) -> str:
     return slug[:limit].rstrip("_") or "mail_search"
 
 
-def _build_search_output_path(query: str) -> Path:
+def _encode_graph_id_for_path(value: str) -> str:
+    """Escaped Graph-IDs fuer die Verwendung als einzelnes URL-Pfadsegment."""
+    return quote(value, safe="")
+
+
+def _build_search_output_path(query: str, search_type: str = "mail") -> Path:
     """Baut den Pfad fuer die gespeicherte Suchausgabe in tmp/."""
     SEARCH_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     slug = _slugify_filename(query)
-    return SEARCH_OUTPUT_DIR / f"{timestamp}_mail_search_{slug}.md"
+    return SEARCH_OUTPUT_DIR / f"{timestamp}_{search_type}_search_{slug}.md"
 
 
 def _get_first_nonempty_lines(text: str, max_lines: int = BODY_PREVIEW_LINES) -> list[str]:
@@ -273,7 +315,8 @@ def _fetch_message_search_context(message_id: str, token: str, max_lines: int = 
             "body_type": "text",
         }
 
-    url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}"
+    encoded_message_id = _encode_graph_id_for_path(message_id)
+    url = f"https://graph.microsoft.com/v1.0/me/messages/{encoded_message_id}"
     params = {"$select": "body,ccRecipients"}
 
     try:
@@ -346,6 +389,12 @@ def _attachment_type(att: dict) -> str:
 
 def _extract_attachment_link_entries(message_id: str, attachments: list[dict]) -> list[dict[str, str]]:
     """Erzeugt verlinkbare Attachment-Eintraege fuer .md und STDOUT."""
+    return _extract_attachment_link_entries_for_resource("message", message_id, attachments)
+
+
+def _extract_attachment_link_entries_for_resource(resource_type: str, resource_id: str, attachments: list[dict]) -> list[dict[str, str]]:
+    """Erzeugt verlinkbare Attachment-Eintraege fuer Message- oder Event-Ressourcen."""
+    encoded_resource_id = _encode_graph_id_for_path(resource_id)
     entries: list[dict[str, str]] = []
     for att in attachments:
         att_type = _attachment_type(att)
@@ -354,7 +403,7 @@ def _extract_attachment_link_entries(message_id: str, attachments: list[dict]) -
         if att_type == "fileAttachment":
             att_id = (att.get("id") or "").strip()
             if att_id:
-                url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/attachments/{att_id}/$value"
+                url = f"https://graph.microsoft.com/v1.0/me/{resource_type}s/{encoded_resource_id}/attachments/{att_id}/$value"
         elif att_type == "referenceAttachment":
             url = (att.get("sourceUrl") or "").strip()
         if not url:
@@ -409,7 +458,8 @@ def _fetch_attachment_link_entries(message_id: str, token: str) -> tuple[list[di
     if not message_id or message_id == "-":
         return [], None
 
-    url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/attachments"
+    encoded_message_id = _encode_graph_id_for_path(message_id)
+    url = f"https://graph.microsoft.com/v1.0/me/messages/{encoded_message_id}/attachments"
     attachments: list[dict] = []
     while url:
         try:
@@ -427,9 +477,520 @@ def _fetch_attachment_link_entries(message_id: str, token: str) -> tuple[list[di
     return _extract_attachment_link_entries(message_id, attachments), None
 
 
+def _fetch_event_attachment_link_entries(event_id: str, token: str) -> tuple[list[dict[str, str]], str | None]:
+    """Laedt Event-Attachments und baut daraus verlinkbare Eintraege."""
+    if not event_id or event_id == "-":
+        return [], None
+
+    encoded_event_id = _encode_graph_id_for_path(event_id)
+    url = f"https://graph.microsoft.com/v1.0/me/events/{encoded_event_id}/attachments"
+    attachments: list[dict] = []
+    while url:
+        try:
+            r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=15)
+        except requests.RequestException:
+            return [], "Konnten nicht geladen werden"
+
+        if r.status_code != 200:
+            return [], "Konnten nicht geladen werden"
+
+        data = r.json()
+        attachments.extend(data.get("value", []) or [])
+        url = (data.get("@odata.nextLink") or "").strip() or None
+
+    return _extract_attachment_link_entries_for_resource("event", event_id, attachments), None
+
+
 # ---------------------------------------------------------------------------
 # CMD: search
 # ---------------------------------------------------------------------------
+
+def _execute_search_request(
+    token: str,
+    query: str,
+    entity_type: str,
+    size: int,
+    *,
+    start_at: int = 0,
+    top_results: bool = False,
+    fields: list[str] | None = None,
+    scope_error_code: str,
+) -> dict:
+    """Fuehrt einen Search-Request fuer einen Entity-Typ aus."""
+    request: dict[str, object] = {
+        "entityTypes": [entity_type],
+        "query": {"queryString": query},
+        "from": max(0, int(start_at)),
+        "size": min(size, 25),
+    }
+    if entity_type == "message":
+        request["enableTopResults"] = top_results
+    if fields:
+        request["fields"] = fields
+
+    body = {"requests": [request]}
+
+    try:
+        response = requests.post(
+            SEARCH_URL,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json=body,
+            timeout=20,
+        )
+    except requests.RequestException as exc:
+        print(f"ERROR: Request failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if response.status_code == 401:
+        print("TOKEN_EXPIRED", file=sys.stderr)
+        sys.exit(2)
+
+    if response.status_code == 403:
+        data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        msg = data.get("error", {}).get("message", "")
+        print(scope_error_code, file=sys.stderr)
+        print(f"403 Forbidden: {msg[:200]}", file=sys.stderr)
+        sys.exit(2)
+
+    if response.status_code != 200:
+        data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
+        msg = data.get("error", {}).get("message", response.text[:200])
+        print(f"ERROR {response.status_code}: {msg}", file=sys.stderr)
+        sys.exit(1)
+
+    return response.json()
+
+
+def _extract_hits_from_search_response(data: dict) -> tuple[int, list[dict]]:
+    """Extrahiert Gesamtzahl und Treffer aus dem Search-Response."""
+    total = 0
+    hits: list[dict] = []
+    for val in data.get("value", []):
+        for container in val.get("hitsContainers", []):
+            total = container.get("total", 0)
+            hits.extend(container.get("hits") or [])
+    return total, hits
+
+
+def _format_event_datetime(value: object) -> str:
+    """Formatiert event.start/event.end robust fuer kompakte Ausgabe."""
+    if not isinstance(value, dict):
+        return "-"
+    date_time = str(value.get("dateTime") or "").strip()
+    timezone = str(value.get("timeZone") or "").strip()
+    if date_time:
+        try:
+            normalized = date_time.replace("Z", "+00:00")
+            parsed = datetime.fromisoformat(normalized)
+            date_time = parsed.isoformat(timespec="seconds").replace("+00:00", "Z")
+        except ValueError:
+            pass
+    if date_time and timezone:
+        return f"{date_time} ({timezone})"
+    return date_time or timezone or "-"
+
+
+def _format_event_location(value: object) -> str:
+    """Formatiert die Event-Location robust."""
+    if not isinstance(value, dict):
+        return "-"
+    display_name = str(value.get("displayName") or "").strip()
+    return display_name or "-"
+
+
+def _format_attendee_list(entries: list | None, max_entries: int = 10) -> str:
+    """Formatiert Teilnehmerlisten und kuerzt lange Listen mit Gesamtzahl ab."""
+    if not entries:
+        return "-"
+    formatted = []
+    for entry in entries:
+        rendered = _format_display_name_or_address((entry or {}).get("emailAddress", {}))
+        if rendered != "-":
+            formatted.append(rendered)
+    if not formatted:
+        return "-"
+    if len(formatted) <= max_entries:
+        return "; ".join(formatted)
+    shortened = formatted[:max_entries] + [f"[...] ({len(formatted)})"]
+    return "; ".join(shortened)
+
+
+def _empty_event_search_context(received: str = "-") -> dict[str, str | bool]:
+    """Liefert den leeren Fallback fuer Event-Suchergebnisse."""
+    return {
+        "body_preview": "(Body konnte nicht geladen werden)",
+        "body_raw": "",
+        "body_type": "text",
+        "from": "-",
+        "reply_to": "-",
+        "start_date": received,
+        "web_link": "-",
+        "has_attachments": False,
+        "event_id": "",
+        "series_master_id": "",
+        "event_type": "",
+        "is_series": False,
+    }
+
+
+def _event_series_now() -> datetime:
+    """Liefert den Referenzzeitpunkt fuer die Auswahl der naechsten Serieninstanz."""
+    return datetime.now(timezone.utc)
+
+
+def _calendar_view_window_for_event_start(start_value: object) -> tuple[str, str] | None:
+    """Berechnet ein Tagesfenster fuer calendarView auf Basis von event.start."""
+    if not isinstance(start_value, dict):
+        return None
+    date_time_raw = str(start_value.get("dateTime") or "").strip()
+    if not date_time_raw:
+        return None
+    try:
+        normalized = date_time_raw.replace("Z", "+00:00")
+        start_dt = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if start_dt.tzinfo is None:
+        timezone_name = str(start_value.get("timeZone") or "").strip()
+        try:
+            tzinfo = ZoneInfo(timezone_name) if timezone_name else timezone.utc
+        except ZoneInfoNotFoundError:
+            tzinfo = timezone.utc
+        start_dt = start_dt.replace(tzinfo=tzinfo)
+    day_start = start_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    return day_start.isoformat().replace("+00:00", "Z"), day_end.isoformat().replace("+00:00", "Z")
+
+
+def _fetch_event_via_calendar_view(search_resource: dict, token: str) -> dict | None:
+    """Loest ein Search-Event ueber calendarView in das echte Eventobjekt auf."""
+    ical_uid = str(search_resource.get("iCalUId") or "").strip()
+    window = _calendar_view_window_for_event_start(search_resource.get("start"))
+    if not ical_uid or window is None:
+        return None
+
+    start_window, end_window = window
+    params = {
+        "startDateTime": start_window,
+        "endDateTime": end_window,
+        "$select": "id,body,attendees,organizer,start,webLink,hasAttachments,iCalUId,subject,type,seriesMasterId",
+        "$top": "200",
+    }
+    try:
+        r = requests.get(
+            "https://graph.microsoft.com/v1.0/me/calendarView",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=20,
+        )
+    except requests.RequestException:
+        return None
+
+    if r.status_code != 200:
+        return None
+
+    items = r.json().get("value", []) or []
+    exact_matches = [item for item in items if str(item.get("iCalUId") or "").strip() == ical_uid]
+    if not exact_matches:
+        return None
+
+    search_subject = str(search_resource.get("subject") or "").strip()
+    search_start = _format_event_datetime(search_resource.get("start"))
+    for item in exact_matches:
+        if search_subject and str(item.get("subject") or "").strip() != search_subject:
+            continue
+        if search_start != "-" and _format_event_datetime(item.get("start")) != search_start:
+            continue
+        return item
+
+    return exact_matches[0]
+
+
+def _fetch_event_direct(event_id: str, token: str) -> dict | None:
+    """Versucht ein Event direkt ueber /me/events/{id} zu laden."""
+    if not event_id or event_id == "-":
+        return None
+    encoded_event_id = _encode_graph_id_for_path(event_id)
+    url = f"https://graph.microsoft.com/v1.0/me/events/{encoded_event_id}"
+    params = {"$select": "id,body,attendees,organizer,start,webLink,hasAttachments,type,seriesMasterId"}
+
+    try:
+        r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=15)
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    return r.json()
+
+
+def _build_event_search_context_from_event(event: dict, fallback_start_date: str, fallback_event_id: str) -> dict[str, str | bool]:
+    """Baut den Event-Kontext aus einem bereits geladenen Eventobjekt."""
+    real_event_id = str(event.get("id") or "").strip() or fallback_event_id
+    body_raw = event.get("body", {}).get("content", "")
+    body_type = event.get("body", {}).get("contentType", "text")
+    if body_type == "html":
+        body_text = _html_to_text(body_raw)
+    else:
+        body_text = body_raw.strip()
+
+    lines = _get_first_nonempty_lines(body_text, BODY_PREVIEW_LINES)
+    if not lines:
+        body_preview = "(Kein Body-Inhalt verfuegbar)"
+    else:
+        body_preview = "\n".join(lines)
+
+    series_master_id = str(event.get("seriesMasterId") or "").strip()
+    event_type = str(event.get("type") or "").strip()
+    return {
+        "body_preview": body_preview,
+        "body_raw": body_raw,
+        "body_type": body_type,
+        "from": _format_display_name_or_address((event.get("organizer") or {}).get("emailAddress")),
+        "reply_to": _format_attendee_list(event.get("attendees")),
+        "start_date": _format_event_datetime(event.get("start")) or fallback_start_date,
+        "web_link": (event.get("webLink") or "").strip() or "-",
+        "has_attachments": bool(event.get("hasAttachments")),
+        "event_id": real_event_id,
+        "series_master_id": series_master_id,
+        "event_type": event_type,
+        "is_series": bool(series_master_id) or event_type in {"occurrence", "exception", "seriesMaster"},
+    }
+
+
+def _fetch_next_series_occurrence_event(series_master_id: str, token: str) -> dict | None:
+    """Laedt die naechste Instanz einer Terminserie ab jetzt."""
+    if not series_master_id:
+        return None
+    encoded_series_master_id = _encode_graph_id_for_path(series_master_id)
+    start_dt = _event_series_now()
+    end_dt = start_dt + timedelta(days=366)
+    params = {
+        "startDateTime": start_dt.isoformat().replace("+00:00", "Z"),
+        "endDateTime": end_dt.isoformat().replace("+00:00", "Z"),
+        "$select": "id,start,subject,type,seriesMasterId",
+        "$top": "200",
+    }
+    try:
+        r = requests.get(
+            f"https://graph.microsoft.com/v1.0/me/events/{encoded_series_master_id}/instances",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=20,
+        )
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    items = r.json().get("value", []) or []
+    if not items:
+        return None
+    items.sort(key=lambda item: _parse_event_datetime_for_sort(_format_event_datetime(item.get("start"))))
+    next_event_id = str(items[0].get("id") or "").strip()
+    if not next_event_id:
+        return None
+    return _fetch_event_direct(next_event_id, token)
+
+
+def _fetch_event_search_context(event_id: str, search_resource: dict, token: str, max_lines: int = BODY_PREVIEW_LINES) -> dict[str, str | bool]:
+    """Laedt Event-Details fuer Search-Treffer: Organizer, Teilnehmer und Body-Vorschau."""
+    fallback_received = _format_event_datetime((search_resource or {}).get("start"))
+    if not event_id or event_id == "-":
+        return _empty_event_search_context(fallback_received)
+
+    event = _fetch_event_via_calendar_view(search_resource, token)
+    if event is None:
+        event = _fetch_event_direct(event_id, token)
+    if event is None:
+        return _empty_event_search_context(fallback_received)
+    return _build_event_search_context_from_event(event, fallback_received, event_id)
+
+
+def _parse_event_datetime_for_sort(value: str) -> datetime:
+    """Parst das formatierte Event-Datum fuer Sortierung; Fallback auf max datetime."""
+    if not value or value == "-":
+        return datetime.max.replace(tzinfo=timezone.utc)
+    raw = value.split(" (", 1)[0].replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return datetime.max.replace(tzinfo=timezone.utc)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _dedupe_series_event_hits(resolved_hits: list[dict], token: str) -> list[dict]:
+    """Reduziert Terminserien auf genau einen Repräsentanten, den naechsten Termin."""
+    groups: dict[str, list[dict]] = {}
+    singles: list[dict] = []
+
+    for item in resolved_hits:
+        search_ctx = item["search_ctx"]
+        series_master_id = str(search_ctx.get("series_master_id") or "").strip()
+        event_type = str(search_ctx.get("event_type") or "").strip()
+        event_id = str(search_ctx.get("event_id") or "").strip()
+        if series_master_id:
+            group_key = f"series:{series_master_id}"
+        elif event_type in {"occurrence", "exception", "seriesMaster"}:
+            group_key = f"series-fallback:{event_id}"
+        else:
+            singles.append(item)
+            continue
+        groups.setdefault(group_key, []).append(item)
+
+    deduped: list[dict] = singles[:]
+    for group_items in groups.values():
+        group_items.sort(key=lambda entry: _parse_event_datetime_for_sort(str(entry["search_ctx"].get("start_date") or "-")))
+        chosen = group_items[0]
+        series_master_id = str(chosen["search_ctx"].get("series_master_id") or "").strip()
+        next_event = _fetch_next_series_occurrence_event(series_master_id, token) if series_master_id else None
+        if next_event is not None:
+            chosen = {
+                **chosen,
+                "subject": _truncate_text((next_event.get("subject") or chosen["subject"]).strip() or "-", 160),
+                "search_ctx": _build_event_search_context_from_event(
+                    next_event,
+                    str(chosen["search_ctx"].get("start_date") or "-"),
+                    str(chosen["search_ctx"].get("event_id") or ""),
+                ),
+            }
+        chosen["search_ctx"]["is_series"] = len(group_items) > 1 or bool(str(chosen["search_ctx"].get("series_master_id") or "").strip())
+        deduped.append(chosen)
+
+    deduped.sort(key=lambda entry: entry["rank"])
+    return deduped
+
+
+def _resolve_event_hits(hits: list[dict], token: str) -> list[dict]:
+    """Loest rohe Event-Search-Hits in Event-Kontexte auf."""
+    resolved_hits = []
+    for rank, hit in enumerate(hits, 1):
+        res = hit.get("resource", {})
+        hit_id = hit.get("hitId", "-")
+        resolved_hits.append(
+            {
+                "rank": rank,
+                "hit": hit,
+                "resource": res,
+                "subject": _truncate_text((res.get("subject") or "-").strip() or "-", 160),
+                "search_ctx": _fetch_event_search_context(hit_id, res, token),
+            }
+        )
+    return resolved_hits
+
+
+def _collect_rendered_event_hits(query: str, token: str, desired_results: int) -> tuple[int, list[dict]]:
+    """Laedt weitere Event-Search-Seiten, bis genug eindeutige Treffer fuer die Anzeige vorliegen."""
+    page_size = 25
+    target_count = max(1, int(desired_results or 0))
+    total = 0
+    offset = 0
+    raw_hits: list[dict] = []
+    rendered_hits: list[dict] = []
+
+    while True:
+        data = _execute_search_request(
+            token,
+            query,
+            "event",
+            page_size,
+            start_at=offset,
+            fields=EVENT_FIELDS,
+            scope_error_code="NO_CALENDAR_SCOPE",
+        )
+        page_total, page_hits = _extract_hits_from_search_response(data)
+        total = max(total, page_total)
+        if not page_hits:
+            break
+
+        raw_hits.extend(page_hits)
+        rendered_hits = _dedupe_series_event_hits(_resolve_event_hits(raw_hits, token), token)
+        if len(rendered_hits) >= target_count:
+            break
+
+        offset += len(page_hits)
+        if offset >= page_total or len(page_hits) < page_size:
+            break
+
+    return total, rendered_hits[:target_count]
+
+
+def _write_event_search_results(query: str, total: int, rendered_hits: list[dict], token: str) -> None:
+    """Schreibt bereits aufgeloeste Event-Treffer auf STDOUT und in eine Markdown-Datei."""
+    output_path = _build_search_output_path(query, "event")
+
+    output_lines = [f'# Kalender-Suche: "{query}"', "", f"**{total} Treffer** (zeige {len(rendered_hits)})", ""]
+
+    if not rendered_hits:
+        output_lines.append("Keine Termine gefunden.")
+        output_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+        rel_path = output_path.relative_to(REPO_ROOT)
+        print(f'Kalender-Suche: "{query}"')
+        print("Keine Termine gefunden.")
+        print(f"Detaildatei gespeichert in: {rel_path}")
+        return
+
+    print(f'### Kalender-Suche: "{query}"\n')
+    print(f"**{total} Treffer** (zeige {len(rendered_hits)})\n")
+
+    for i, item in enumerate(rendered_hits, 1):
+        subject = item["subject"]
+        search_ctx = item["search_ctx"]
+        hit_id = str((item.get("hit") or {}).get("hitId") or "-")
+        body_preview = search_ctx["body_preview"]
+        start_date = search_ctx["start_date"]
+        from_value = search_ctx["from"]
+        reply_to = search_ctx["reply_to"]
+        real_event_id = search_ctx["event_id"]
+        attachment_entries = []
+        attachment_error = None
+        if search_ctx["has_attachments"]:
+            attachment_entries, attachment_error = _fetch_event_attachment_link_entries(real_event_id or hit_id, token)
+        cloud_entries = _extract_cloud_links_from_body(search_ctx["body_raw"], search_ctx["body_type"])
+        attachment_entries = _merge_attachment_entries(attachment_entries, cloud_entries)
+        web_url = search_ctx["web_link"]
+
+        output_lines.append(f"## Treffer {i}")
+        output_lines.append(f"- startDate: {start_date}")
+        output_lines.append(f"- from: {from_value}")
+        output_lines.append(f"- replyTo: {reply_to}")
+        output_lines.append(f"- subject: {subject}")
+        if search_ctx["is_series"]:
+            output_lines.append("- note: Terminserie")
+        if attachment_entries:
+            output_lines.append("- attachments:")
+            for entry in attachment_entries:
+                label = _escape_markdown_link_label(entry["name"])
+                output_lines.append(f"  - [{label}]({entry['url']})")
+        elif attachment_error:
+            output_lines.append("- attachments:")
+            output_lines.append("  - _(Konnten nicht geladen werden)_")
+        output_lines.append("- bodyPreview:")
+        for line in body_preview.splitlines():
+            output_lines.append(f"  {line}")
+        output_lines.append(f"- webLink: {web_url}")
+        output_lines.append("")
+
+        print(f"#### Treffer {i}")
+        print(f"- startDate: {start_date}")
+        print(f"- from: {from_value}")
+        print(f"- replyTo: {reply_to}")
+        print(f"- subject: {subject}")
+        if search_ctx["is_series"]:
+            print("- note: Terminserie")
+        if attachment_entries:
+            print("- attachments:")
+            for entry in attachment_entries:
+                print(f"  - {entry['name']}")
+        print("- bodyPreview:")
+        for line in body_preview.splitlines():
+            print(f"  {line}")
+        print()
+
+    output_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
+    rel_path = output_path.relative_to(REPO_ROOT)
+    print(f"Detaildatei gespeichert in: {rel_path}")
+
 
 def cmd_search(
     query: str,
@@ -437,61 +998,30 @@ def cmd_search(
     size: int = DEFAULT_PAGE_SIZE,
     top_results: bool = True,
     only_summary: bool = False,
+    events_only: bool = False,
 ) -> None:
-    """Fuehrt Mail-Suche aus. Exit-Code 2 bei fehlendem/abgelaufenem Token."""
-    token = _resolve_token(token)
-
-    # Search ausfuehren
-    body = {
-        "requests": [
-            {
-                "entityTypes": ["message"],
-                "query": {"queryString": query},
-                "from": 0,
-                "size": min(size, 25),
-                "enableTopResults": top_results,
-            }
-        ]
-    }
-
-    try:
-        r = requests.post(
-            SEARCH_URL,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json=body,
-            timeout=20,
+    """Fuehrt wahlweise Mail- oder Event-Suche aus."""
+    if events_only:
+        token = _resolve_token(
+            token,
+            scope_options=EVENT_SCOPE_OPTIONS,
+            scope_error_code="NO_CALENDAR_SCOPE",
+            scope_error_message="Der uebergebene Token hat keinen Calendars.Read Scope.",
         )
-    except requests.RequestException as e:
-        print(f"ERROR: Request failed: {e}", file=sys.stderr)
-        sys.exit(1)
+        total, rendered_hits = _collect_rendered_event_hits(query, token, size)
+        _write_event_search_results(query, total, rendered_hits, token)
+        return
 
-    if r.status_code == 401:
-        # Token ungueltig
-        print("TOKEN_EXPIRED", file=sys.stderr)
-        sys.exit(2)
-
-    if r.status_code == 403:
-        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-        msg = data.get("error", {}).get("message", "")
-        print("NO_MAIL_SCOPE", file=sys.stderr)
-        print(f"403 Forbidden: {msg[:200]}", file=sys.stderr)
-        sys.exit(2)
-
-    if r.status_code != 200:
-        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-        msg = data.get("error", {}).get("message", r.text[:200])
-        print(f"ERROR {r.status_code}: {msg}", file=sys.stderr)
-        sys.exit(1)
-
-    data = r.json()
-
-    # Ergebnisse extrahieren
-    total = 0
-    hits = []
-    for val in data.get("value", []):
-        for container in val.get("hitsContainers", []):
-            total = container.get("total", 0)
-            hits.extend(container.get("hits") or [])
+    token = _resolve_token(token)
+    data = _execute_search_request(
+        token,
+        query,
+        "message",
+        size,
+        top_results=top_results,
+        scope_error_code="NO_MAIL_SCOPE",
+    )
+    total, hits = _extract_hits_from_search_response(data)
 
     output_path = _build_search_output_path(query)
     output_lines = [f'# Mail-Suche: "{query}"', "", f"**{total} Treffer** (zeige {len(hits)})", ""]
@@ -624,7 +1154,8 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
     """
     token = _resolve_token(token)
 
-    url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}"
+    encoded_message_id = _encode_graph_id_for_path(message_id)
+    url = f"https://graph.microsoft.com/v1.0/me/messages/{encoded_message_id}"
     select_fields = "subject,from,toRecipients,ccRecipients,receivedDateTime,body,hasAttachments,importance,conversationId"
     params = {"$select": select_fields}
 
@@ -669,7 +1200,7 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
     attachments = []
     has_cid = "cid:" in body_raw
     if has_attach or has_cid:
-        att_url = f"https://graph.microsoft.com/v1.0/me/messages/{message_id}/attachments"
+        att_url = f"https://graph.microsoft.com/v1.0/me/messages/{encoded_message_id}/attachments"
         try:
             r_att = requests.get(att_url, headers={"Authorization": f"Bearer {token}"}, timeout=20)
             if r_att.status_code == 200:
@@ -841,13 +1372,14 @@ def main() -> None:
 
     if cmd == "search":
         if len(sys.argv) < 3:
-            print("Usage: python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search \"Suchbegriff\" [--size N] [--date-order] [--only-summary] [--token TOKEN]")
+            print("Usage: python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search \"Suchbegriff\" [--events] [--size N] [--date-order] [--only-summary] [--token TOKEN]")
             sys.exit(1)
         query = sys.argv[2]
         token = None
         size = DEFAULT_PAGE_SIZE
         top_results = "--date-order" not in sys.argv
         only_summary = "--only-summary" in sys.argv
+        events_only = "--events" in sys.argv
         if "--token" in sys.argv:
             idx = sys.argv.index("--token")
             if idx + 1 < len(sys.argv):
@@ -856,7 +1388,7 @@ def main() -> None:
             idx = sys.argv.index("--size")
             if idx + 1 < len(sys.argv):
                 size = int(sys.argv[idx + 1])
-        cmd_search(query, token, size, top_results, only_summary)
+        cmd_search(query, token, size, top_results, only_summary, events_only)
 
     elif cmd == "read":
         if len(sys.argv) < 3:

@@ -6,8 +6,9 @@ description: "M365 Mail Search ueber Graph Search API ausfuehren. Durchsucht Out
 # Skill: M365 Mail Search (Graph Search API)
 
 Durchsucht **Outlook-Mails** ueber den Graph Search API Endpoint `/v1.0/search/query` mit `entityTypes: ["message"]`.
+Das Script unterstuetzt zusaetzlich einen exklusiven Kalender-Modus per `--events`, der nur `entityTypes: ["event"]` abfragt und die Ausgabe auf das Mail-Schema mappt (`receivedDateTime`, `from`, `replyTo`, `subject`, `attachments`, `bodyPreview`, `webLink`).
 
-> **Wichtig:** Dieser Endpoint benoetigt einen Token mit **Mail.Read** Scope. Der Copilot-Token (NAA) hat diesen Scope **nicht**. Es wird zwingend ein **Teams-Web-Token** benoetigt.
+> **Wichtig:** Der Endpoint benoetigt fuer Mail-Suche **Mail.Read**, fuer Kalender-Suche **Calendars.Read**. Der Copilot-Token (NAA) hat diese Scopes typischerweise **nicht**. Es wird zwingend ein **Teams-Web-Token** benoetigt.
 
 ## Wann verwenden?
 
@@ -63,6 +64,9 @@ Falls keine Ergebnisse → Skill nicht nutzbar (Plan-Modus oder MCP nicht gestar
 # via run_in_terminal
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "SUCHBEGRIFF"
 
+# Optional: Outlook-Kalender statt Mails durchsuchen
+python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "SUCHBEGRIFF" --events
+
 # Optional: mehr Ergebnisse (max 25)
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py search "SUCHBEGRIFF" --size 25
 
@@ -78,6 +82,9 @@ python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py
 - `--date-order` deaktiviert dieses Hybridranking und nutzt fuer alle Treffer die normale Datumssortierung des Endpoints.
 - Standardmaessig laedt das Script fuer jeden Treffer die Mail nach und zeigt `bodyPreview` als erste **10** nichtleere Body-Zeilen.
 - `--only-summary` zeigt statt `bodyPreview` nur `summary` aus dem Search-Response und spart die zusaetzlichen Mail-Nachlade-Calls.
+- `--events` schaltet in einen **exklusiven** Kalender-Modus. In diesem Lauf werden keine Mails gesucht; der Agent muss fuer Mail + Kalender zwei getrennte Script-Aufrufe machen.
+- Im Event-Modus werden Organizer und Teilnehmer per Event-Detail-GET nachgeladen; `replyTo` zeigt die Teilnehmerliste und kuerzt ab mehr als 10 Personen mit `[...] (N)` ab.
+- Im Event-Modus entfallen `end` und `summary`; stattdessen werden `bodyPreview` und `attachments` analog zur Mail-Suche ausgegeben.
 - Das Script versucht den Mail-Token jetzt **selbststaendig** zu beschaffen:
   - vorhandenen Cache nutzen
   - Teams-LocalStorage scannen
@@ -251,7 +258,7 @@ Rauschworte wie `INTERNAL` werden aus `summary` und `bodyPreview` entfernt.
 | Parameter | Wert |
 |-----------|------|
 | **Endpoint** | `POST https://graph.microsoft.com/v1.0/search/query` |
-| **Auth** | Bearer Token mit **Mail.Read** Scope |
+| **Auth** | Bearer Token mit **Mail.Read** fuer `message`, **Calendars.Read** fuer `event` |
 | **App-ID** | `5e3ce6c0-2b1f-4285-8d4b-75ee78787346` (Teams Web Client) |
 | **Request-Body** | `{"requests": [{"entityTypes": ["message"], "query": {"queryString": "..."}, "from": 0, "size": 10}]}` |
 | **Response** | `{"value": [{"hitsContainers": [{"total": N, "hits": [...]}]}]}` |
