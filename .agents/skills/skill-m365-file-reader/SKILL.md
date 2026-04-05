@@ -7,7 +7,7 @@ description: "Dateien aus SharePoint und OneDrive ueber die Graph API lesen. Unt
 
 Liest **Dateien aus SharePoint und OneDrive** ueber die Graph API und gibt den Inhalt als Text aus — ohne Browser, ohne Download-Dialog.
 
-> **Script:** `scripts/m365_file_reader.py`
+> **Script:** `scripts/m365_file_reader.py`, Pfad relativ zum **Repo-Root**
 
 ## Wann verwenden?
 
@@ -31,7 +31,7 @@ Liest **Dateien aus SharePoint und OneDrive** ueber die Graph API und gibt den I
 | Format | Ausgabe |
 |--------|---------|
 | **.pptx** | Text pro Folie (inkl. Tabellen und Notes) |
-| **.xlsx / .xls** | Alle Sheets als CSV (Semikolon-getrennt) |
+| **.xlsx / .xls** | Alle Sheets als CSV (Semikolon-getrennt), ausgegeben als einzelne `### Sheet:`-Abschnitte auf stdout |
 | **.docx** | Volltext mit Ueberschriften (Heading 1/2/3) |
 | **.pdf** | Text pro Seite (benoetigt `pdfplumber`) |
 | **.png/.jpg/.jpeg/.gif/.bmp/.tiff/.svg/.webp** | Auto-Download nach `userdata/tmp/` + Bild-Metadaten (Abmessungen, Modus) |
@@ -40,7 +40,7 @@ Liest **Dateien aus SharePoint und OneDrive** ueber die Graph API und gibt den I
 
 ## Voraussetzungen
 
-1. **Graph API Token** — gleicher Token-Cache wie `$skill-m365-copilot-file-search`
+1. **Graph API Token** — wird zentral ueber `scripts/m365_copilot_graph_token.py` aufgeloest
 2. **Python-Pakete:** `requests`, `python-pptx`, `openpyxl`, `python-docx` (alle vorinstalliert)
 3. **Optional:** `pdfplumber` (fuer PDF), `Pillow` (fuer Bild-Dimensionen)
 
@@ -60,6 +60,8 @@ python scripts/m365_file_reader.py read "https://volkswagengroup.sharepoint.com/
 python scripts/m365_file_reader.py read "BN-SK_Abkündigung_CHD-LD_Toolsuite_20260316_tcm.pptx"
 ```
 
+Hinweis: Bei exaktem Dateinamen kann `read "<dateiname>"` die Datei direkt finden; ein separater `search`-Aufruf ist dann nicht erforderlich.
+
 **C) driveId|itemId (aus vorheriger Suche):**
 ```bash
 python scripts/m365_file_reader.py read "b!MVdXi...|01XAS2D2..."
@@ -73,47 +75,19 @@ python scripts/m365_file_reader.py read "b!MVdXi...|01XAS2D2..."
 
 ### Schritt 2: Token erneuern (nur bei Exit 2)
 
-Gleicher Token-Refresh wie in `$skill-m365-copilot-file-search`:
+Der File Reader nutzt denselben zentralen Resolver wie die Copilot File Search:
 
-**2a.** M365 Copilot oeffnen:
-```
-mcp_playwright_browser_navigate(url="https://m365.cloud.microsoft/chat")
-```
-3 Sekunden warten.
-
-**2b.** Token via NAA holen:
-```javascript
-// via mcp_playwright_browser_evaluate
-async () => {
-  const nas = window.nestedAppAuthService;
-  if (!nas) return { error: 'NAA not ready' };
-  const result = await nas.handleRequest({
-    method: 'GetToken',
-    requestId: 'file-reader-' + Date.now(),
-    tokenParams: {
-      clientId: 'c0ab8ce9-e9a0-42e7-b064-33d422df41f1',
-      resource: 'https://graph.microsoft.com',
-      scope: 'https://graph.microsoft.com/.default'
-    }
-  }, new URL(window.location.href));
-  if (!result.success || !result.token?.access_token) return { error: 'Token failed' };
-  return { success: true, token: result.token.access_token };
-}
-```
-
-**2c.** Token cachen (mit automatischer Validierung) und erneut lesen:
 ```bash
-python scripts/copilot_search.py cache-token TOKEN_AUS_2B
+python scripts/m365_copilot_graph_token.py ensure
 python scripts/m365_file_reader.py read "URL_ODER_NAME"
 ```
 
-`cache-token` prueft den Token jetzt automatisch gegen `/v1.0/me`.
-Bei **Exit 2** (Token serverseitig ungueltig trotz gueltigem JWT-Claim):
-1. M365-Seite neu laden (`mcp_playwright_browser_navigate` erneut)
-2. 5 Sekunden warten
-3. Token erneut via NAA holen (Schritt 2b)
-4. `cache-token` erneut ausfuehren
-5. Maximal **2 Versuche** — danach Fehler an User melden
+Fuer einen frischen Token:
+
+```bash
+python scripts/m365_copilot_graph_token.py ensure --force
+python scripts/m365_file_reader.py read "URL_ODER_NAME"
+```
 
 ### Optionaler Download
 

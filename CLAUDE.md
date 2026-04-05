@@ -6,6 +6,7 @@
 - Bei Budget, Finanz, Beauftragungs, Abruf Themen  **IMMER** eine neue Auswertung erzeugen, nie eine vorhandene Auswertung bzw. .md-Datei verwenden.
 - Git Commit IMMER ueber Skill `$git-commit` ausfuehren, NIEMALS manuell `git commit` aufrufen.
 - Git Push IMMER ueber Skill `$git-push` ausfuehren, NIEMALS manuell `git push` aufrufen.
+- Dateiverschiebungen und Umbenennungen IMMER mit `git mv` ausfuehren, NIEMALS per `mv`, `Move-Item` oder manuelles Loeschen + Neuerstellen, außer datei ist unversioniert.
 
 # Skill-Pflicht (MUSS vor jeder Antwort geprueft werden):
 
@@ -66,5 +67,13 @@ Bevor ein Skill geladen wird, der einen MCP-Server benoetigt, MUSS geprueft werd
 → PFLICHT: Skill `$skill-m365-copilot-file-search` laden und befolgen. Nutzt Graph Beta API ueber Playwright NAA-Token.
 - M365 Copilot Chat | frage Copilot | schicke diesen Prompt an Copilot | lasse M365 Copilot das beantworten  
 → PFLICHT: Skill `$skill-m365-copilot-chat` laden und befolgen.
-- M365 Datei lesen | Inhalt einer SharePoint-Datei | PPTX aus OneDrive lesen | Excel aus SharePoint als CSV | PDF aus SharePoint extrahieren | Bild aus OneDrive herunterladen | was steht in der Datei  
+- M365 Datei lesen | Inhalt einer SharePoint-Datei | PPTX aus OneDrive lesen | Excel aus SharePoint als CSV | PDF aus SharePoint extrahieren | Bild aus OneDrive herunterladen | was steht in der Datei
 → PFLICHT: Skill `$skill-m365-file-reader` laden und befolgen. Liest PPTX, XLSX, DOCX, PDF und Bilder ueber Graph API.
+- M365 Mail Search | Mail suchen | Outlook durchsuchen | finde Mail zu | habe ich eine Mail von | Mail-Suche | E-Mail finden | Postfach durchsuchen
+→ PFLICHT: Skill `$skill-m365-copilot-mail-search` laden und befolgen. Durchsucht Outlook-Mails ueber Graph Search API. Benoetigt Teams-Token mit Mail.Read Scope.
+- Graph Scopes pruefen | 403 Forbidden Ursache | fehlende Scopes | Token-Diagnose | Graph Probe
+→ PFLICHT: Skill `$skill-m365-graph-scope-probe` laden und befolgen. Diagnose fuer Graph-Token, fehlende Scopes und 401/403 bei M365-Skills.
+- Outlook Mail suchen | Mail-Thread | verwandte Mails | Mail vollstaendig lesen | Mail-Body | alle Empfaenger | Outlook Suche | wer hat noch ueber X geschrieben | Mail nachladen
+→ PFLICHT: Skill `$skill-outlook` laden und befolgen. Durchsucht lokales Outlook per COM (Suche, Thread-Sicht, verwandte Mails, einzelne Mail vollstaendig lesen).
+- ChatGPT Research | frage ChatGPT | ChatGPT antworten lassen | was sagt ChatGPT zu | schicke Frage an ChatGPT
+→ PFLICHT: Skill `$skill-chatgpt-research` laden und befolgen. Stellt Frage an ChatGPT via Playwright CDP und speichert Antwort als Markdown.

@@ -2,7 +2,7 @@
 Fügt eine Aura-Card-Kachel in eine bestimmte Sektion des EKEK/1 Dashboards ein.
 
 Verwendung:
-  python scripts/dashboard_add_card.py <content_json> <output_file> --marker <marker_text> --card <card_json>
+  python .agents/skills/skill-update-confluence-page/dashboard_add_card.py <content_json> <output_file> --marker <marker_text> --card <card_json>
 
 Argumente:
   content_json   Pfad zur JSON-Datei mit dem Confluence-Seiteninhalt
@@ -27,7 +27,7 @@ Sektionen und passende Marker:
   KI-Tools und Chatbots       -> "EHD Chatbot (Eddy)"
 
 Beispiel:
-  python scripts/dashboard_add_card.py page.json out.html \
+  python .agents/skills/skill-update-confluence-page/dashboard_add_card.py page.json out.html \
     --marker "EHD Chatbot (Eddy)" \
     --card '{"title":"Presenting","body":"Präsentationstool","color":"#66afff","icon":"faDesktop","href":"https://presenting.thecloud.vwapps.run/start","hrefType":"link","hrefTarget":"_blank"}'
 """

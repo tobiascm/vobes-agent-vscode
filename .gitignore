@@ -14,3 +14,6 @@ config/src_zip_config.toml
 .specify/init-options.json
 specs/001-docs-spec-deep/checklists/requirements.md
 .export/*
+vobes_agent.egg-info/*
+tmp/*
+restore/*

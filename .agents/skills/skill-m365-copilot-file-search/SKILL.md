@@ -7,7 +7,7 @@ description: "M365 Copilot File Search ueber Graph Beta API ausfuehren. Durchsuc
 
 Durchsucht **SharePoint und OneDrive** ueber den Graph Beta Copilot Search Endpoint mit Copilot-optimiertem Ranking.
 
-> **Dokumentation:** [docs/m365-copilot-api-research.md](../../docs/m365-copilot-api-research.md)
+> **Dokumentation:** [docs/Analyse-m365-copilot-api-research.md](../../docs/Analyse-m365-copilot-api-research.md)
 
 ## Wann verwenden?
 
@@ -43,75 +43,24 @@ Falls keine Ergebnisse → Skill nicht nutzbar (Plan-Modus oder MCP nicht gestar
 
 ## Workflow
 
-> **Script:** `scripts/copilot_search.py` — Token-Caching, Search-Aufruf und Formatierung in einem Script.
+> **Scripts:** `.agents/skills/skill-m365-copilot-file-search/copilot_file_search.py` + `scripts/m365_copilot_graph_token.py` — Search, automatische Token-Beschaffung via Playwright MCP/NAA, Caching und Formatierung.
 
 ### Schritt 1: Search ausfuehren
 
 ```bash
-# via run_in_terminal
-python scripts/copilot_search.py search "SUCHBEGRIFF"
+python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "SUCHBEGRIFF"
 ```
 
 - **Exit 0** → Ergebnisse werden als Markdown-Tabelle ausgegeben. Fertig.
-- **Exit 2** → `TOKEN_EXPIRED` auf stderr. Weiter zu Schritt 2.
-- **Exit 1** → sonstiger Fehler (Meldung auf stderr).
-
-### Schritt 2: Token via Playwright NAA holen (nur bei Exit 2)
-
-**2a.** M365 Copilot oeffnen:
-
-```
-mcp_playwright_browser_navigate(url="https://m365.cloud.microsoft/chat")
-```
-
-**3 Sekunden warten** (damit `nestedAppAuthService` verfuegbar wird).
-
-**2b.** Token extrahieren:
-
-```javascript
-// via mcp_playwright_browser_evaluate
-async () => {
-  const nas = window.nestedAppAuthService;
-  if (!nas) return { error: 'NAA not ready — page not fully loaded' };
-
-  const result = await nas.handleRequest({
-    method: 'GetToken',
-    requestId: 'copilot-search-' + Date.now(),
-    tokenParams: {
-      clientId: 'c0ab8ce9-e9a0-42e7-b064-33d422df41f1',
-      resource: 'https://graph.microsoft.com',
-      scope: 'https://graph.microsoft.com/.default'
-    }
-  }, new URL(window.location.href));
-
-  if (!result.success || !result.token?.access_token) {
-    return { error: 'Token request failed', details: result.error };
-  }
-  return { success: true, token: result.token.access_token };
-}
-```
-
-**2c.** Token cachen (mit automatischer Validierung) und Search erneut ausfuehren:
+- Das Script ruft intern automatisch `python scripts/m365_copilot_graph_token.py ensure` auf.
+- Der Token wird ueber Playwright MCP + `nestedAppAuthService.GetToken(...)` geholt, lokal gegen `/v1.0/me` validiert und in `userdata/tmp/.graph_token_cache.json` gespeichert.
+- Fuer einen garantiert frischen Token:
 
 ```bash
-# Token cachen — prueft automatisch gegen /v1.0/me
-python scripts/copilot_search.py cache-token TOKEN_AUS_2B
-
-# Search erneut
-python scripts/copilot_search.py search "SUCHBEGRIFF"
+python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "SUCHBEGRIFF" --force
 ```
 
-**Fehlerbehandlung:**
-- `NAA not ready` → `mcp_playwright_browser_wait_for` mit 3s, dann Retry (max. 2x)
-- `Token request failed` → M365-Session abgelaufen, User muss sich neu anmelden
-- `cache-token` liefert **Exit 2** (Token serverseitig ungueltig trotz gueltigem JWT-Claim):
-  1. M365-Seite neu laden (`mcp_playwright_browser_navigate` erneut)
-  2. 5 Sekunden warten
-  3. Token erneut via NAA holen (Schritt 2b)
-  4. `cache-token` erneut ausfuehren
-  5. Maximal **2 Versuche** — danach Fehler an User melden
-
-### Schritt 3: Ergebnisse praesentieren
+### Schritt 2: Ergebnisse praesentieren
 
 Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an den User weitergeben.
 
@@ -119,10 +68,13 @@ Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an 
 
 | Befehl | Zweck |
 |--------|-------|
-| `python scripts/copilot_search.py search "query"` | Suche ausfuehren (Cache → API → Markdown) |
-| `python scripts/copilot_search.py search "query" --token TOKEN` | Suche mit explizitem Token (wird auch gecacht) |
-| `python scripts/copilot_search.py cache-token TOKEN [EXP]` | Token in Cache speichern |
-| `python scripts/copilot_search.py check-token` | Cache-Status pruefen |
+| `python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "query"` | Suche ausfuehren (auto Resolver → API → Markdown) |
+| `python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "query" --force` | Suche mit frischem NAA-Token, Cache ignorieren |
+| `python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "query" --token TOKEN` | Debug-only: Suche mit explizitem Token |
+| `python scripts/m365_copilot_graph_token.py ensure` | Gueltigen Token sicherstellen (Cache zuerst) |
+| `python scripts/m365_copilot_graph_token.py ensure --force` | Frischen Token via MCP/NAA erzwingen |
+| `python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py check-token` | Cache-Status pruefen |
+| `python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py cache-token TOKEN [EXP]` | Debug-only: Token manuell in Cache speichern |
 
 ---
 
@@ -130,14 +82,15 @@ Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an 
 
 | Parameter | Wert |
 |-----------|------|
-| **Endpoint** | `POST https://graph.microsoft.com/beta/copilot/microsoft.graph.search` |
+| **Endpoint** | `POST https://graph.microsoft.com/beta/copilot/search` |
 | **Auth** | Bearer Token (Graph API, `aud: https://graph.microsoft.com`) |
-| **App-ID** | `c0ab8ce9-e9a0-42e7-b064-33d422df41f1` (M365ChatClient) |
+| **App-ID** | `c0ab8ce9-e9a0-42e7-b064-33d422df41f1` (M365ChatClient, NAA via Copilot) |
 | **Request-Body** | `{"query": "<Suchanfrage>"}` |
 | **Response** | `{"searchHits": [{webUrl, resourceType, preview}]}` |
 | **Typische Treffer** | 25 pro Anfrage |
 | **Quellen** | SharePoint, OneDrive, weitere M365-Inhalte |
 | **Token-Laufzeit** | ca. 1 Stunde |
+
 
 ## Haeufige Fehler
 
@@ -145,7 +98,7 @@ Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an 
 |--------|---------|---------|
 | `NAA not ready` | Seite nicht geladen | `mcp_playwright_browser_wait_for` mit 3s, dann Retry |
 | `Token request failed` | Session abgelaufen | User muss sich in M365 neu anmelden |
-| `401 Unauthorized` | Token abgelaufen | Schritt 2 erneut ausfuehren |
+| `401 Unauthorized` | Token abgelaufen | Search erneut starten oder `--force` verwenden |
 | `403 Forbidden` | Keine Copilot-Lizenz | User braucht M365 Copilot Lizenz |
 | `CORS Error` (bei Python) | Sydney-NanoProxy | Nur im Browser ausfuehrbar, NICHT per Python/requests |
 
@@ -158,3 +111,11 @@ Das Script gibt die Treffer bereits als Markdown-Tabelle aus. Ausgabe direkt an 
 "KBL VEC Datenmodell"
 "Projektplanung 2026"
 ```
+
+### Warum dieser Endpoint statt `/v1.0/search/query`?
+
+Der Copilot-Endpoint liefert **semantisch erweiterte Ergebnisse**. Beispiel fuer Query `AMOB@EK-corona.pdf`:
+- **Copilot Search**: 6 Treffer — exakte Datei + 5 thematisch verwandte Dokumente
+- **Graph Search** (`/v1.0/search/query`, `driveItem`): 1 Treffer — nur exakter Dateiname-Match
+
+Fuer Dateisuche ist der Copilot-Endpoint deutlich besser, weil er semantischen Kontext mitbringt und verwandte Dokumente findet, nicht nur exakte Keyword-Matches.

@@ -139,7 +139,7 @@ async () => {
 **Schritt 2:** Token cachen (schlaegt fehl)
 
 ```bash
-python scripts/copilot_search.py cache-token "eyJ0eXAi..."
+python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py cache-token "eyJ0eXAi..."
 ```
 
 **Ergebnis:** Script meldet "Token cached (expires in 70m 30s)" — sieht erfolgreich aus.
@@ -453,4 +453,4 @@ Pfad:   userdata/tmp/.graph_token_cache.json
 Format: {"token": "eyJ0eXAi...", "exp": 1774821264}
 ```
 
-Alle drei M365-Scripts (`copilot_search.py`, `m365_file_reader.py`, `m365_copilot_chat.py`) nutzen dieselbe Cache-Datei.
+Alle drei M365-Scripts (`copilot_file_search.py`, `m365_file_reader.py`, `m365_copilot_chat.py`) nutzen dieselbe Cache-Datei.

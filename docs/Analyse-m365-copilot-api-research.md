@@ -156,6 +156,8 @@ Liefert die Navigation-Links zu allen Copilot-Sub-Ressourcen:
 
 #### `POST /beta/copilot/microsoft.graph.search` — **200 OK** ✅
 
+> **Hinweis:** Die kompakte URL `/beta/copilot/search` ist ein Alias und liefert identische Ergebnisse (getestet 01.04.2026). In Scripts wird die kürzere Variante verwendet.
+
 **Einziger voll funktionierender Copilot-Endpoint.**
 
 ```http
