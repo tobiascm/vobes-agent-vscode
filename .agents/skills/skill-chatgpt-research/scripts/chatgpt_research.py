@@ -1032,6 +1032,11 @@ def _load_playwright_server_config() -> PlaywrightServerConfig:
     if "PLAYWRIGHT_MCP_EXTENSION_TOKEN" not in env and not os.environ.get("PLAYWRIGHT_MCP_EXTENSION_TOKEN"):
         raise McpError("PLAYWRIGHT_MCP_EXTENSION_TOKEN fehlt fuer den Bridge Mode.")
 
+    # Inject -y so npx never blocks on an interactive install/update prompt.
+    cmd_stem = Path(command).stem.lower().replace(".cmd", "")
+    if cmd_stem == "npx" and "-y" not in args:
+        args = ["-y"] + args
+
     return PlaywrightServerConfig(command=command, args=args, env=env, cwd=PROJECT_ROOT)
 
 
@@ -1082,22 +1087,57 @@ def _is_transient_bridge_error(exc: Exception) -> bool:
     return any(pattern in message for pattern in TRANSIENT_BRIDGE_ERROR_PATTERNS)
 
 
+def _is_retryable_start_error(exc: Exception) -> bool:
+    """Return True for errors that may resolve on a fresh subprocess start."""
+    if _is_transient_bridge_error(exc):
+        return True
+    # McpError covers initialize timeouts (extension not yet active) and
+    # MCP-server-not-responding situations that the warm-up may have fixed.
+    return isinstance(exc, McpError)
+
+
+def _warm_up_bridge(client: McpStdioClient) -> None:
+    """Trigger the Extension bridge handshake with a cheap, side-effect-free call.
+
+    The Playwright MCP Extension only establishes its browser connection on the
+    first actual browser call (not at initialize time).  Sending browser_tabs
+    list here forces that handshake early so that the real browser_navigate
+    below does not hit a cold-attach delay or timeout.
+    """
+    try:
+        client.call_tool("browser_tabs", {"action": "list"})
+    except Exception:
+        pass  # Best-effort – a failure here will surface at the next real call.
+
+
+_START_RETRY_DELAYS = (3, 6)  # seconds to wait before attempt 1, attempt 2
+
+
 def _start_client_and_fetch_state(
     config: PlaywrightServerConfig,
     chat_url: str,
 ) -> tuple[McpStdioClient, list[str], dict[str, Any], int]:
     last_exc: Exception | None = None
-    for attempt in range(2):
+    max_attempts = len(_START_RETRY_DELAYS) + 1  # 3 total
+    for attempt in range(max_attempts):
         client = McpStdioClient(config)
         try:
             client.start()
+            _warm_up_bridge(client)
             tools = _ensure_required_tools(client)
             state = _navigate_and_check(client, chat_url)
             return client, tools, state, attempt
         except Exception as exc:
             client.close()
             last_exc = exc
-            if attempt == 0 and _is_transient_bridge_error(exc):
+            if attempt < max_attempts - 1 and _is_retryable_start_error(exc):
+                delay = _START_RETRY_DELAYS[attempt]
+                print(
+                    f"[start] Versuch {attempt + 1} fehlgeschlagen ({exc}), "
+                    f"neuer Versuch in {delay}s...",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
                 continue
             raise
 
