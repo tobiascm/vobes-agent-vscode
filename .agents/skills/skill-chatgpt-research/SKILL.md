@@ -79,6 +79,18 @@ Globaler Schutz:
 
 ## Standard-Workflow
 
+> **⚠️ WARTEZEIT: Das Script kann bis zu 30 Minuten laufen.**
+> Das ist normal – ChatGPT Research mit "Laengeres Nachdenken" braucht Zeit.
+> Solange alle 30 Sekunden Statusmeldungen auf stdout erscheinen, arbeitet es korrekt.
+> **NIEMALS vorzeitig mit `stop_powershell` abbrechen.**
+> Das Script beendet sich selbst nach Ablauf des Timeouts (Exit `4`).
+>
+> Erwartete stdout-Sequenz:
+> 1. `ChatGPT wird geöffnet...` (sofort)
+> 2. `Prompt abgeschickt, warte auf Antwort (max 30 Min.)...` (nach 10-30s)
+> 3. `ChatGPT recherchiert noch (0:30 / max 30 Min.), bitte warten...` (alle 30s)
+> 4. `OK: Antwort gespeichert → tmp/...` (am Ende)
+
 ### 1. Schnellcheck
 
 ```bash
@@ -136,7 +148,7 @@ python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py close
 Standardmaessig:
 - Markdown: `tmp/YYYYMMDD_chatgpt_<slug>.md`
 - Roh-HTML: gleiches Verzeichnis und gleicher Basisname wie Markdown, nur `.html`
-- waehrend `run` auf `stdout`: Schrittmeldungen wie `ChatGPT wird geöffnet...` oder bei `--follow-up` `Gespeicherter Chat wird geöffnet...`, dann `Prompt abgeschickt...` und danach `ChatGPT recherchiert noch, bitte warten...`
+- waehrend `run` auf `stdout`: Schrittmeldungen wie `ChatGPT wird geöffnet...` oder bei `--follow-up` `Gespeicherter Chat wird geöffnet...`, dann `Prompt abgeschickt, warte auf Antwort (max 30 Min.)...` und danach alle 30 Sekunden `ChatGPT recherchiert noch (M:SS / max 30 Min.), bitte warten...`
 - nach Erfolg auf `stdout`: menschenlesbarer `OK:`-Einzeiler mit Verweis auf die Markdown-Datei
 - nach Fehler auf `stderr`: menschenlesbarer `Fehler:`-Einzeiler mit Verweis auf die vorgesehene Markdown-Datei
 

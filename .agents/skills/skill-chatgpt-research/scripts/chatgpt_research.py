@@ -27,6 +27,7 @@ import html as html_mod
 import json
 import math
 import os
+import queue
 import re
 import shutil
 import subprocess
@@ -85,10 +86,12 @@ LOCK_ACQUIRE_TIMEOUT_SECONDS = 60.0
 LOCK_POLL_INTERVAL_SECONDS = 0.1
 DEFAULT_READINESS_TIMEOUT_SECONDS = 30
 DEFAULT_READINESS_POLL_INTERVAL_SECONDS = 1
-RUN_WAIT_MESSAGE = "ChatGPT recherchiert noch, bitte warten..."
+MCP_READ_TIMEOUT_SECONDS = 30
+MCP_INIT_TIMEOUT_SECONDS = 15
+RUN_STATUS_INTERVAL_SECONDS = 30
 RUN_OPENING_MESSAGE = "ChatGPT wird geöffnet..."
 RUN_FOLLOWUP_OPENING_MESSAGE = "Gespeicherter Chat wird geöffnet..."
-RUN_PROMPT_SENT_MESSAGE = "Prompt abgeschickt..."
+RUN_PROMPT_SENT_MESSAGE = "Prompt abgeschickt, warte auf Antwort (max {timeout} Min.)..."
 
 REQUIRED_TOOLS = {
     "browser_navigate",
@@ -744,8 +747,10 @@ def _apply_global_prompt_gate() -> None:
         time.sleep(wait_seconds)
 
 
-def _print_run_wait_message() -> None:
-    print(RUN_WAIT_MESSAGE)
+def _print_run_wait_message(elapsed_seconds: float = 0, timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> None:
+    elapsed_m, elapsed_s = divmod(int(elapsed_seconds), 60)
+    total_m = timeout_seconds // 60
+    print(f"ChatGPT recherchiert noch ({elapsed_m}:{elapsed_s:02d} / max {total_m} Min.), bitte warten...")
 
 
 def _print_run_opening_message() -> None:
@@ -756,8 +761,9 @@ def _print_run_followup_opening_message() -> None:
     print(RUN_FOLLOWUP_OPENING_MESSAGE)
 
 
-def _print_run_prompt_sent_message() -> None:
-    print(RUN_PROMPT_SENT_MESSAGE)
+def _print_run_prompt_sent_message(timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> None:
+    total_m = timeout_seconds // 60
+    print(RUN_PROMPT_SENT_MESSAGE.format(timeout=total_m))
 
 
 def _close_chat_tab_safely(client: McpStdioClient) -> None:
@@ -869,6 +875,7 @@ class McpStdioClient:
                     "capabilities": {},
                     "clientInfo": {"name": "chatgpt-research", "version": "1.0.0"},
                 },
+                timeout=MCP_INIT_TIMEOUT_SECONDS,
             )
             self.notify("notifications/initialized", {})
         except Exception:
@@ -912,10 +919,40 @@ class McpStdioClient:
         self.proc.stdin.write(body)
         self.proc.stdin.flush()
 
-    def _read_message(self) -> dict[str, Any]:
+    def _read_message(self, timeout: float | None = None) -> dict[str, Any]:
+        """Read one JSON-RPC message from stdout with optional timeout.
+
+        On Windows ``select()`` does not work with pipe file descriptors, so we
+        use a background thread + ``queue.Queue`` to implement the timeout.
+        """
         if not self.proc or not self.proc.stdout:
             raise McpError("MCP-Prozess ist nicht gestartet.")
-        body = self.proc.stdout.readline()
+
+        effective_timeout = timeout if timeout is not None else MCP_READ_TIMEOUT_SECONDS
+
+        result_queue: queue.Queue[bytes | Exception] = queue.Queue()
+
+        def _reader() -> None:
+            try:
+                line = self.proc.stdout.readline()  # type: ignore[union-attr]
+                result_queue.put(line)
+            except Exception as exc:
+                result_queue.put(exc)
+
+        reader_thread = threading.Thread(target=_reader, daemon=True)
+        reader_thread.start()
+
+        try:
+            body = result_queue.get(timeout=effective_timeout)
+        except queue.Empty:
+            stderr_tail = "\n".join(self._stderr_lines[-10:])
+            raise McpError(
+                f"MCP-Server antwortet nicht (Timeout nach {effective_timeout:.0f}s). "
+                f"Die Browser-Extension ist moeglicherweise nicht aktiv.\n{stderr_tail}".strip()
+            )
+
+        if isinstance(body, Exception):
+            raise McpError(f"Fehler beim Lesen vom MCP-Prozess: {body}")
         if not body:
             stderr_tail = "\n".join(self._stderr_lines[-5:])
             raise McpError(f"MCP-Verbindung beendet.\n{stderr_tail}".strip())
@@ -927,7 +964,7 @@ class McpStdioClient:
     def notify(self, method: str, params: dict[str, Any]) -> None:
         self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
-    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def request(self, method: str, params: dict[str, Any] | None = None, *, timeout: float | None = None) -> dict[str, Any]:
         self._request_id += 1
         request_id = self._request_id
         payload = {
@@ -939,7 +976,7 @@ class McpStdioClient:
         self._send(payload)
 
         while True:
-            message = self._read_message()
+            message = self._read_message(timeout=timeout)
             if "method" in message and "id" in message and "result" not in message and "error" not in message:
                 self._send(
                     {
@@ -1290,7 +1327,7 @@ def _poll_for_completed_message(
     previous_signature: str | None = None
     last_change_at: float | None = None
     saw_generating = False
-    next_status_at = started_at + 60
+    next_status_at = started_at + RUN_STATUS_INTERVAL_SECONDS
 
     while time.time() < deadline:
         raw = _tool_text_with_retry(client, "browser_evaluate", {"function": DOM_STATE_JS})
@@ -1310,8 +1347,8 @@ def _poll_for_completed_message(
         has_completion_sentinel = _has_completion_sentinel(preview, tail_preview)
 
         if now_ts >= next_status_at:
-            _print_run_wait_message()
-            next_status_at += 60
+            _print_run_wait_message(now_ts - started_at, timeout_seconds)
+            next_status_at += RUN_STATUS_INTERVAL_SECONDS
 
         if assistant_count > baseline_count:
             current_signature = f"{last_len}:{last_hash}"
@@ -1505,8 +1542,8 @@ def cmd_run(options: RunOptions) -> None:
         )
         baseline = int(state.get("assistantCount", 0))
         _submit_prompt(client, _prompt_with_completion_sentinel(options.question))
-        _print_run_prompt_sent_message()
-        _print_run_wait_message()
+        _print_run_prompt_sent_message(options.timeout_seconds)
+        _print_run_wait_message(0, options.timeout_seconds)
         _call_tool_with_retry(client, "browser_wait_for", {"time": 2})
 
         final_state = _poll_for_completed_message(
