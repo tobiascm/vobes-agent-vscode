@@ -22,7 +22,7 @@ Diagnose-Skill: Prueft welche Scopes im aktuellen Graph-Token vorhanden sind und
 | Dateien in SharePoint suchen | `$skill-m365-copilot-file-search` |
 | Copilot-Frage stellen | `$skill-m365-copilot-chat` |
 | Datei aus SharePoint lesen | `$skill-m365-file-reader` |
-| Outlook-Mails durchsuchen (Produktiv) | `$skill-outlook-search-related-emails` |
+| Outlook-Mails durchsuchen (Produktiv) | `$skill-outlook` |
 
 ## Voraussetzungen
 

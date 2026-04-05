@@ -21,8 +21,8 @@ Das Script unterstuetzt zusaetzlich einen exklusiven Kalender-Modus per `--event
 | Aufgabe | Stattdessen verwenden |
 |---------|-----------------------|
 | Dokumente in SharePoint/OneDrive suchen | `$skill-m365-copilot-file-search` |
-| Mail-Thread per Entry-ID nachladen | `$skill-outlook-read-email` |
-| Verwandte Mails per Outlook COM suchen | `$skill-outlook-search-related-emails` |
+| Mail-Thread per Entry-ID nachladen | `$skill-outlook` |
+| Verwandte Mails per Outlook COM suchen | `$skill-outlook` |
 | Confluence/Jira durchsuchen | `local_rag` oder `mcp-atlassian` |
 
 ### Abgrenzung zu Outlook COM Skills
@@ -36,7 +36,7 @@ Das Script unterstuetzt zusaetzlich einen exklusiven Kalender-Modus per `--event
 | **Ergebnis** | Subject, Sender, Datum, Preview | Vollstaendiger Body, alle Empfaenger |
 | **Typischer Einsatz** | Schnelle Suche, Ueberblick | Detaillierte Analyse, Thread-Sicht |
 
-**Empfehlung:** Fuer schnelle Suchen und Ueberblick diesen Skill verwenden. Fuer detaillierte Mail-Analyse (vollstaendiger Body, alle To/Cc) anschliessend `$skill-outlook-read-email` nutzen.
+**Empfehlung:** Fuer schnelle Suchen und Ueberblick diesen Skill verwenden. Fuer detaillierte Mail-Analyse (vollstaendiger Body, alle To/Cc) anschliessend `$skill-outlook` nutzen.
 
 ## Voraussetzungen
 

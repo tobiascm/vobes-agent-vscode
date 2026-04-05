@@ -73,9 +73,7 @@ Bevor ein Skill geladen wird, der einen MCP-Server benoetigt, MUSS geprueft werd
 → PFLICHT: Skill `$skill-m365-copilot-mail-search` laden und befolgen. Durchsucht Outlook-Mails ueber Graph Search API. Benoetigt Teams-Token mit Mail.Read Scope.
 - Graph Scopes pruefen | 403 Forbidden Ursache | fehlende Scopes | Token-Diagnose | Graph Probe
 → PFLICHT: Skill `$skill-m365-graph-scope-probe` laden und befolgen. Diagnose fuer Graph-Token, fehlende Scopes und 401/403 bei M365-Skills.
-- Outlook Mail Thread | verwandte Mails | thematisch aehnliche Mails | Mail-Kontext erweitern | wer hat noch ueber X geschrieben
-→ PFLICHT: Skill `$skill-outlook-search-related-emails` laden und befolgen. Findet Thread-Mails (mode=thread) oder verwandte Mails ausserhalb des Threads (mode=related). Benoetigt Entry-ID und Store-ID der Seed-Mail.
-- Outlook Mail vollstaendig lesen | vollstaendiger Mail-Body | alle Empfaenger anzeigen | Mail nachladen
-→ PFLICHT: Skill `$skill-outlook-read-email` laden und befolgen. Laedt eine konkrete Mail per Entry-ID vollstaendig nach. Typischerweise nach skill-outlook-search-related-emails als Folgeschritt.
+- Outlook Mail suchen | Mail-Thread | verwandte Mails | Mail vollstaendig lesen | Mail-Body | alle Empfaenger | Outlook Suche | wer hat noch ueber X geschrieben | Mail nachladen
+→ PFLICHT: Skill `$skill-outlook` laden und befolgen. Durchsucht lokales Outlook per COM (Suche, Thread-Sicht, verwandte Mails, einzelne Mail vollstaendig lesen).
 - ChatGPT Research | frage ChatGPT | ChatGPT antworten lassen | was sagt ChatGPT zu | schicke Frage an ChatGPT
 → PFLICHT: Skill `$skill-chatgpt-research` laden und befolgen. Stellt Frage an ChatGPT via Playwright CDP und speichert Antwort als Markdown.
