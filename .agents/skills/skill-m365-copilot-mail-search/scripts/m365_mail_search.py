@@ -1284,7 +1284,7 @@ def _decode_attachment_bytes(content_bytes: str, att_name: str) -> bytes | None:
 # CMD: read
 # ---------------------------------------------------------------------------
 
-def cmd_read(message_id: str, token: str | None = None, save_attachments: bool = False, convert: bool = False, include_thread: bool = False, convert_to_markdown: bool = False, no_llm_pdf: bool = False) -> None:
+def cmd_read(message_id: str, token: str | None = None, save_attachments: bool = False, convert: bool = False, include_thread: bool = False, convert_to_markdown: bool = False, no_llm_pdf: bool = False, no_llm: bool = False) -> None:
     """Laedt eine Mail vollstaendig per GET /v1.0/me/messages/{id}.
 
     Mit --include-thread wird die conversationId aus der Mail gelesen und
@@ -1293,7 +1293,8 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
     Mit --convert-to-markdown werden gespeicherte Anhaenge per file_converter
     (lightrag LLM-Pipeline) nach Markdown konvertiert und als .md neben den
     Originaldateien in attachments/ abgelegt. Impliziert --save-attachments.
-    Mit --no-llm-pdf wird PDF-Text ohne LLM extrahiert (schneller).
+    Mit --no-llm werden alle Anhaenge lokal ohne LLM konvertiert (schneller).
+    Mit --no-llm-pdf wird nur PDF-Text ohne LLM extrahiert.
     """
     if convert_to_markdown:
         save_attachments = True
@@ -1395,7 +1396,7 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
             if convert_to_markdown and save_attachments:
                 from file_converter import _to_markdown
                 md_out = att_path.with_suffix(".md")
-                rc = _to_markdown(att_path, md_out, no_llm_pdf=no_llm_pdf)
+                rc = _to_markdown(att_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm)
                 if rc == 0 and md_out.is_file():
                     md_converted_names.append(md_out.name)
                     print(f"Markdown-Konvertierung OK: {att_path.name} -> {md_out.name}")
@@ -1446,7 +1447,7 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
                     if convert_to_markdown:
                         from file_converter import _to_markdown
                         md_out = sp_path.with_suffix(".md")
-                        rc = _to_markdown(sp_path, md_out, no_llm_pdf=no_llm_pdf)
+                        rc = _to_markdown(sp_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm)
                         if rc == 0 and md_out.is_file():
                             md_converted_names.append(md_out.name)
                             print(f"  Markdown-Konvertierung OK: {sp_path.name} -> {md_out.name}")
@@ -1635,11 +1636,12 @@ def main() -> None:
         inc_thread = "--include-thread" in sys.argv
         do_convert_md = "--convert-to-markdown" in sys.argv
         do_no_llm_pdf = "--no-llm-pdf" in sys.argv
+        do_no_llm = "--no-llm" in sys.argv
         if "--token" in sys.argv:
             idx = sys.argv.index("--token")
             if idx + 1 < len(sys.argv):
                 token = sys.argv[idx + 1]
-        cmd_read(message_id, token, save_att, do_convert, inc_thread, do_convert_md, do_no_llm_pdf)
+        cmd_read(message_id, token, save_att, do_convert, inc_thread, do_convert_md, do_no_llm_pdf, do_no_llm)
 
     elif cmd == "check-token":
         cmd_check_token()

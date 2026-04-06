@@ -72,7 +72,7 @@ def test_cmd_search_writes_attachment_links_to_md_and_names_to_stdout(tmp_path, 
         )
 
     def fake_get(url, headers=None, params=None, timeout=None):
-        if url.endswith("/msg-1") and params == {"$select": "body,ccRecipients"}:
+        if url.endswith("/msg-1") and params == {"$select": "body,ccRecipients,parentFolderId"}:
             return FakeResponse(
                 200,
                 {
@@ -194,7 +194,7 @@ def test_cmd_search_omits_stdout_attachment_hint_when_no_linkable_attachments(tm
         )
 
     def fake_get(url, headers=None, params=None, timeout=None):
-        if url.endswith("/msg-2") and params == {"$select": "body,ccRecipients"}:
+        if url.endswith("/msg-2") and params == {"$select": "body,ccRecipients,parentFolderId"}:
             return FakeResponse(
                 200,
                 {
@@ -779,7 +779,7 @@ def test_cmd_read_convert_to_markdown_success(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mod.requests, "get", fake_get)
 
     # Mock file_converter._to_markdown: schreibt einfach "# converted" in die Ausgabedatei
-    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, all_sheets=False):
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False):
         output_path.write_text(f"# {input_path.name}\n\nKonvertierter Inhalt.", encoding="utf-8")
         return 0
 
@@ -829,7 +829,7 @@ def test_cmd_read_convert_to_markdown_failure_writes_error_md(tmp_path, monkeypa
     # Mock _to_markdown: erster Anhang OK, zweiter Fehler
     call_count = {"n": 0}
 
-    def fake_to_markdown_partial(input_path, output_path, *, no_llm_pdf=False, all_sheets=False):
+    def fake_to_markdown_partial(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False):
         call_count["n"] += 1
         if call_count["n"] == 1:
             output_path.write_text(f"# {input_path.name}\n\nOK.", encoding="utf-8")
@@ -882,7 +882,7 @@ def test_cmd_read_convert_to_markdown_passes_no_llm_pdf(tmp_path, monkeypatch, c
 
     seen_flags = []
 
-    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, all_sheets=False):
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False):
         seen_flags.append(no_llm_pdf)
         output_path.write_text("# ok", encoding="utf-8")
         return 0
@@ -1167,7 +1167,7 @@ def test_cmd_read_sp_download_with_convert_to_markdown(tmp_path, monkeypatch, ca
 
     monkeypatch.setattr(mod, "_try_download_sp_file", fake_try_download)
 
-    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, all_sheets=False):
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False):
         output_path.write_text(f"# {input_path.name}\n\nKonvertiert.", encoding="utf-8")
         return 0
 

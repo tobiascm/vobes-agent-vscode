@@ -173,15 +173,35 @@ python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py
 # Ganzen Mail-Thread anzeigen (alle Mails der Unterhaltung)
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --include-thread
 
+# Anhaenge herunterladen + nach Markdown konvertieren (LLM, praezise, langsam)
+python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --save-attachments --convert-to-markdown
+
+# Anhaenge herunterladen + nach Markdown konvertieren (ohne LLM, schnell)
+python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --save-attachments --convert-to-markdown --no-llm
+
 # Kombinierbar: Mail lesen + Anhaenge konvertieren + Thread anzeigen
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --convert --include-thread
 ```
 
 Die Mail wird als `email.md` im Ordner `tmp/emails/{YYYYmmdd_HHMM}_{sender}_{subject}_{hash8}/` gespeichert.
 Ausgabe: Von, Gesendet, An, Cc, Betreff, Anhaenge und vollstaendiger Body (HTML wird automatisch in Text konvertiert).
-- `--save-attachments` speichert Anhaenge in `tmp/emails/.../attachments/`.
-- `--convert` extrahiert den Textinhalt unterstuetzter Anhaenge (PDF, DOCX, XLSX, PPTX) und haengt ihn seitenweise als Markdown an die Ausgabe an. Nutzt intern `scripts/file_parsers.py`.
+- `--save-attachments` speichert Anhaenge in `tmp/emails/.../attachments/`. SharePoint-/OneDrive-Links im Mail-Body werden automatisch erkannt und ebenfalls heruntergeladen (benoetigt separaten Files.Read-Token via `m365_copilot_graph_token`).
+- `--convert` extrahiert den Textinhalt unterstuetzter Anhaenge (PDF, DOCX, XLSX, PPTX) und haengt ihn seitenweise als Markdown an die Ausgabe an. Nutzt intern `.agents/skills/skill-file-converter/scripts/file_parsers.py`.
+- `--convert-to-markdown` konvertiert gespeicherte Anhaenge (inkl. SP-Downloads) nach Markdown. Impliziert `--save-attachments`. Zwei Modi:
+  - **Standard (LLM):** Praezise Konvertierung ueber lightrag LLM-Pipeline. Deutlich genauer, aber langsam (mehrere Minuten pro Datei). **Pflicht bei zahlenrelevanten Dokumenten** wie Jobsplits, Budget-PDFs oder Tabellen, wo exakte Werte wichtig sind.
+  - **`--no-llm`:** Schnelle lokale Extraktion via `file_parsers` (Sekunden statt Minuten). Gut fuer Ueberblick und wenn es auf Geschwindigkeit ankommt, aber weniger praezise bei komplexen Layouts.
+  - **`--no-llm-pdf`:** Nur PDFs ohne LLM (via pymupdf4llm), alle anderen Formate weiterhin via LLM.
 - `--include-thread` liest die `conversationId` aus der Mail und laedt alle Nachrichten der Unterhaltung per `GET /v1.0/me/messages?$filter=conversationId eq '...'`. Gibt eine chronologische Tabelle aller Thread-Nachrichten aus, die aktuelle Mail mit **◀** markiert.
+
+**Entscheidungshilfe `--no-llm` vs. LLM (Standard):**
+
+| Kriterium | `--no-llm` (schnell) | Standard/LLM (praezise) |
+|-----------|----------------------|------------------------|
+| Geschwindigkeit | Sekunden | Minuten pro Datei |
+| Praezision bei Tabellen/Zahlen | Mittel | Hoch |
+| Komplexe PDF-Layouts | Verlustbehaftet | Sehr gut |
+| Einfache DOCX/PPTX | Gut | Gut |
+| **Empfehlung** | Schneller Ueberblick, viele Anhaenge | Zahlenrelevante PDFs, Jobsplits, Budget-Dokumente |
 
 ### Schritt 3b: Anhaenge manuell konvertieren (falls --convert nicht genuegt)
 

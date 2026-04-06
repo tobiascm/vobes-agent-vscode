@@ -8,15 +8,19 @@ description: "Lokale Dateien nach PDF (via Office COM) oder Markdown (via lightr
 Konvertiert **lokale Dateien** nach **PDF** oder **Markdown**.
 
 - **→ PDF:** Windows COM-Automation (PowerPoint, Word, Excel)
-- **→ Markdown:** Delegiert an `lightrag_test/scripts/convert_to_markdown.py` (LLM-basiert)
+- **→ Markdown (LLM):** Delegiert an `lightrag_test/scripts/convert_to_markdown.py` (Docling + Claude)
+- **→ Markdown (non-LLM):** Lokale Extraktion via `file_parsers.py` (python-pptx, openpyxl, python-docx, pdfplumber)
 
-> **Script:** `.agents/skills/skill-file-converter/scripts/file_converter.py`
+> **Scripts:** `.agents/skills/skill-file-converter/scripts/`
+> - `file_converter.py` — CLI-Router (Einstiegspunkt)
+> - `file_parsers.py` — Format-Parser fuer non-LLM Extraktion
+> - `file_llm_converter.py` — LLM-Pipeline + COM-Automation
 
 ## Wann verwenden?
 
 - Der User moechte eine **lokale Datei** nach PDF oder Markdown konvertieren
 - Der User hat ein PPTX/DOCX/XLSX und braucht ein PDF daraus
-- Der User moechte den Inhalt einer Datei als Markdown extrahieren (LLM-gestuetzt)
+- Der User moechte den Inhalt einer Datei als Markdown extrahieren (LLM-gestuetzt oder schnell ohne LLM)
 - Der User fragt: "Konvertiere diese Datei nach PDF", "Mach daraus ein Markdown"
 
 ## Wann NICHT verwenden?
@@ -40,11 +44,26 @@ Konvertiert **lokale Dateien** nach **PDF** oder **Markdown**.
 
 PDF, DOCX, XLSX, PPTX, ODT, ODP, TXT, XML, PNG, JPG, TIFF, BMP, WEBP, HTML und mehr.
 
+### → Markdown (non-LLM via file_parsers)
+
+| Eingabe | Methode |
+|---------|---------|
+| `.pptx` | python-pptx (Text, Tabellen, Notes pro Folie) |
+| `.docx` | python-docx (Volltext mit Ueberschriften) |
+| `.xlsx`, `.xls` | openpyxl (alle Sheets als CSV) |
+| `.pdf` | pdfplumber (Text-Extraktion) |
+| `.csv` | Erste 200 Zeilen als Markdown-Tabelle |
+| `.txt`, `.md`, `.json`, `.xml`, `.html` | Plaintext |
+| Bilder | Metadaten (Groesse, Modus) |
+
+> **Hinweis:** Non-LLM extrahiert keinen Text aus Bildern in PPTX-Folien und kein SmartArt.
+
 ## Voraussetzungen
 
-1. **PDF:** Microsoft Office (PowerPoint, Word, Excel) muss installiert sein
-2. **Markdown:** `C:\Daten\Python\lightrag_test` muss vorhanden sein (LLM-Pipeline)
-3. **Python-Pakete:** `pywin32` (bereits in pyproject.toml)
+1. **PDF (to-pdf):** Microsoft Office (PowerPoint, Word, Excel) muss installiert sein
+2. **Markdown (LLM):** `C:\Daten\Python\lightrag_test` muss vorhanden sein (LLM-Pipeline)
+3. **Markdown (non-LLM):** Keine externe Abhaengigkeit (python-pptx, openpyxl, python-docx in pyproject.toml)
+4. **Python-Pakete:** `pywin32` (bereits in pyproject.toml)
 
 ## CLI-Befehle
 
@@ -63,7 +82,8 @@ python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown
 ```
 
 Optionale Flags:
-- `--no-llm-pdf` — PDF-Extraktion ohne LLM (pymupdf4llm statt Claude)
+- `--no-llm` — Lokale Extraktion ohne LLM (PPTX, DOCX, XLSX, PDF, CSV, ...)
+- `--no-llm-pdf` — Nur PDF ohne LLM extrahieren (pymupdf4llm statt Claude)
 - `--all-sheets` — Excel: alle Worksheets einzeln konvertieren
 
 Ohne OUTPUT wird die Markdown-Datei neben die Eingabedatei gelegt (`<stem>.md`).
@@ -85,6 +105,9 @@ python .agents/skills/skill-file-converter/scripts/file_converter.py to-pdf C:\U
 
 # DOCX → Markdown (LLM-gestuetzt)
 python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown C:\Users\VWRR6B4\Downloads\bericht.docx
+
+# PPTX → Markdown (schnell, ohne LLM)
+python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown praesentation.pptx --no-llm
 
 # PDF → Markdown ohne LLM
 python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown bericht.pdf --no-llm-pdf

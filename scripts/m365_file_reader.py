@@ -156,10 +156,15 @@ def _get_metadata(drive_id: str, item_id: str, token: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Format-spezifische Parser (aus file_parsers.py)
+# Format-spezifische Parser (aus file_parsers.py im skill-file-converter)
 # ---------------------------------------------------------------------------
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+_FILE_CONVERTER_SKILL_DIR = str(
+    Path(__file__).resolve().parents[1]
+    / ".agents" / "skills" / "skill-file-converter" / "scripts"
+)
+if _FILE_CONVERTER_SKILL_DIR not in sys.path:
+    sys.path.insert(0, _FILE_CONVERTER_SKILL_DIR)
 from file_parsers import (
     convert_bytes,
     parse_csv_content as _parse_csv_content,
