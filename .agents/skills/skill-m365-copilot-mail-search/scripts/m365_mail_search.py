@@ -507,6 +507,9 @@ def _extract_cloud_links_from_body(body_raw: str, body_type: str) -> list[dict[s
             or "onedrive.live.com" in url_lower
         ):
             continue
+        # HTML-Entities in URL dekodieren (z.B. &amp; -> &)
+        from html import unescape as _html_unescape
+        url = _html_unescape(url)
         label = _strip_html_tags(raw_label)
         label = _strip_email_addresses(label)
         label = re.sub(r"\s{2,}", " ", label).strip()
@@ -528,6 +531,47 @@ def _merge_attachment_entries(*groups: list[dict[str, str]]) -> list[dict[str, s
             seen.add(key)
             merged.append(entry)
     return merged
+
+
+def _try_download_sp_file(url: str, att_dir: Path) -> tuple[Path | None, str | None]:
+    """Laedt eine SharePoint/OneDrive-Datei ueber m365_file_reader herunter.
+
+    Nutzt den separaten Graph-Token (Files.Read) aus m365_copilot_graph_token.
+    Gibt (saved_path, None) bei Erfolg oder (None, error_msg) bei Fehler zurueck.
+    Bricht niemals den Prozess ab (faengt SystemExit ab).
+    """
+    try:
+        from m365_file_reader import (
+            _download_content,
+            _require_token as _require_graph_token,
+            _resolve_url_to_drive_item,
+        )
+    except ImportError as e:
+        return None, f"m365_file_reader nicht importierbar: {e}"
+
+    try:
+        graph_token = _require_graph_token()
+    except SystemExit:
+        return None, "Graph-Token (Files.Read) konnte nicht beschafft werden"
+
+    try:
+        drive_id, item_id = _resolve_url_to_drive_item(url, graph_token)
+    except SystemExit:
+        return None, f"URL konnte nicht aufgeloest werden: {url}"
+
+    try:
+        raw_bytes = _download_content(drive_id, item_id, graph_token)
+    except SystemExit:
+        return None, f"Download fehlgeschlagen: {url}"
+
+    # Dateiname aus URL extrahieren (Fallback: letztes Pfadsegment)
+    from urllib.parse import unquote as _unquote, urlparse as _urlparse
+
+    parsed = _urlparse(url)
+    filename = _unquote(parsed.path.split("/")[-1]) or "sharepoint_file"
+    att_path = _unique_att_path(att_dir, filename)
+    att_path.write_bytes(raw_bytes)
+    return att_path, None
 
 
 def _fetch_attachment_link_entries(message_id: str, token: str) -> tuple[list[dict[str, str]], str | None]:
@@ -1385,6 +1429,46 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
         if content_id and body_type == "html":
             body_raw = body_raw.replace(f"cid:{content_id}", str(att_path))
 
+    # SharePoint/OneDrive-Links aus Mail-Body extrahieren (immer, fuer email.md)
+    cloud_entries = _extract_cloud_links_from_body(body_raw, body_type)
+    sp_downloaded_urls: set[str] = set()
+    if save_attachments and cloud_entries:
+        att_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n{len(cloud_entries)} SharePoint/OneDrive-Link(s) erkannt, starte Download...")
+        for entry in cloud_entries:
+                sp_url = entry["url"]
+                sp_label = entry["name"]
+                sp_path, sp_err = _try_download_sp_file(sp_url, att_dir)
+                if sp_path is not None:
+                    saved_att_names.append(sp_path.name)
+                    sp_downloaded_urls.add(sp_url)
+                    print(f"  SP-Download OK: {sp_label} -> {sp_path.name}")
+                    if convert_to_markdown:
+                        from file_converter import _to_markdown
+                        md_out = sp_path.with_suffix(".md")
+                        rc = _to_markdown(sp_path, md_out, no_llm_pdf=no_llm_pdf)
+                        if rc == 0 and md_out.is_file():
+                            md_converted_names.append(md_out.name)
+                            print(f"  Markdown-Konvertierung OK: {sp_path.name} -> {md_out.name}")
+                        else:
+                            print(f"  ERROR: Konvertierung von {sp_path.name} fehlgeschlagen (exit code {rc})")
+                            md_out.write_text(
+                                f"# {sp_path.name}\n\n> Konvertierung fehlgeschlagen\n\n"
+                                f"Exit-Code: {rc}\n",
+                                encoding="utf-8",
+                            )
+                            md_converted_names.append(md_out.name)
+                    if convert:
+                        from file_parsers import convert_bytes as _convert_bytes
+                        try:
+                            text = _convert_bytes(sp_path.read_bytes(), sp_path.name)
+                            if text:
+                                converted.append((sp_path.name, text))
+                        except Exception as e:
+                            converted.append((sp_path.name, f"_(Konvertierung fehlgeschlagen: {e})_"))
+                else:
+                    print(f"  SP-Download fehlgeschlagen: {sp_label} — {sp_err}", file=sys.stderr)
+
     # Body konvertieren (nach cid-Ersetzung, damit lokale Pfade erhalten bleiben)
     if body_type == "html":
         body_text = _html_to_text(body_raw)
@@ -1406,6 +1490,12 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
     else:
         inline_lines = []
 
+    # SharePoint-/OneDrive-Links (immer anzeigen, auch ohne Download)
+    sp_link_lines: list[str] = []
+    not_downloaded = [e for e in cloud_entries if e["url"] not in sp_downloaded_urls]
+    if not_downloaded:
+        sp_link_lines = ["SharePoint-Links:"] + [f"- [{e['name']}]({e['url']})" for e in not_downloaded]
+
     header_lines = [
         f"Von: {from_str}",
         f"Gesendet: {received}",
@@ -1418,13 +1508,13 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
         f"Betreff: {subject}",
     ]
 
-    md_lines = header_lines + att_lines + inline_lines + ["", body_text]
+    md_lines = header_lines + att_lines + inline_lines + sp_link_lines + ["", body_text]
 
     email_md_path = out_dir / "email.md"
     email_md_path.write_text("\n".join(md_lines), encoding="utf-8")
 
     # Konsole: gleiches Format wie email.md
-    for line in header_lines + att_lines + inline_lines:
+    for line in header_lines + att_lines + inline_lines + sp_link_lines:
         print(line)
     print()
     print(body_text)

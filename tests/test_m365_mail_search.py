@@ -986,3 +986,242 @@ def test_cmd_read_convert_to_markdown_e2e():
         assert f"Markdown-Konvertierung OK: {filename} -> {stem}.md" in result.stdout, (
             f"Erfolgsmeldung fuer {filename} fehlt in stdout"
         )
+
+
+# ---------------------------------------------------------------------------
+# SharePoint/OneDrive-Link-Download in cmd_read
+# ---------------------------------------------------------------------------
+
+def _make_read_msg_payload_with_sp_links(msg_id="msg-1"):
+    """Fake-Payload fuer Message mit SharePoint-Links im HTML-Body."""
+    return {
+        "id": msg_id,
+        "subject": "Mail mit SharePoint-Links",
+        "from": {"emailAddress": {"name": "Alice", "address": "alice@example.com"}},
+        "toRecipients": [{"emailAddress": {"name": "Bob", "address": "bob@example.com"}}],
+        "ccRecipients": [],
+        "receivedDateTime": "2026-04-07T10:00:00Z",
+        "body": {
+            "contentType": "html",
+            "content": (
+                '<p>Siehe Anhang:</p>'
+                '<a href="https://contoso.sharepoint.com/sites/team/Shared%20Documents/Report.xlsx?d=w123&amp;csf=1&amp;web=1">Report.xlsx</a>'
+                '<a href="https://contoso.sharepoint.com/sites/team/Shared%20Documents/Spec.pdf?d=w456&amp;csf=1&amp;web=1">Spec.pdf</a>'
+            ),
+        },
+        "hasAttachments": False,
+        "importance": "normal",
+        "conversationId": "conv-sp",
+    }
+
+
+def test_cmd_read_downloads_sharepoint_links(tmp_path, monkeypatch, capsys):
+    """cmd_read mit --save-attachments laedt SP-Links aus dem Mail-Body herunter."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, {"value": []})
+        if "/messages/" in url:
+            return FakeResponse(200, _make_read_msg_payload_with_sp_links())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    # Mock _try_download_sp_file: simuliert erfolgreichen Download
+    downloaded_urls: list[str] = []
+
+    def fake_try_download(url: str, att_dir: Path):
+        downloaded_urls.append(url)
+        att_dir.mkdir(parents=True, exist_ok=True)
+        from urllib.parse import unquote, urlparse
+        filename = unquote(urlparse(url).path.split("/")[-1])
+        dest = att_dir / filename
+        dest.write_bytes(b"fake-sp-content")
+        return dest, None
+
+    monkeypatch.setattr(mod, "_try_download_sp_file", fake_try_download)
+
+    mod.cmd_read("msg-1", save_attachments=True)
+
+    stdout = capsys.readouterr().out
+
+    # Beide SP-Links erkannt und heruntergeladen
+    assert len(downloaded_urls) == 2
+    assert any("Report.xlsx" in u for u in downloaded_urls)
+    assert any("Spec.pdf" in u for u in downloaded_urls)
+    # URLs muessen dekodiert sein (kein &amp;)
+    for u in downloaded_urls:
+        assert "&amp;" not in u, f"URL enthaelt noch HTML-Entities: {u}"
+
+    # Konsolenausgabe enthaelt SP-Download-Meldungen
+    assert "SharePoint/OneDrive-Link(s) erkannt" in stdout
+    assert "SP-Download OK" in stdout
+
+    # Dateien in email.md als Anhaenge gelistet
+    email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
+    assert len(email_dirs) == 1
+    email_md = (email_dirs[0] / "email.md").read_text(encoding="utf-8")
+    assert "Report.xlsx" in email_md
+    assert "Spec.pdf" in email_md
+
+    # Dateien existieren im attachments-Ordner
+    att_dir = email_dirs[0] / "attachments"
+    assert (att_dir / "Report.xlsx").is_file()
+    assert (att_dir / "Spec.pdf").is_file()
+
+
+def test_cmd_read_no_sp_download_without_save_attachments(tmp_path, monkeypatch, capsys):
+    """Ohne --save-attachments werden SP-Links nicht heruntergeladen."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, {"value": []})
+        if "/messages/" in url:
+            return FakeResponse(200, _make_read_msg_payload_with_sp_links())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    download_called = {"called": False}
+
+    def fake_try_download(url, att_dir):
+        download_called["called"] = True
+        return None, "should not be called"
+
+    monkeypatch.setattr(mod, "_try_download_sp_file", fake_try_download)
+
+    mod.cmd_read("msg-1", save_attachments=False)
+
+    assert not download_called["called"], "SP-Download sollte ohne --save-attachments nicht aufgerufen werden"
+
+    # SP-Links muessen trotzdem in email.md und stdout stehen
+    stdout = capsys.readouterr().out
+    assert "SharePoint-Links:" in stdout
+    assert "Report.xlsx" in stdout
+    assert "Spec.pdf" in stdout
+
+    email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
+    email_md = (email_dirs[0] / "email.md").read_text(encoding="utf-8")
+    assert "SharePoint-Links:" in email_md
+    assert "Report.xlsx" in email_md
+    assert "Spec.pdf" in email_md
+
+
+def test_cmd_read_sp_download_failure_is_non_blocking(tmp_path, monkeypatch, capsys):
+    """Fehlgeschlagener SP-Download bricht cmd_read nicht ab."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, {"value": []})
+        if "/messages/" in url:
+            return FakeResponse(200, _make_read_msg_payload_with_sp_links())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    def fake_try_download_fail(url, att_dir):
+        return None, "Token nicht verfuegbar"
+
+    monkeypatch.setattr(mod, "_try_download_sp_file", fake_try_download_fail)
+
+    # Soll nicht abstuerzen
+    mod.cmd_read("msg-1", save_attachments=True)
+
+    stderr = capsys.readouterr().err
+    assert "SP-Download fehlgeschlagen" in stderr
+    assert "Token nicht verfuegbar" in stderr
+
+    # email.md trotzdem erstellt
+    email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
+    assert len(email_dirs) == 1
+    assert (email_dirs[0] / "email.md").is_file()
+
+
+def test_cmd_read_sp_download_with_convert_to_markdown(tmp_path, monkeypatch, capsys):
+    """SP-Downloads werden bei --convert-to-markdown nach Markdown konvertiert."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, {"value": []})
+        if "/messages/" in url:
+            return FakeResponse(200, _make_read_msg_payload_with_sp_links())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    def fake_try_download(url, att_dir):
+        att_dir.mkdir(parents=True, exist_ok=True)
+        from urllib.parse import unquote, urlparse
+        filename = unquote(urlparse(url).path.split("/")[-1])
+        dest = att_dir / filename
+        dest.write_bytes(b"fake-content")
+        return dest, None
+
+    monkeypatch.setattr(mod, "_try_download_sp_file", fake_try_download)
+
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, all_sheets=False):
+        output_path.write_text(f"# {input_path.name}\n\nKonvertiert.", encoding="utf-8")
+        return 0
+
+    import file_converter
+    monkeypatch.setattr(file_converter, "_to_markdown", fake_to_markdown)
+
+    mod.cmd_read("msg-1", convert_to_markdown=True)
+
+    stdout = capsys.readouterr().out
+
+    assert "SP-Download OK" in stdout
+    assert "Markdown-Konvertierung OK: Report.xlsx -> Report.md" in stdout
+    assert "Markdown-Konvertierung OK: Spec.pdf -> Spec.md" in stdout
+
+    email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
+    att_dir = email_dirs[0] / "attachments"
+    assert (att_dir / "Report.md").is_file()
+    assert (att_dir / "Spec.md").is_file()
+
+
+def test_extract_cloud_links_decodes_html_entities():
+    """_extract_cloud_links_from_body dekodiert &amp; in URLs korrekt."""
+    html = (
+        '<a href="https://contoso.sharepoint.com/doc.xlsx?d=w1&amp;csf=1&amp;web=1">doc.xlsx</a>'
+    )
+    entries = mod._extract_cloud_links_from_body(html, "html")
+    assert len(entries) == 1
+    assert "&amp;" not in entries[0]["url"], "HTML-Entities muessen dekodiert sein"
+    assert "&" in entries[0]["url"]
+    assert entries[0]["url"] == "https://contoso.sharepoint.com/doc.xlsx?d=w1&csf=1&web=1"
+
+
+def test_cmd_read_no_sp_links_in_body(tmp_path, monkeypatch, capsys):
+    """Mail ohne SP-Links loest keinen SP-Download aus."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, _make_att_payload())
+        if "/messages/" in url:
+            return FakeResponse(200, _make_read_msg_payload())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    download_called = {"called": False}
+
+    def fake_try_download(url, att_dir):
+        download_called["called"] = True
+        return None, "unexpected"
+
+    monkeypatch.setattr(mod, "_try_download_sp_file", fake_try_download)
+
+    mod.cmd_read("msg-1", save_attachments=True)
+
+    assert not download_called["called"], "SP-Download soll nicht aufgerufen werden wenn keine SP-Links im Body"
