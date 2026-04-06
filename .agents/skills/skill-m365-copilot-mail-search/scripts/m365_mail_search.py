@@ -14,6 +14,8 @@ Usage:
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID --save-attachments
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID --save-attachments --convert
+    python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID --save-attachments --convert-to-markdown
+    python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID --save-attachments --convert-to-markdown --no-llm-pdf
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID --include-thread
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py check-token
 
@@ -52,8 +54,9 @@ import requests
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parents[4]
 REPO_SCRIPTS_DIR = REPO_ROOT / "scripts"
+FILE_CONVERTER_DIR = REPO_ROOT / ".agents" / "skills" / "skill-file-converter" / "scripts"
 
-for path in (SCRIPT_DIR, REPO_SCRIPTS_DIR):
+for path in (SCRIPT_DIR, REPO_SCRIPTS_DIR, FILE_CONVERTER_DIR):
     path_str = str(path)
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
@@ -1237,12 +1240,19 @@ def _decode_attachment_bytes(content_bytes: str, att_name: str) -> bytes | None:
 # CMD: read
 # ---------------------------------------------------------------------------
 
-def cmd_read(message_id: str, token: str | None = None, save_attachments: bool = False, convert: bool = False, include_thread: bool = False) -> None:
+def cmd_read(message_id: str, token: str | None = None, save_attachments: bool = False, convert: bool = False, include_thread: bool = False, convert_to_markdown: bool = False, no_llm_pdf: bool = False) -> None:
     """Laedt eine Mail vollstaendig per GET /v1.0/me/messages/{id}.
 
     Mit --include-thread wird die conversationId aus der Mail gelesen und
     alle Mails der Unterhaltung per GET /v1.0/me/messages?$filter=conversationId eq '...' nachgeladen.
+
+    Mit --convert-to-markdown werden gespeicherte Anhaenge per file_converter
+    (lightrag LLM-Pipeline) nach Markdown konvertiert und als .md neben den
+    Originaldateien in attachments/ abgelegt. Impliziert --save-attachments.
+    Mit --no-llm-pdf wird PDF-Text ohne LLM extrahiert (schneller).
     """
+    if convert_to_markdown:
+        save_attachments = True
     token = _resolve_token(token)
 
     encoded_message_id = _encode_graph_id_for_path(message_id)
@@ -1315,6 +1325,7 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
     # Nicht-Inline-Anhaenge speichern (VOR email.md, damit Dateinamen verfuegbar)
     saved_att_names: list[str] = []
     converted: list[tuple[str, str]] = []
+    md_converted_names: list[str] = []
     if (save_attachments or convert) and non_inline:
         att_dir.mkdir(parents=True, exist_ok=True)
         for att in non_inline:
@@ -1337,6 +1348,22 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
                         converted.append((att_name, text))
                 except Exception as e:
                     converted.append((att_name, f"_(Konvertierung fehlgeschlagen: {e})_"))
+            if convert_to_markdown and save_attachments:
+                from file_converter import _to_markdown
+                md_out = att_path.with_suffix(".md")
+                rc = _to_markdown(att_path, md_out, no_llm_pdf=no_llm_pdf)
+                if rc == 0 and md_out.is_file():
+                    md_converted_names.append(md_out.name)
+                    print(f"Markdown-Konvertierung OK: {att_path.name} -> {md_out.name}")
+                else:
+                    err_msg = f"Konvertierung von {att_path.name} fehlgeschlagen (exit code {rc})"
+                    print(f"ERROR: {err_msg}")
+                    md_out.write_text(
+                        f"# {att_path.name}\n\n> Konvertierung fehlgeschlagen\n\n"
+                        f"Exit-Code: {rc}\n",
+                        encoding="utf-8",
+                    )
+                    md_converted_names.append(md_out.name)
 
     # Inline-Bilder in attachments/ speichern und cid:-Referenzen im Body ersetzen
     att_dir.mkdir(parents=True, exist_ok=True)
@@ -1407,6 +1434,11 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
         print(f"\n{len(saved_att_names)} Anhang/Anhaenge gespeichert in attachments/:")
         for name in saved_att_names:
             print(f"  - {name}")
+
+    if md_converted_names:
+        print(f"\n{len(md_converted_names)} Anhang/Anhaenge nach Markdown konvertiert:")
+        for name in md_converted_names:
+            print(f"  - attachments/{name}")
 
     if converted:
         for att_name, text in converted:
@@ -1511,11 +1543,13 @@ def main() -> None:
         save_att = "--save-attachments" in sys.argv
         do_convert = "--convert" in sys.argv
         inc_thread = "--include-thread" in sys.argv
+        do_convert_md = "--convert-to-markdown" in sys.argv
+        do_no_llm_pdf = "--no-llm-pdf" in sys.argv
         if "--token" in sys.argv:
             idx = sys.argv.index("--token")
             if idx + 1 < len(sys.argv):
                 token = sys.argv[idx + 1]
-        cmd_read(message_id, token, save_att, do_convert, inc_thread)
+        cmd_read(message_id, token, save_att, do_convert, inc_thread, do_convert_md, do_no_llm_pdf)
 
     elif cmd == "check-token":
         cmd_check_token()

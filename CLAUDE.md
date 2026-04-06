@@ -77,3 +77,5 @@ Bevor ein Skill geladen wird, der einen MCP-Server benoetigt, MUSS geprueft werd
 → PFLICHT: Skill `$skill-outlook` laden und befolgen. Durchsucht lokales Outlook per COM (Suche, Thread-Sicht, verwandte Mails, einzelne Mail vollstaendig lesen).
 - ChatGPT Research | frage ChatGPT | ChatGPT antworten lassen | was sagt ChatGPT zu | schicke Frage an ChatGPT
 → PFLICHT: Skill `$skill-chatgpt-research` laden und befolgen. Stellt Frage an ChatGPT via Playwright CDP und speichert Antwort als Markdown.
+- Datei konvertieren | lokale Datei nach PDF | PPTX nach PDF | Word nach PDF | Excel nach PDF | Datei nach Markdown | Dokument in Markdown umwandeln
+→ PFLICHT: Skill `$skill-file-converter` laden und befolgen. Konvertiert lokale Dateien nach PDF (Office COM) oder Markdown (lightrag LLM-Pipeline).

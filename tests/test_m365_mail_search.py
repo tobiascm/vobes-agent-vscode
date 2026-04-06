@@ -1,5 +1,12 @@
 from pathlib import Path
+import re
+import shutil
+import subprocess
 import sys
+
+import pytest
+
+WORKSPACE = Path(__file__).resolve().parents[1]
 
 sys.path.insert(
     0,
@@ -711,3 +718,271 @@ def test_main_passes_events_flag_to_cmd_search(monkeypatch):
         "only_summary": False,
         "events_only": True,
     }
+
+
+# ---------------------------------------------------------------------------
+# CMD: read  --convert-to-markdown
+# ---------------------------------------------------------------------------
+
+def _make_read_msg_payload(msg_id="msg-1", has_attachments=True):
+    """Helper: Fake-Payload fuer GET /v1.0/me/messages/{id}."""
+    return {
+        "id": msg_id,
+        "subject": "Test-Mail mit Anhaengen",
+        "from": {"emailAddress": {"name": "Alice", "address": "alice@example.com"}},
+        "toRecipients": [{"emailAddress": {"name": "Bob", "address": "bob@example.com"}}],
+        "ccRecipients": [],
+        "receivedDateTime": "2026-04-07T10:00:00Z",
+        "body": {"contentType": "text", "content": "Hallo, siehe Anhaenge."},
+        "hasAttachments": has_attachments,
+        "importance": "normal",
+        "conversationId": "conv-1",
+    }
+
+
+def _make_att_payload():
+    """Helper: Fake-Payload fuer GET .../attachments mit DOCX + PNG."""
+    import base64
+
+    return {
+        "value": [
+            {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "id": "att-docx",
+                "name": "bericht.docx",
+                "isInline": False,
+                "contentBytes": base64.b64encode(b"fake-docx-content").decode(),
+            },
+            {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "id": "att-png",
+                "name": "foto.png",
+                "isInline": False,
+                "contentBytes": base64.b64encode(b"fake-png-content").decode(),
+            },
+        ]
+    }
+
+
+def test_cmd_read_convert_to_markdown_success(tmp_path, monkeypatch, capsys):
+    """--convert-to-markdown erzeugt .md-Dateien fuer jeden Anhang (Erfolgsfall)."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, _make_att_payload())
+        if "/messages/" in url:
+            return FakeResponse(200, _make_read_msg_payload())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    # Mock file_converter._to_markdown: schreibt einfach "# converted" in die Ausgabedatei
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, all_sheets=False):
+        output_path.write_text(f"# {input_path.name}\n\nKonvertierter Inhalt.", encoding="utf-8")
+        return 0
+
+    import file_converter
+    monkeypatch.setattr(file_converter, "_to_markdown", fake_to_markdown)
+
+    mod.cmd_read("msg-1", save_attachments=False, convert_to_markdown=True)
+
+    stdout = capsys.readouterr().out
+
+    # Anhaenge wurden gespeichert (implizit durch convert_to_markdown)
+    assert "bericht.docx" in stdout
+    assert "foto.png" in stdout
+
+    # Markdown-Konvertierung gemeldet
+    assert "Markdown-Konvertierung OK: bericht.docx -> bericht.md" in stdout
+    assert "Markdown-Konvertierung OK: foto.png -> foto.md" in stdout
+
+    # Dateien existieren
+    email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
+    assert len(email_dirs) == 1
+    att_dir = email_dirs[0] / "attachments"
+    assert (att_dir / "bericht.docx").is_file()
+    assert (att_dir / "bericht.md").is_file()
+    assert (att_dir / "foto.png").is_file()
+    assert (att_dir / "foto.md").is_file()
+
+    # Markdown-Inhalt korrekt
+    md_content = (att_dir / "bericht.md").read_text(encoding="utf-8")
+    assert "# bericht.docx" in md_content
+
+
+def test_cmd_read_convert_to_markdown_failure_writes_error_md(tmp_path, monkeypatch, capsys):
+    """Bei fehlgeschlagener Konvertierung wird .md mit Fehlermeldung angelegt."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, _make_att_payload())
+        if "/messages/" in url:
+            return FakeResponse(200, _make_read_msg_payload())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    # Mock _to_markdown: erster Anhang OK, zweiter Fehler
+    call_count = {"n": 0}
+
+    def fake_to_markdown_partial(input_path, output_path, *, no_llm_pdf=False, all_sheets=False):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            output_path.write_text(f"# {input_path.name}\n\nOK.", encoding="utf-8")
+            return 0
+        # Zweiter Aufruf: Fehler (exit code 1, keine Datei erzeugt)
+        return 1
+
+    import file_converter
+    monkeypatch.setattr(file_converter, "_to_markdown", fake_to_markdown_partial)
+
+    mod.cmd_read("msg-1", convert_to_markdown=True)
+
+    stdout = capsys.readouterr().out
+
+    # Erster Anhang OK
+    assert "Markdown-Konvertierung OK: bericht.docx -> bericht.md" in stdout
+
+    # Zweiter Anhang Fehler auf stdout
+    assert "ERROR: Konvertierung von foto.png fehlgeschlagen (exit code 1)" in stdout
+
+    email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
+    att_dir = email_dirs[0] / "attachments"
+
+    # Erfolg-MD hat konvertierten Inhalt
+    assert (att_dir / "bericht.md").is_file()
+    ok_md = (att_dir / "bericht.md").read_text(encoding="utf-8")
+    assert "# bericht.docx" in ok_md
+
+    # Fehler-MD existiert und enthaelt Fehlermeldung
+    assert (att_dir / "foto.md").is_file()
+    err_md = (att_dir / "foto.md").read_text(encoding="utf-8")
+    assert "# foto.png" in err_md
+    assert "Konvertierung fehlgeschlagen" in err_md
+    assert "Exit-Code: 1" in err_md
+
+
+def test_cmd_read_convert_to_markdown_passes_no_llm_pdf(tmp_path, monkeypatch, capsys):
+    """--no-llm-pdf wird korrekt an _to_markdown durchgereicht."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, _make_att_payload())
+        if "/messages/" in url:
+            return FakeResponse(200, _make_read_msg_payload())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    seen_flags = []
+
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, all_sheets=False):
+        seen_flags.append(no_llm_pdf)
+        output_path.write_text("# ok", encoding="utf-8")
+        return 0
+
+    import file_converter
+    monkeypatch.setattr(file_converter, "_to_markdown", fake_to_markdown)
+
+    mod.cmd_read("msg-1", convert_to_markdown=True, no_llm_pdf=True)
+
+    # Beide Aufrufe muessen no_llm_pdf=True erhalten haben
+    assert len(seen_flags) == 2
+    assert all(f is True for f in seen_flags)
+
+
+# ---------------------------------------------------------------------------
+# E2E: read --convert-to-markdown  (echte Graph-API, echte Konvertierung)
+# ---------------------------------------------------------------------------
+
+MAIL_SCRIPT = str(
+    WORKSPACE
+    / ".agents" / "skills" / "skill-m365-copilot-mail-search" / "scripts"
+    / "m365_mail_search.py"
+)
+TEST_MSG_ID = (
+    "AAMkADQxNDFkMThlLWViMGQtNGU2Mi04YWI3LTEwOWVkNmVmN2QzOQBG"
+    "AAAAAAARqUXzjL2ESqXfYRm8jmgxBwA9a2QUdu57QZSNjZqqqu-zAAMk"
+    "fo4yAAA9a2QUdu57QZSNjZqqqu-zAAYTy1TLAAA="
+)
+E2E_TIMEOUT = 600  # 10 min — LLM-Pipeline braucht Zeit
+
+_EXPECTED_CONTENT = [
+    ("TestPDF.pdf", "TestPDF"),
+    ("TestPNG.png", "Bildinfo 456"),
+    ("TestPPTX.pptx", "Bildinfo 123"),
+    ("TestXLSX-lang.xlsx", "Test Excel"),
+]
+
+
+@pytest.mark.e2e
+def test_cmd_read_convert_to_markdown_e2e():
+    """E2E: Echte Mail per Graph API lesen, Anhaenge herunterladen, nach Markdown konvertieren.
+
+    Benoetigt gueltigen Mail.Read Token (wird uebersprungen wenn nicht vorhanden).
+    Test-Mail enthaelt TestPDF.pdf, TestPNG.png, TestPPTX.pptx, TestXLSX-lang.xlsx.
+    """
+    # Vorherige Artefakte loeschen, damit _unique_att_path keine (2)-Suffixe erzeugt
+    known_out_dir = WORKSPACE / "tmp" / "emails" / "20260406_1331_tobias_carsten_mueller_test_email_e7fc84fd"
+    if known_out_dir.exists():
+        shutil.rmtree(known_out_dir)
+
+    result = subprocess.run(
+        [
+            sys.executable, MAIL_SCRIPT,
+            "read", TEST_MSG_ID,
+            "--save-attachments", "--convert-to-markdown",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=E2E_TIMEOUT,
+    )
+
+    if result.returncode == 2:
+        pytest.skip(f"Kein gueltiger Token: {result.stderr.strip()}")
+
+    assert result.returncode == 0, (
+        f"read fehlgeschlagen (rc={result.returncode})\n"
+        f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
+    )
+
+    # Ausgabe-Ordner aus stdout parsen
+    match = re.search(r"Gespeichert in:\s*(.+)", result.stdout)
+    assert match, f"'Gespeichert in:' nicht in stdout:\n{result.stdout[:500]}"
+    out_dir = WORKSPACE / match.group(1).strip()
+    att_dir = out_dir / "attachments"
+
+    assert att_dir.is_dir(), f"attachments/ nicht angelegt: {att_dir}"
+
+    # Jeder Anhang: Original + Markdown pruefen (identisch zu test_file_converter_e2e.py)
+    for filename, expected_text in _EXPECTED_CONTENT:
+        stem = Path(filename).stem
+        md_name = f"{stem}.md"
+
+        # Original-Anhang gespeichert
+        att_file = att_dir / filename
+        assert att_file.is_file(), f"Anhang fehlt: {att_file}"
+        assert att_file.stat().st_size > 0, f"Anhang leer: {att_file}"
+
+        # Markdown-Datei erzeugt
+        md_file = att_dir / md_name
+        assert md_file.is_file(), f"Markdown fehlt: {md_file}"
+        content = md_file.read_text(encoding="utf-8")
+        assert len(content.strip()) > 0, f"Markdown leer: {md_file}"
+        assert expected_text.lower() in content.lower(), (
+            f"Erwarteter Text '{expected_text}' nicht in {md_name} gefunden.\n"
+            f"Inhalt (erste 500 Zeichen): {content[:500]}"
+        )
+
+    # stdout muss Erfolg fuer alle 4 Anhaenge melden
+    for filename, _ in _EXPECTED_CONTENT:
+        stem = Path(filename).stem
+        assert f"Markdown-Konvertierung OK: {filename} -> {stem}.md" in result.stdout, (
+            f"Erfolgsmeldung fuer {filename} fehlt in stdout"
+        )
