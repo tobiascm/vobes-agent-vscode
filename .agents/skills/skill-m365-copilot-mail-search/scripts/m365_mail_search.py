@@ -35,6 +35,7 @@ Exit-Codes:
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 import sys
 import time
@@ -275,6 +276,55 @@ def _slugify_filename(text: str, limit: int = 80) -> str:
     return slug[:limit].rstrip("_") or "mail_search"
 
 
+_INVALID_WIN_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def _sanitize_att_name(name: str) -> str:
+    """Windows-safe Dateiname fuer Anhaenge."""
+    safe = os.path.basename(name or "").strip()
+    safe = _INVALID_WIN_CHARS.sub("_", safe).strip(" .")
+    return safe or "attachment"
+
+
+def _unique_att_path(directory: Path, name: str) -> Path:
+    """Eindeutiger Pfad: name (2).ext, name (3).ext bei Kollision."""
+    safe = _sanitize_att_name(name)
+    stem, ext = os.path.splitext(safe)
+    candidate = directory / safe
+    idx = 2
+    while candidate.exists():
+        candidate = directory / f"{stem} ({idx}){ext}"
+        idx += 1
+    return candidate
+
+
+def _fmt_sender(name: str, address: str) -> str:
+    """Formatiert Absender als 'Name <email>' oder nur email."""
+    name, address = (name or "").strip(), (address or "").strip()
+    if name and address and name != address:
+        return f"{name} <{address}>"
+    return name or address or "-"
+
+
+def _fmt_recipients(items: list[str], max_items: int = 10) -> str:
+    """Semikolon-getrennte Empfaengerliste, max N + [...]."""
+    items = [i.strip() for i in items if i and i.strip()]
+    if not items:
+        return "-"
+    if len(items) > max_items:
+        items = items[:max_items] + ["[...]"]
+    return "; ".join(items)
+
+
+def _make_email_folder_name(received_iso: str, sender_address: str, subject: str, msg_id: str) -> str:
+    """Ordnername im outlook-agent Stil: YYYYmmdd_HHMM_sender_subject_hash8."""
+    ts = received_iso[:16].replace("-", "").replace("T", "_").replace(":", "")
+    sender_slug = _slugify_filename(sender_address.split("@")[0], limit=40) if sender_address else "unknown"
+    subject_slug = _slugify_filename(subject, limit=40)
+    id_hash = hashlib.sha256(msg_id.encode()).hexdigest()[:8]
+    return f"{ts}_{sender_slug}_{subject_slug}_{id_hash}"
+
+
 def _encode_graph_id_for_path(value: str) -> str:
     """Escaped Graph-IDs fuer die Verwendung als einzelnes URL-Pfadsegment."""
     return quote(value, safe="")
@@ -306,18 +356,19 @@ def _get_first_nonempty_lines(text: str, max_lines: int = BODY_PREVIEW_LINES) ->
 
 
 def _fetch_message_search_context(message_id: str, token: str, max_lines: int = BODY_PREVIEW_LINES) -> dict[str, str]:
-    """Laedt Mail-Kontext fuer Search-Treffer: Preview, CC und Body-Rohdaten."""
+    """Laedt Mail-Kontext fuer Search-Treffer: Preview, CC, Body-Rohdaten und Ordner-ID."""
     if not message_id or message_id == "-":
         return {
             "body_preview": "(Body konnte nicht geladen werden)",
             "cc": "-",
             "body_raw": "",
             "body_type": "text",
+            "folder_id": "",
         }
 
     encoded_message_id = _encode_graph_id_for_path(message_id)
     url = f"https://graph.microsoft.com/v1.0/me/messages/{encoded_message_id}"
-    params = {"$select": "body,ccRecipients"}
+    params = {"$select": "body,ccRecipients,parentFolderId"}
 
     try:
         r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=15)
@@ -327,6 +378,7 @@ def _fetch_message_search_context(message_id: str, token: str, max_lines: int = 
             "cc": "-",
             "body_raw": "",
             "body_type": "text",
+            "folder_id": "",
         }
 
     if r.status_code != 200:
@@ -335,6 +387,7 @@ def _fetch_message_search_context(message_id: str, token: str, max_lines: int = 
             "cc": "-",
             "body_raw": "",
             "body_type": "text",
+            "folder_id": "",
         }
 
     msg = r.json()
@@ -356,7 +409,28 @@ def _fetch_message_search_context(message_id: str, token: str, max_lines: int = 
         "cc": cc_value,
         "body_raw": body_raw,
         "body_type": body_type,
+        "folder_id": msg.get("parentFolderId", ""),
     }
+
+
+def _resolve_folder_name(folder_id: str, token: str, cache: dict[str, str]) -> str:
+    """Laedt den displayName eines Mail-Ordners via /me/mailFolders/{id}. Cached."""
+    if not folder_id:
+        return "-"
+    if folder_id in cache:
+        return cache[folder_id]
+    encoded = _encode_graph_id_for_path(folder_id)
+    url = f"https://graph.microsoft.com/v1.0/me/mailFolders/{encoded}"
+    try:
+        r = requests.get(url, headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        if r.status_code == 200:
+            name = r.json().get("displayName", folder_id)
+            cache[folder_id] = name
+            return name
+    except requests.RequestException:
+        pass
+    cache[folder_id] = folder_id
+    return folder_id
 
 
 def _escape_markdown_link_label(text: str) -> str:
@@ -562,13 +636,24 @@ def _execute_search_request(
 
 
 def _extract_hits_from_search_response(data: dict) -> tuple[int, list[dict]]:
-    """Extrahiert Gesamtzahl und Treffer aus dem Search-Response."""
+    """Extrahiert Gesamtzahl und Treffer aus dem Search-Response.
+
+    Die Graph Search API kann denselben Treffer mehrfach liefern (bekanntes API-Verhalten).
+    Deduplication erfolgt nach hitId, damit jede Nachricht nur einmal erscheint.
+    """
     total = 0
     hits: list[dict] = []
+    seen_hit_ids: set[str] = set()
     for val in data.get("value", []):
         for container in val.get("hitsContainers", []):
             total = container.get("total", 0)
-            hits.extend(container.get("hits") or [])
+            for hit in container.get("hits") or []:
+                hit_id = hit.get("hitId", "")
+                if hit_id and hit_id in seen_hit_ids:
+                    continue
+                if hit_id:
+                    seen_hit_ids.add(hit_id)
+                hits.append(hit)
     return total, hits
 
 
@@ -1038,12 +1123,14 @@ def cmd_search(
     print(f'### Mail-Suche: "{query}"\n')
     print(f"**{total} Treffer** (zeige {len(hits)})\n")
 
+    folder_name_cache: dict[str, str] = {}
     for i, hit in enumerate(hits, 1):
         res = hit.get("resource", {})
         hit_id = hit.get("hitId", "-")
         subject = _truncate_text((res.get("subject") or "-").strip() or "-", 160)
         summary = _clean_search_snippet(hit.get("summary", ""), 180)
         search_ctx = _fetch_message_search_context(hit_id, token)
+        folder_name = _resolve_folder_name(search_ctx.get("folder_id", ""), token, folder_name_cache)
         body_preview = search_ctx["body_preview"] if not only_summary else ""
         received = (res.get("receivedDateTime") or "").strip() or "-"
         attachment_entries = []
@@ -1061,6 +1148,7 @@ def cmd_search(
 
         output_lines.append(f"## Treffer {i}")
         output_lines.append(f"- receivedDateTime: {received}")
+        output_lines.append(f"- folder: {folder_name}")
         output_lines.append(f"- from: {from_value}")
         output_lines.append(f"- replyTo: {reply_to}")
         if cc_value != "-":
@@ -1083,10 +1171,12 @@ def cmd_search(
             for line in body_preview.splitlines():
                 output_lines.append(f"  {line}")
         output_lines.append(f"- webLink: {web_link_display}")
+        output_lines.append(f"- messageId: `{hit_id}`")
         output_lines.append("")
 
         print(f"#### Treffer {i}")
         print(f"- receivedDateTime: {received}")
+        print(f"- folder: {folder_name}")
         print(f"- from: {from_value}")
         print(f"- replyTo: {reply_to}")
         if cc_value != "-":
@@ -1104,6 +1194,7 @@ def cmd_search(
             print("- bodyPreview:")
             for line in body_preview.splitlines():
                 print(f"  {line}")
+        print(f"- messageId: {hit_id}")
         print()
 
     output_path.write_text("\n".join(output_lines) + "\n", encoding="utf-8")
@@ -1181,16 +1272,27 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
 
     msg = r.json()
 
-    # Header
+    # Header-Daten
     subject = msg.get("subject", "?")
     sender = msg.get("from", {}).get("emailAddress", {})
-    from_str = f"{sender.get('name', '?')} <{sender.get('address', '?')}>"
+    from_str = _fmt_sender(sender.get("name", ""), sender.get("address", ""))
+    sender_address = sender.get("address", "")
     received = msg.get("receivedDateTime", "?")[:19].replace("T", " ")
     importance = msg.get("importance", "normal")
     has_attach = msg.get("hasAttachments", False)
 
-    to_list = [f"{t['emailAddress']['name']} <{t['emailAddress']['address']}>" for t in msg.get("toRecipients", [])]
-    cc_list = [f"{c['emailAddress']['name']} <{c['emailAddress']['address']}>" for c in msg.get("ccRecipients", [])]
+    to_list = [_fmt_sender(t["emailAddress"].get("name", ""), t["emailAddress"].get("address", ""))
+               for t in msg.get("toRecipients", [])]
+    cc_list = [_fmt_sender(c["emailAddress"].get("name", ""), c["emailAddress"].get("address", ""))
+               for c in msg.get("ccRecipients", [])]
+
+    # Ausgabe-Ordner: tmp/emails/YYYYmmdd_HHMM_sender_subject_hash8/
+    folder_name = _make_email_folder_name(
+        msg.get("receivedDateTime", ""), sender_address, subject, message_id,
+    )
+    out_dir = REPO_ROOT / "tmp" / "emails" / folder_name
+    att_dir = out_dir / "attachments"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # Body (roh — wird erst nach Inline-Bild-Verarbeitung konvertiert)
     body_raw = msg.get("body", {}).get("content", "")
@@ -1208,8 +1310,35 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
         except requests.RequestException:
             pass
 
-    # Inline-Bilder speichern und cid:-Referenzen im Body ersetzen
-    att_dir = REPO_ROOT / "userdata" / "tmp"
+    non_inline = [a for a in attachments if not a.get("isInline")]
+
+    # Nicht-Inline-Anhaenge speichern (VOR email.md, damit Dateinamen verfuegbar)
+    saved_att_names: list[str] = []
+    converted: list[tuple[str, str]] = []
+    if (save_attachments or convert) and non_inline:
+        att_dir.mkdir(parents=True, exist_ok=True)
+        for att in non_inline:
+            content_bytes = att.get("contentBytes", "")
+            if not content_bytes:
+                continue
+            att_name = att.get("name", "attachment")
+            raw_bytes = _decode_attachment_bytes(content_bytes, att_name)
+            if raw_bytes is None:
+                continue
+            if save_attachments:
+                att_path = _unique_att_path(att_dir, att_name)
+                att_path.write_bytes(raw_bytes)
+                saved_att_names.append(att_path.name)
+            if convert:
+                from file_parsers import convert_bytes as _convert_bytes
+                try:
+                    text = _convert_bytes(raw_bytes, att_name)
+                    if text:
+                        converted.append((att_name, text))
+                except Exception as e:
+                    converted.append((att_name, f"_(Konvertierung fehlgeschlagen: {e})_"))
+
+    # Inline-Bilder in attachments/ speichern und cid:-Referenzen im Body ersetzen
     att_dir.mkdir(parents=True, exist_ok=True)
     inline_saved = []
     for att in attachments:
@@ -1223,7 +1352,7 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
         raw_bytes = _decode_attachment_bytes(content_bytes, att_name)
         if raw_bytes is None:
             continue
-        att_path = att_dir / att_name
+        att_path = _unique_att_path(att_dir, att_name)
         att_path.write_bytes(raw_bytes)
         inline_saved.append(str(att_path))
         if content_id and body_type == "html":
@@ -1235,80 +1364,63 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
     else:
         body_text = body_raw
 
-    # Ausgabe Header
-    print(f"### {subject}\n")
-    print(f"**Von:** {from_str}")
-    print(f"**Datum:** {received}")
-    if importance != "normal":
-        print(f"**Prioritaet:** {importance}")
+    # email.md aufbauen — outlook-agent Format (Plaintext-Header)
+    inline_atts = [a for a in attachments if a.get("isInline")]
 
-    if attachments:
-        non_inline = [a.get("name", "?") for a in attachments if not a.get("isInline")]
-        inline_names = [a.get("name", "?") for a in attachments if a.get("isInline")]
-        if non_inline:
-            print(f"**Anhaenge ({len(non_inline)}):**")
-            for name in non_inline:
-                print(f"  - {name}")
-        if inline_names:
-            print(f"**Inline-Bilder ({len(inline_names)}):**")
-            for name in inline_names:
-                print(f"  - {name}")
-    print(f"**An:** {'; '.join(to_list)}")
-    if cc_list:
-        print(f"**Cc:** {'; '.join(cc_list)}")
-    print(f"\n---\n")
+    if saved_att_names:
+        att_lines = ["Anhaenge:"] + [f"- attachments/{n}" for n in saved_att_names]
+    elif non_inline:
+        att_lines = ["Anhaenge:"] + [f"- {a.get('name', '?')}" for a in non_inline]
+    else:
+        att_lines = ["Anhaenge: -"]
+
+    if inline_atts:
+        inline_lines = ["Inline-Bilder:"] + [f"- {a.get('name', '?')}" for a in inline_atts]
+    else:
+        inline_lines = []
+
+    header_lines = [
+        f"Von: {from_str}",
+        f"Gesendet: {received}",
+    ]
+    if importance != "normal":
+        header_lines.append(f"Prioritaet: {importance}")
+    header_lines += [
+        f"An: {_fmt_recipients(to_list)}",
+        f"Cc: {_fmt_recipients(cc_list)}",
+        f"Betreff: {subject}",
+    ]
+
+    md_lines = header_lines + att_lines + inline_lines + ["", body_text]
+
+    email_md_path = out_dir / "email.md"
+    email_md_path.write_text("\n".join(md_lines), encoding="utf-8")
+
+    # Konsole: gleiches Format wie email.md
+    for line in header_lines + att_lines + inline_lines:
+        print(line)
+    print()
     print(body_text)
 
-    # Anhaenge speichern und/oder konvertieren
-    if (save_attachments or convert) and attachments:
-        from file_parsers import convert_bytes as _convert_bytes
+    # Konsole: gespeicherte Anhaenge
+    if saved_att_names:
+        print(f"\n{len(saved_att_names)} Anhang/Anhaenge gespeichert in attachments/:")
+        for name in saved_att_names:
+            print(f"  - {name}")
 
-        att_dir = REPO_ROOT / "userdata" / "tmp"
-        att_dir.mkdir(parents=True, exist_ok=True)
-        saved = []
-        converted = []
-        for att in attachments:
-            if att.get("isInline"):
-                continue
-            content_bytes = att.get("contentBytes", "")
-            if not content_bytes:
-                continue
-            att_name = att.get("name", "attachment")
-            raw_bytes = _decode_attachment_bytes(content_bytes, att_name)
-            if raw_bytes is None:
-                continue
+    if converted:
+        for att_name, text in converted:
+            print(f"\nAnhang: {att_name}\n")
+            print(text)
 
-            if save_attachments:
-                att_path = att_dir / att_name
-                att_path.write_bytes(raw_bytes)
-                saved.append(str(att_path))
-
-            if convert:
-                try:
-                    text = _convert_bytes(raw_bytes, att_name)
-                    if text:
-                        converted.append((att_name, text))
-                except Exception as e:
-                    converted.append((att_name, f"_(Konvertierung fehlgeschlagen: {e})_"))
-
-        if saved:
-            print(f"\n---\n")
-            print(f"**{len(saved)} Anhang/Anhaenge gespeichert:**")
-            for s in saved:
-                print(f"  - {s}")
-
-        if converted:
-            for att_name, text in converted:
-                print(f"\n---\n")
-                print(f"## Anhang: {att_name}\n")
-                print(text)
+    rel_out = out_dir.relative_to(REPO_ROOT)
+    print(f"\nGespeichert in: {rel_out}")
 
     # Thread nachladen
     if include_thread:
         conversation_id = msg.get("conversationId")
         if not conversation_id:
-            print("\n---\n")
-            print("_Kein conversationId vorhanden — Thread kann nicht geladen werden._")
+            print("\nKein conversationId vorhanden — Thread kann nicht geladen werden.")
             return
 
         thread_url = "https://graph.microsoft.com/v1.0/me/messages"

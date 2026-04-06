@@ -155,10 +155,13 @@ python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py
 Die Search API liefert im Suchmodus mehrere Metadaten und Such-Snippets. Standardmaessig laedt das Script fuer
 jeden Treffer zusaetzlich die eigentliche Mail per `hitId` nach und schreibt die ersten **10** nichtleeren
 Body-Zeilen als `bodyPreview` in STDOUT und in die Ergebnisdatei unter `tmp/`.
-Mit `--only-summary` wird stattdessen nur `summary` aus dem Search-Response ausgegeben. Fuer den kompletten Body:
+Mit `--only-summary` wird stattdessen nur `summary` aus dem Search-Response ausgegeben.
+
+Jeder Treffer zeigt am Ende die `messageId` — sowohl in STDOUT als auch in der gespeicherten Markdown-Datei.
+Diese `messageId` wird als `MESSAGE_ID` fuer den `read`-Befehl verwendet:
 
 ```bash
-# MESSAGE_ID ist die hitId aus dem Suchergebnis
+# MESSAGE_ID ist die messageId aus dem Suchergebnis (wird pro Treffer in STDOUT und .md angezeigt)
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID"
 
 # Mit Anhang-Download nach userdata/tmp/
@@ -174,8 +177,9 @@ python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --convert --include-thread
 ```
 
-Ausgabe: Subject, Von, Datum, An, Cc, Prioritaet, Anhang-Liste und vollstaendiger Body (HTML wird automatisch in Text konvertiert).
-- `--save-attachments` speichert Anhaenge als Dateien nach `userdata/tmp/`.
+Die Mail wird als `email.md` im Ordner `tmp/emails/{YYYYmmdd_HHMM}_{sender}_{subject}_{hash8}/` gespeichert.
+Ausgabe: Von, Gesendet, An, Cc, Betreff, Anhaenge und vollstaendiger Body (HTML wird automatisch in Text konvertiert).
+- `--save-attachments` speichert Anhaenge in `tmp/emails/.../attachments/`.
 - `--convert` extrahiert den Textinhalt unterstuetzter Anhaenge (PDF, DOCX, XLSX, PPTX) und haengt ihn seitenweise als Markdown an die Ausgabe an. Nutzt intern `scripts/file_parsers.py`.
 - `--include-thread` liest die `conversationId` aus der Mail und laedt alle Nachrichten der Unterhaltung per `GET /v1.0/me/messages?$filter=conversationId eq '...'`. Gibt eine chronologische Tabelle aller Thread-Nachrichten aus, die aktuelle Mail mit **◀** markiert.
 
@@ -246,7 +250,7 @@ Rauschworte wie `INTERNAL` werden aus `summary` und `bodyPreview` entfernt.
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py fetch` | Mail-Token mit Mail.Read aktiv beschaffen |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py check-token` | Cache-Status des dedizierten Mail-Token-Resolvers pruefen |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID"` | Vollstaendige Mail laden (Body, To, Cc) |
-| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --save-attachments` | Mail laden + Anhaenge nach userdata/tmp/ speichern |
+| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --save-attachments` | Mail laden + Anhaenge nach tmp/emails/.../attachments/ speichern |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --convert` | Mail laden + Anhaenge als Text extrahieren (PDF, DOCX, XLSX, PPTX) |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --include-thread` | Mail laden + alle Thread-Nachrichten chronologisch auflisten |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py check-token` | Prueft ob Token mit Mail.Read vorhanden |
