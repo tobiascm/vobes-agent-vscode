@@ -1267,10 +1267,60 @@ def cmd_search(
 # HTML to text
 # ---------------------------------------------------------------------------
 
+def _strip_cell_html(cell_html: str) -> str:
+    """Bereinigt den HTML-Inhalt einer Tabellenzelle zu reinem Text."""
+    text = re.sub(r'<br\s*/?>', ' ', cell_html, flags=re.IGNORECASE)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = text.replace('&nbsp;', ' ').replace('&amp;', '&')
+    text = text.replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text.replace('|', '\\|')  # Pipe-Zeichen in Zellen escapen
+
+
+def _html_table_to_markdown(table_html: str) -> str:
+    """Konvertiert einen HTML-<table>-Block in eine Markdown-Tabelle.
+
+    Verarbeitet <th> und <td>, ignoriert tiefe Verschachtelung per Regex.
+    Wird von _html_to_text aufgerufen bevor Tags generell gestrippt werden.
+    """
+    rows: list[list[str]] = []
+    is_header: list[bool] = []
+
+    for tr_match in re.finditer(r'<tr[^>]*>(.*?)</tr>', table_html, re.IGNORECASE | re.DOTALL):
+        row_html = tr_match.group(1)
+        cells = [
+            _strip_cell_html(m.group(1))
+            for m in re.finditer(r'<t[dh][^>]*>(.*?)</t[dh]>', row_html, re.IGNORECASE | re.DOTALL)
+        ]
+        if cells:
+            rows.append(cells)
+            is_header.append(bool(re.search(r'<th[\s>]', row_html, re.IGNORECASE)))
+
+    if not rows:
+        return ''
+
+    lines: list[str] = []
+    sep_inserted = False
+    for i, row_cells in enumerate(rows):
+        lines.append('| ' + ' | '.join(row_cells) + ' |')
+        if not sep_inserted and (is_header[i] or i == 0):
+            lines.append('| ' + ' | '.join(['---'] * len(row_cells)) + ' |')
+            sep_inserted = True
+
+    return '\n'.join(lines) + '\n\n'
+
+
 def _html_to_text(html: str) -> str:
     """Einfache HTML→Text-Konvertierung ohne externe Libs."""
+    # HTML-Tabellen zuerst in Markdown-Tabellen konvertieren (vor allgemeinem Tag-Stripping)
+    text = re.sub(
+        r'<table[^>]*>.*?</table>',
+        lambda m: _html_table_to_markdown(m.group(0)),
+        html,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
     # <img> Tags zu Markdown-Bildlinks konvertieren bevor HTML gestrippt wird
-    text = re.sub(r'<img[^>]+src=["\']([^"\']+)["\'][^>]*/?>', r'![Bild](\1)', html, flags=re.IGNORECASE)
+    text = re.sub(r'<img[^>]+src=["\']([^"\']+)["\'][^>]*/?>', r'![Bild](\1)', text, flags=re.IGNORECASE)
     text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'</(p|div|tr|li|h[1-6])>', '\n', text, flags=re.IGNORECASE)
     text = re.sub(r'<[^>]+>', '', text)

@@ -1384,3 +1384,55 @@ def test_cmd_read_inline_image_llm_failure_non_blocking(tmp_path, monkeypatch, c
     email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
     assert len(email_dirs) == 1
     assert (email_dirs[0] / "email.md").is_file()
+
+
+# ---------------------------------------------------------------------------
+# _html_to_text table conversion
+# ---------------------------------------------------------------------------
+
+def test_html_to_text_converts_simple_table_to_markdown():
+    html = (
+        "<table>"
+        "<tr><th>Jahr</th><th>AL</th><th>EL Euro</th></tr>"
+        "<tr><td>26</td><td>EKEA</td><td>48.083,43 €</td></tr>"
+        "<tr><td>26</td><td>EKEB</td><td>13.130,57 €</td></tr>"
+        "</table>"
+    )
+    result = mod._html_to_text(html)
+
+    # Erste Zeile: Header
+    lines = [l for l in result.splitlines() if l.strip()]
+    assert lines[0] == "| Jahr | AL | EL Euro |"
+    # Zweite Zeile: Separator
+    assert lines[1] == "| --- | --- | --- |"
+    # Datenzeilen
+    assert "| 26 | EKEA | 48.083,43 € |" in result
+    assert "| 26 | EKEB | 13.130,57 € |" in result
+    # Kein vertikales Spaltendump mehr
+    assert "26\nEKEA" not in result
+
+
+def test_html_to_text_table_with_nested_p_tags():
+    html = (
+        "<table>"
+        "<tr><th><p>Spalte A</p></th><th><p>Spalte B</p></th></tr>"
+        "<tr><td><p>Wert 1</p></td><td><p>100,00 €</p></td></tr>"
+        "</table>"
+    )
+    result = mod._html_to_text(html)
+    assert "| Spalte A | Spalte B |" in result
+    assert "| Wert 1 | 100,00 € |" in result
+
+
+def test_html_to_text_table_pipe_in_cell_is_escaped():
+    html = "<table><tr><th>A</th><th>B</th></tr><tr><td>x|y</td><td>z</td></tr></table>"
+    result = mod._html_to_text(html)
+    assert r"x\|y" in result
+
+
+def test_html_to_text_mixed_content_table_and_text():
+    html = "<p>Vor der Tabelle</p><table><tr><td>Zelle</td></tr></table><p>Nach der Tabelle</p>"
+    result = mod._html_to_text(html)
+    assert "Vor der Tabelle" in result
+    assert "| Zelle |" in result
+    assert "Nach der Tabelle" in result
