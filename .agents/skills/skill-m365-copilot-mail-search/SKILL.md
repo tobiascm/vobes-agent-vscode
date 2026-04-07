@@ -179,18 +179,28 @@ python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py
 # Anhaenge herunterladen + nach Markdown konvertieren (ohne LLM, schnell)
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --save-attachments --convert-to-markdown --no-llm
 
+# Inline-Bild-LLM-Beschreibung deaktivieren (nur ![Bild](pfad) im Body)
+python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --no-inline-llm
+
 # Kombinierbar: Mail lesen + Anhaenge konvertieren + Thread anzeigen
 python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --convert --include-thread
 ```
 
 Die Mail wird als `email.md` im Ordner `tmp/emails/{YYYYmmdd_HHMM}_{sender}_{subject}_{hash8}/` gespeichert.
 Ausgabe: Von, Gesendet, An, Cc, Betreff, Anhaenge und vollstaendiger Body (HTML wird automatisch in Text konvertiert).
+
+**Inline-Bilder:** Werden standardmaessig per LLM (lightrag-Pipeline) beschrieben und die Beschreibung
+direkt in den Mail-Body eingebettet. Damit ist der Mail-Inhalt ohne Bildbetrachtung vollstaendig verstaendlich.
+Mit `--no-inline-llm` wird die LLM-Beschreibung deaktiviert und nur `![Bild](pfad)` im Body belassen.
+Die Flags `--no-llm` und `--no-llm-pdf` wirken auch auf die Inline-Bild-Konvertierung.
+
 - `--save-attachments` speichert Anhaenge in `tmp/emails/.../attachments/`. SharePoint-/OneDrive-Links im Mail-Body werden automatisch erkannt und ebenfalls heruntergeladen (benoetigt separaten Files.Read-Token via `m365_copilot_graph_token`).
 - `--convert` extrahiert den Textinhalt unterstuetzter Anhaenge (PDF, DOCX, XLSX, PPTX) und haengt ihn seitenweise als Markdown an die Ausgabe an. Nutzt intern `.agents/skills/skill-file-converter/scripts/file_parsers.py`.
 - `--convert-to-markdown` konvertiert gespeicherte Anhaenge (inkl. SP-Downloads) nach Markdown. Impliziert `--save-attachments`. Zwei Modi:
   - **Standard (LLM):** Praezise Konvertierung ueber lightrag LLM-Pipeline. Deutlich genauer, aber langsam (mehrere Minuten pro Datei). **Pflicht bei zahlenrelevanten Dokumenten** wie Jobsplits, Budget-PDFs oder Tabellen, wo exakte Werte wichtig sind.
   - **`--no-llm`:** Schnelle lokale Extraktion via `file_parsers` (Sekunden statt Minuten). Gut fuer Ueberblick und wenn es auf Geschwindigkeit ankommt, aber weniger praezise bei komplexen Layouts.
   - **`--no-llm-pdf`:** Nur PDFs ohne LLM (via pymupdf4llm), alle anderen Formate weiterhin via LLM.
+- `--no-inline-llm` deaktiviert die automatische LLM-Beschreibung von Inline-Bildern. Inline-Bilder werden dann nur als `![Bild](pfad)` referenziert (altes Verhalten).
 - `--include-thread` liest die `conversationId` aus der Mail und laedt alle Nachrichten der Unterhaltung per `GET /v1.0/me/messages?$filter=conversationId eq '...'`. Gibt eine chronologische Tabelle aller Thread-Nachrichten aus, die aktuelle Mail mit **◀** markiert.
 
 **Entscheidungshilfe `--no-llm` vs. LLM (Standard):**

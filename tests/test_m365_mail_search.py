@@ -779,7 +779,7 @@ def test_cmd_read_convert_to_markdown_success(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(mod.requests, "get", fake_get)
 
     # Mock file_converter._to_markdown: schreibt einfach "# converted" in die Ausgabedatei
-    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False):
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False, debug=False):
         output_path.write_text(f"# {input_path.name}\n\nKonvertierter Inhalt.", encoding="utf-8")
         return 0
 
@@ -829,7 +829,7 @@ def test_cmd_read_convert_to_markdown_failure_writes_error_md(tmp_path, monkeypa
     # Mock _to_markdown: erster Anhang OK, zweiter Fehler
     call_count = {"n": 0}
 
-    def fake_to_markdown_partial(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False):
+    def fake_to_markdown_partial(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False, debug=False):
         call_count["n"] += 1
         if call_count["n"] == 1:
             output_path.write_text(f"# {input_path.name}\n\nOK.", encoding="utf-8")
@@ -882,7 +882,7 @@ def test_cmd_read_convert_to_markdown_passes_no_llm_pdf(tmp_path, monkeypatch, c
 
     seen_flags = []
 
-    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False):
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False, debug=False):
         seen_flags.append(no_llm_pdf)
         output_path.write_text("# ok", encoding="utf-8")
         return 0
@@ -1167,7 +1167,7 @@ def test_cmd_read_sp_download_with_convert_to_markdown(tmp_path, monkeypatch, ca
 
     monkeypatch.setattr(mod, "_try_download_sp_file", fake_try_download)
 
-    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False):
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False, debug=False):
         output_path.write_text(f"# {input_path.name}\n\nKonvertiert.", encoding="utf-8")
         return 0
 
@@ -1225,3 +1225,162 @@ def test_cmd_read_no_sp_links_in_body(tmp_path, monkeypatch, capsys):
     mod.cmd_read("msg-1", save_attachments=True)
 
     assert not download_called["called"], "SP-Download soll nicht aufgerufen werden wenn keine SP-Links im Body"
+
+
+# ---------------------------------------------------------------------------
+# Inline-Bild LLM-Beschreibung
+# ---------------------------------------------------------------------------
+
+def _make_msg_with_inline_image(msg_id="msg-inline"):
+    """Fake-Payload fuer Mail mit Inline-Bild im HTML-Body."""
+    return {
+        "id": msg_id,
+        "subject": "Mail mit Screenshot",
+        "from": {"emailAddress": {"name": "Alice", "address": "alice@example.com"}},
+        "toRecipients": [{"emailAddress": {"name": "Bob", "address": "bob@example.com"}}],
+        "ccRecipients": [],
+        "receivedDateTime": "2026-04-07T10:00:00Z",
+        "body": {
+            "contentType": "html",
+            "content": '<p>Hallo, hier der Screenshot:</p><img src="cid:img001" /><p>Ende.</p>',
+        },
+        "hasAttachments": True,
+        "importance": "normal",
+        "conversationId": "conv-inline",
+    }
+
+
+def _make_inline_att_payload():
+    """Fake-Payload mit einem Inline-Bild-Attachment."""
+    import base64
+    return {
+        "value": [
+            {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "id": "att-inline-1",
+                "name": "screenshot.png",
+                "isInline": True,
+                "contentId": "img001",
+                "contentBytes": base64.b64encode(b"fake-png-bytes").decode(),
+            },
+        ]
+    }
+
+
+def test_cmd_read_inline_image_llm_description_default(tmp_path, monkeypatch, capsys):
+    """Inline-Bilder werden standardmaessig per LLM beschrieben und im Body eingebettet."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, _make_inline_att_payload())
+        if "/messages/" in url:
+            return FakeResponse(200, _make_msg_with_inline_image())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    to_markdown_calls = []
+
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False, debug=False):
+        to_markdown_calls.append(input_path.name)
+        output_path.write_text("*Caption: Architekturdiagramm mit 3 Komponenten*\n\nDas Bild zeigt eine Systemarchitektur.", encoding="utf-8")
+        return 0
+
+    import file_converter
+    monkeypatch.setattr(file_converter, "_to_markdown", fake_to_markdown)
+
+    mod.cmd_read("msg-inline")
+
+    stdout = capsys.readouterr().out
+
+    # _to_markdown wurde fuer das Inline-Bild aufgerufen
+    assert "screenshot.png" in to_markdown_calls
+
+    # LLM-Beschreibung im Body eingebettet
+    assert "Architekturdiagramm" in stdout
+    assert "Systemarchitektur" in stdout
+
+    # email.md enthaelt die Beschreibung
+    email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
+    assert len(email_dirs) == 1
+    email_md = (email_dirs[0] / "email.md").read_text(encoding="utf-8")
+    assert "Architekturdiagramm" in email_md
+    assert "Inline-Bilder (LLM-beschrieben):" in email_md
+    assert "![Bild](" not in email_md  # Roher Bildlink ersetzt
+
+
+def test_cmd_read_inline_image_no_inline_llm_opt_out(tmp_path, monkeypatch, capsys):
+    """--no-inline-llm deaktiviert LLM-Beschreibung, nur ![Bild](pfad) bleibt."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, _make_inline_att_payload())
+        if "/messages/" in url:
+            return FakeResponse(200, _make_msg_with_inline_image())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    to_markdown_calls = []
+
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False, debug=False):
+        to_markdown_calls.append(input_path.name)
+        return 0
+
+    import file_converter
+    monkeypatch.setattr(file_converter, "_to_markdown", fake_to_markdown)
+
+    mod.cmd_read("msg-inline", no_inline_llm=True)
+
+    stdout = capsys.readouterr().out
+
+    # _to_markdown wurde NICHT aufgerufen
+    assert len(to_markdown_calls) == 0
+
+    # Body enthaelt nur den rohen Bildlink
+    assert "![Bild](" in stdout
+
+    # email.md Header sagt "Inline-Bilder:" (nicht LLM-beschrieben)
+    email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
+    email_md = (email_dirs[0] / "email.md").read_text(encoding="utf-8")
+    assert "Inline-Bilder:" in email_md
+    assert "LLM-beschrieben" not in email_md
+
+
+def test_cmd_read_inline_image_llm_failure_non_blocking(tmp_path, monkeypatch, capsys):
+    """Fehlgeschlagene LLM-Konvertierung bricht cmd_read nicht ab."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, _make_inline_att_payload())
+        if "/messages/" in url:
+            return FakeResponse(200, _make_msg_with_inline_image())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    def fake_to_markdown_crash(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False, debug=False):
+        raise RuntimeError("LLM nicht erreichbar")
+
+    import file_converter
+    monkeypatch.setattr(file_converter, "_to_markdown", fake_to_markdown_crash)
+
+    # Soll nicht abstuerzen
+    mod.cmd_read("msg-inline")
+
+    out = capsys.readouterr()
+
+    # Warning auf stderr
+    assert "LLM-Beschreibung" in out.err
+    assert "screenshot.png" in out.err
+
+    # email.md trotzdem erstellt mit Fallback (roher Bildlink)
+    email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
+    assert len(email_dirs) == 1
+    assert (email_dirs[0] / "email.md").is_file()

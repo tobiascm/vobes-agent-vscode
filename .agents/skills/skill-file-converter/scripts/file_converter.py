@@ -46,7 +46,7 @@ _NON_LLM_EXTS = {".pptx", ".xlsx", ".xls", ".docx", ".pdf", ".csv",
 
 
 def _to_markdown(input_path: Path, output_path: Path, *, no_llm_pdf: bool = False,
-                 no_llm: bool = False, all_sheets: bool = False) -> int:
+                 no_llm: bool = False, all_sheets: bool = False, debug: bool = False) -> int:
     """Konvertiert eine Datei nach Markdown.
 
     Wenn no_llm=True und das Format von file_parsers unterstuetzt wird,
@@ -74,7 +74,7 @@ def _to_markdown(input_path: Path, output_path: Path, *, no_llm_pdf: bool = Fals
 
     # --- LLM path: file_llm_converter ---
     from file_llm_converter import _to_markdown as _llm_to_markdown
-    return _llm_to_markdown(input_path, output_path, no_llm_pdf=no_llm_pdf, all_sheets=all_sheets)
+    return _llm_to_markdown(input_path, output_path, no_llm_pdf=no_llm_pdf, all_sheets=all_sheets, debug=debug)
 
 
 # ---------------------------------------------------------------------------

@@ -45,7 +45,7 @@ PDF_HANDLERS: dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 
-def _to_markdown(input_path: Path, output_path: Path, *, no_llm_pdf: bool = False, all_sheets: bool = False) -> int:
+def _to_markdown(input_path: Path, output_path: Path, *, no_llm_pdf: bool = False, all_sheets: bool = False, debug: bool = False) -> int:
     if not LIGHTRAG_REPO.is_dir():
         print(f"ERROR: lightrag_test Repo nicht gefunden: {LIGHTRAG_REPO}", file=sys.stderr)
         return 3
@@ -65,6 +65,8 @@ def _to_markdown(input_path: Path, output_path: Path, *, no_llm_pdf: bool = Fals
         cmd.append("--all-sheets")
 
     env = {**os.environ, "POSTGRES_TIMEOUT_SECONDS": "5"}
+    if debug:
+        env.update({"DEBUG_RAG": "true", "DEBUG_LLM": "true", "LOG_LEVEL": "DEBUG", "VERBOSE": "true"})
     try:
         result = subprocess.run(
             cmd,
@@ -80,7 +82,7 @@ def _to_markdown(input_path: Path, output_path: Path, *, no_llm_pdf: bool = Fals
 
     if result.stdout:
         print(result.stdout, end="")
-    if result.returncode != 0 and result.stderr:
+    if result.stderr and (result.returncode != 0 or debug):
         print(result.stderr, end="", file=sys.stderr)
     return result.returncode
 

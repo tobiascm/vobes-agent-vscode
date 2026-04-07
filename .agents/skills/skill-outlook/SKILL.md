@@ -229,3 +229,10 @@ Optional `--recipient` ergaenzen, falls die Teilnehmer-Ueberlappung relevant ist
 | Timeout bei AdvancedSearch | Outlook ist ueberlastet — kurz warten und erneut versuchen |
 | `search requires at least one positive filter` | Mindestens `--keyword` oder `--sender` angeben |
 | Leerer Body | Mail hat keinen Text-Body (evtl. nur HTML) |
+
+## Hinweis: Inline-Bilder
+
+Outlook COM extrahiert **keine Inline-Bilder** (cid:-Bilder im HTML-Body).
+Fuer Mails mit Inline-Bildern (z.B. Screenshots, Diagramme im Mailtext) besser
+`$skill-m365-copilot-mail-search` verwenden — dort werden Inline-Bilder automatisch
+per LLM beschrieben und die Beschreibung direkt in den Mail-Body eingebettet.

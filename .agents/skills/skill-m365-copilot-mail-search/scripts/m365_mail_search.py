@@ -261,6 +261,22 @@ def _strip_noise_terms(text: str) -> str:
     return cleaned
 
 
+_VW_FOOTER_RE = re.compile(
+    r"(?:Volkswagen\s+(?:AG|Aktiengesellschaft)\s*\n"
+    r"(?:.*\n){0,6}?"
+    r"(?:Tel\.?\s*\+?[\d\s\-/]+))",
+    re.IGNORECASE,
+)
+
+
+def _strip_email_noise(text: str) -> str:
+    """Entfernt bekannte Rauschtexte aus Mail-Bodies (spart Tokens)."""
+    text = _strip_noise_terms(text)
+    text = _VW_FOOTER_RE.sub("", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def _strip_email_addresses(text: str) -> str:
     """Entfernt Mailadressen aus Vorschauzeilen, behaelt Anzeigenamen aber bei."""
     cleaned = re.sub(r"\s*<[^<>\s]+@[^<>\s]+>\s*", "", text)
@@ -302,10 +318,8 @@ def _unique_att_path(directory: Path, name: str) -> Path:
 
 
 def _fmt_sender(name: str, address: str) -> str:
-    """Formatiert Absender als 'Name <email>' oder nur email."""
+    """Formatiert Absender als Name (ohne E-Mail-Adresse, spart Tokens)."""
     name, address = (name or "").strip(), (address or "").strip()
-    if name and address and name != address:
-        return f"{name} <{address}>"
     return name or address or "-"
 
 
@@ -1284,7 +1298,7 @@ def _decode_attachment_bytes(content_bytes: str, att_name: str) -> bytes | None:
 # CMD: read
 # ---------------------------------------------------------------------------
 
-def cmd_read(message_id: str, token: str | None = None, save_attachments: bool = False, convert: bool = False, include_thread: bool = False, convert_to_markdown: bool = False, no_llm_pdf: bool = False, no_llm: bool = False) -> None:
+def cmd_read(message_id: str, token: str | None = None, save_attachments: bool = False, convert: bool = False, include_thread: bool = False, convert_to_markdown: bool = False, no_llm_pdf: bool = False, no_llm: bool = False, no_inline_llm: bool = False, debug: bool = False) -> None:
     """Laedt eine Mail vollstaendig per GET /v1.0/me/messages/{id}.
 
     Mit --include-thread wird die conversationId aus der Mail gelesen und
@@ -1295,6 +1309,10 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
     Originaldateien in attachments/ abgelegt. Impliziert --save-attachments.
     Mit --no-llm werden alle Anhaenge lokal ohne LLM konvertiert (schneller).
     Mit --no-llm-pdf wird nur PDF-Text ohne LLM extrahiert.
+
+    Inline-Bilder werden standardmaessig per LLM beschrieben und die Beschreibung
+    direkt in den Mail-Body eingebettet. Mit --no-inline-llm wird das deaktiviert
+    und nur ![Bild](pfad) im Body belassen.
     """
     if convert_to_markdown:
         save_attachments = True
@@ -1396,7 +1414,7 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
             if convert_to_markdown and save_attachments:
                 from file_converter import _to_markdown
                 md_out = att_path.with_suffix(".md")
-                rc = _to_markdown(att_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm)
+                rc = _to_markdown(att_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm, debug=debug)
                 if rc == 0 and md_out.is_file():
                     md_converted_names.append(md_out.name)
                     print(f"Markdown-Konvertierung OK: {att_path.name} -> {md_out.name}")
@@ -1410,9 +1428,10 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
                     )
                     md_converted_names.append(md_out.name)
 
-    # Inline-Bilder in attachments/ speichern und cid:-Referenzen im Body ersetzen
+    # Inline-Bilder in attachments/ speichern, per LLM beschreiben und cid:-Referenzen ersetzen
     att_dir.mkdir(parents=True, exist_ok=True)
     inline_saved = []
+    inline_descriptions: dict[str, str] = {}  # att_path -> LLM-Beschreibungstext
     for att in attachments:
         if not att.get("isInline"):
             continue
@@ -1427,6 +1446,17 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
         att_path = _unique_att_path(att_dir, att_name)
         att_path.write_bytes(raw_bytes)
         inline_saved.append(str(att_path))
+        # LLM-Bildbeschreibung (Default, Opt-out via --no-inline-llm)
+        if not no_inline_llm:
+            try:
+                from file_converter import _to_markdown
+                md_out = att_path.with_suffix(".md")
+                rc = _to_markdown(att_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm, debug=debug)
+                if rc == 0 and md_out.is_file():
+                    raw_desc = md_out.read_text(encoding="utf-8")
+                    inline_descriptions[str(att_path)] = re.sub(r"<!--.*?-->\n?", "", raw_desc).strip()
+            except Exception as e:
+                print(f"WARNING: LLM-Beschreibung fuer {att_name} fehlgeschlagen: {e}", file=sys.stderr)
         if content_id and body_type == "html":
             body_raw = body_raw.replace(f"cid:{content_id}", str(att_path))
 
@@ -1447,7 +1477,7 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
                     if convert_to_markdown:
                         from file_converter import _to_markdown
                         md_out = sp_path.with_suffix(".md")
-                        rc = _to_markdown(sp_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm)
+                        rc = _to_markdown(sp_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm, debug=debug)
                         if rc == 0 and md_out.is_file():
                             md_converted_names.append(md_out.name)
                             print(f"  Markdown-Konvertierung OK: {sp_path.name} -> {md_out.name}")
@@ -1476,6 +1506,16 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
     else:
         body_text = body_raw
 
+    # Inline-Bild-Referenzen durch LLM-Beschreibungen ersetzen
+    for att_path_str, description in inline_descriptions.items():
+        att_name = Path(att_path_str).name
+        marker = f"![Bild]({att_path_str})"
+        replacement = f"[Inline-Bild {att_name}:\n{description}]"
+        body_text = body_text.replace(marker, replacement)
+
+    # Rauschen entfernen (INTERNAL, VW-Fusszeilen etc.)
+    body_text = _strip_email_noise(body_text)
+
     # email.md aufbauen — outlook-agent Format (Plaintext-Header)
     inline_atts = [a for a in attachments if a.get("isInline")]
 
@@ -1487,7 +1527,10 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
         att_lines = ["Anhaenge: -"]
 
     if inline_atts:
-        inline_lines = ["Inline-Bilder:"] + [f"- {a.get('name', '?')}" for a in inline_atts]
+        if inline_descriptions:
+            inline_lines = ["Inline-Bilder (LLM-beschrieben):"] + [f"- {a.get('name', '?')}" for a in inline_atts]
+        else:
+            inline_lines = ["Inline-Bilder:"] + [f"- {a.get('name', '?')}" for a in inline_atts]
     else:
         inline_lines = []
 
@@ -1637,11 +1680,13 @@ def main() -> None:
         do_convert_md = "--convert-to-markdown" in sys.argv
         do_no_llm_pdf = "--no-llm-pdf" in sys.argv
         do_no_llm = "--no-llm" in sys.argv
+        do_no_inline_llm = "--no-inline-llm" in sys.argv
+        do_debug = "--debug" in sys.argv
         if "--token" in sys.argv:
             idx = sys.argv.index("--token")
             if idx + 1 < len(sys.argv):
                 token = sys.argv[idx + 1]
-        cmd_read(message_id, token, save_att, do_convert, inc_thread, do_convert_md, do_no_llm_pdf, do_no_llm)
+        cmd_read(message_id, token, save_att, do_convert, inc_thread, do_convert_md, do_no_llm_pdf, do_no_llm, do_no_inline_llm, do_debug)
 
     elif cmd == "check-token":
         cmd_check_token()
