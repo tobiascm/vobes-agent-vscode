@@ -20,6 +20,34 @@ Plant einen Windows Scheduled Task, der den Rechner zu einer bestimmten Uhrzeit 
 - **Trigger:** Einmalig (`-Once`) zur gewaehlten Uhrzeit
 - Falls die Uhrzeit heute schon vorbei ist, wird automatisch der naechste Tag genommen
 
+## CLI-Script (fuer Agent)
+
+Alle Aktionen laufen ueber ein einziges Script mit Parametern — **ein Einzeiler-Aufruf genuegt**:
+
+```
+<WORKSPACE>\.agents\skills\skill-hibernate\hibernate_cli.ps1
+```
+
+### Hibernate planen
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-hibernate\hibernate_cli.ps1" -Hour {STUNDE} -Minute {MINUTE}
+```
+
+> `{STUNDE}` und `{MINUTE}` durch die gewuenschte Uhrzeit ersetzen (z.B. `-Hour 2 -Minute 0` fuer 02:00 Uhr).
+
+### Status pruefen
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-hibernate\hibernate_cli.ps1" -Status
+```
+
+### Planung loeschen
+
+```powershell
+powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-hibernate\hibernate_cli.ps1" -Delete
+```
+
 ## GUI-Variante
 
 Im Workspace liegt ein GUI-Script fuer interaktive Nutzung:
@@ -29,41 +57,3 @@ powershell -ExecutionPolicy Bypass -File "<WORKSPACE>\.agents\skills\skill-hiber
 ```
 
 Alternativ als VS Code Task: **"Windows: Hibernate Scheduler"**
-
-## CLI-Befehle (fuer Agent)
-
-### Hibernate planen
-
-```powershell
-$taskName = "PlannedHibernate"
-$shutdownExe = Join-Path $env:WINDIR "System32\shutdown.exe"
-$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
-$scheduled = Get-Date -Hour {STUNDE} -Minute {MINUTE} -Second 0
-if ($scheduled -le (Get-Date).AddMinutes(1)) { $scheduled = $scheduled.AddDays(1) }
-$action = New-ScheduledTaskAction -Execute $shutdownExe -Argument "/h"
-$trigger = New-ScheduledTaskTrigger -Once -At $scheduled
-$principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Description "Versetzt den Rechner zu einem geplanten Zeitpunkt in den Ruhezustand." -Force | Format-List TaskName, State
-Write-Host "Hibernate geplant fuer: $($scheduled.ToString('dd.MM.yyyy HH:mm'))"
-```
-
-> `{STUNDE}` und `{MINUTE}` durch die gewuenschte Uhrzeit ersetzen (z.B. `3` und `0` fuer 03:00 Uhr).
-
-### Status pruefen
-
-```powershell
-$task = Get-ScheduledTask -TaskName "PlannedHibernate" -ErrorAction SilentlyContinue
-if ($task) {
-    $info = Get-ScheduledTaskInfo -TaskName "PlannedHibernate"
-    Write-Host "Naechster Lauf: $($info.NextRunTime.ToString('dd.MM.yyyy HH:mm'))"
-} else {
-    Write-Host "Kein Hibernate geplant."
-}
-```
-
-### Planung loeschen
-
-```powershell
-Unregister-ScheduledTask -TaskName "PlannedHibernate" -Confirm:$false -ErrorAction SilentlyContinue
-Write-Host "Hibernate-Planung geloescht."
-```
