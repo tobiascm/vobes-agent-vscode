@@ -41,6 +41,7 @@ from m365_copilot_graph_token import (
     McpToolError,
     TokenResolverError as BridgeTokenResolverError,
     _call_tool_with_retry,
+    _close_matching_browser_tab,
     _ensure_required_tools,
     _load_playwright_server_config,
 )
@@ -279,6 +280,7 @@ def _resolve_via_playwright_bridge(
     baseline_token: str | None,
     baseline_exp: int,
     require_fresher_than_baseline: bool = False,
+    debug: bool = False,
 ) -> tuple[str, int, str] | None:
     previous_raw = None
     if CACHE_FILE_TEAMS.exists():
@@ -321,6 +323,8 @@ def _resolve_via_playwright_bridge(
         return None
     finally:
         if client is not None:
+            if not debug:
+                _close_matching_browser_tab(client, ("teams.microsoft.com/v2/",))
             client.close()
         if not success:
             _restore_cached_file(previous_raw)
@@ -581,10 +585,7 @@ def _open_teams_in_edge() -> subprocess.Popen[Any]:
 
 
 def _close_started_teams_window(process: subprocess.Popen[Any] | None) -> None:
-    """Schliesst das von diesem Script gestartete Edge-Fenster best effort.
-
-    Nur im Erfolgsfall aufrufen. Im Fehlerfall bleibt das Fenster bewusst offen.
-    """
+    """Schliesst das von diesem Script gestartete Edge-Fenster best effort."""
     if process is None:
         return
     try:
@@ -606,6 +607,7 @@ def fetch_graph_token(
     wait_seconds: int = 25,
     poll_interval: int = 3,
     force_refresh: bool = False,
+    debug: bool = False,
 ) -> tuple[str, int, str]:
     _ensure_cache_dir()
     cached = _load_cached_token(required_scopes)
@@ -646,6 +648,7 @@ def fetch_graph_token(
         baseline_token,
         baseline_exp,
         require_fresher_than_baseline=require_fresher,
+        debug=debug,
     )
     if resolved is not None:
         token, exp, source = resolved
@@ -665,16 +668,19 @@ def fetch_graph_token(
         )
 
     started_process: subprocess.Popen[Any] | None = _open_teams_in_edge()
-    deadline = time.time() + wait_seconds
-    while time.time() < deadline:
-        time.sleep(poll_interval)
-        resolved = _resolve_from_local_state(require_fresher_than_baseline=force_refresh)
-        if resolved is None:
-            continue
-        token, exp, source = resolved
-        _save_cached_token(token, exp, source)
-        _close_started_teams_window(started_process)
-        return token, exp, f"{source}+teams-reopen"
+    try:
+        deadline = time.time() + wait_seconds
+        while time.time() < deadline:
+            time.sleep(poll_interval)
+            resolved = _resolve_from_local_state(require_fresher_than_baseline=force_refresh)
+            if resolved is None:
+                continue
+            token, exp, source = resolved
+            _save_cached_token(token, exp, source)
+            return token, exp, f"{source}+teams-reopen"
+    finally:
+        if not debug:
+            _close_started_teams_window(started_process)
 
     if force_refresh:
         raise TokenAcquisitionError(
@@ -688,8 +694,8 @@ def fetch_graph_token(
     )
 
 
-def cmd_fetch(wait_seconds: int, force_refresh: bool = False) -> None:
-    token, exp, source = fetch_graph_token(wait_seconds=wait_seconds, force_refresh=force_refresh)
+def cmd_fetch(wait_seconds: int, force_refresh: bool = False, debug: bool = False) -> None:
+    token, exp, source = fetch_graph_token(wait_seconds=wait_seconds, force_refresh=force_refresh, debug=debug)
     remaining = int(exp - time.time())
     print(f"VALID (expires in {remaining // 60}m {remaining % 60}s)")
     print(f"Source: {source}")
@@ -717,12 +723,13 @@ def main() -> None:
     sub = parser.add_subparsers(dest="command", required=True)
     p_fetch = sub.add_parser("fetch", help="Access-Token fuer Graph/Mail.Read sicherstellen")
     p_fetch.add_argument("--force", action="store_true", help="Cache ignorieren und Teams-Reopen fuer einen frischen Token erzwingen")
+    p_fetch.add_argument("--debug", action="store_true", help="Browser-Fenster/Tabs nach dem Lauf offen lassen")
     sub.add_parser("check-token", help="Vorhandenen gecachten Token pruefen")
     args = parser.parse_args()
 
     try:
         if args.command == "fetch":
-            cmd_fetch(args.wait_seconds, getattr(args, "force", False))
+            cmd_fetch(args.wait_seconds, getattr(args, "force", False), getattr(args, "debug", False))
         elif args.command == "check-token":
             cmd_check_token()
     except TokenAcquisitionError as exc:

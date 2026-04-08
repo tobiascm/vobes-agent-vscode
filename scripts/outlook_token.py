@@ -166,7 +166,7 @@ def _error_msg(data: dict | str) -> str:
 # CMD: fetch  (Playwright-basiert)
 # ---------------------------------------------------------------------------
 
-def cmd_fetch(headless: bool = False, cdp_port: int = 9222) -> None:
+def cmd_fetch(headless: bool = False, cdp_port: int = 9222, debug: bool = False) -> None:
     """Holt den Outlook-Token per Playwright CDP/Request-Interception.
 
     Sucht zuerst einen laufenden Chrome mit CDP auf dem angegebenen Port.
@@ -213,16 +213,8 @@ def cmd_fetch(headless: bool = False, cdp_port: int = 9222) -> None:
                 print("  Kein Browser-Kontext verfuegbar.", file=sys.stderr)
                 sys.exit(1)
             context = contexts[0]
-            # Suche existierenden Outlook-Tab
-            page = None
-            for p in context.pages:
-                if "outlook" in p.url.lower():
-                    page = p
-                    print(f"  Bestehender Outlook-Tab gefunden: {p.url[:80]}")
-                    break
-            if not page:
-                page = context.new_page()
-                print(f"  Kein Outlook-Tab gefunden, oeffne neuen Tab...")
+            page = context.new_page()
+            print("  Oeffne temporaeren Outlook-Tab im bestehenden Browser...")
         else:
             browser = pw.chromium.launch(headless=headless)
             context = browser.new_context()
@@ -250,13 +242,8 @@ def cmd_fetch(headless: bool = False, cdp_port: int = 9222) -> None:
 
         page.on("request", _on_request)
 
-        # Wenn die Seite schon Outlook zeigt, reicht ein Reload
-        if "outlook" in page.url.lower():
-            print(f"  Reload der bestehenden Outlook-Seite...")
-            page.reload(wait_until="networkidle", timeout=30000)
-        else:
-            print(f"  Navigiere zu {OUTLOOK_URL} ...")
-            page.goto(OUTLOOK_URL, wait_until="networkidle", timeout=30000)
+        print(f"  Navigiere zu {OUTLOOK_URL} ...")
+        page.goto(OUTLOOK_URL, wait_until="networkidle", timeout=30000)
         page.wait_for_timeout(3000)
 
         if not captured_token:
@@ -264,9 +251,12 @@ def cmd_fetch(headless: bool = False, cdp_port: int = 9222) -> None:
             page.reload(wait_until="networkidle", timeout=30000)
             page.wait_for_timeout(3000)
 
-        if own_browser:
+        if not debug:
             page.close()
-            browser.close()
+            if own_browser:
+                browser.close()
+        elif debug and own_browser:
+            print("  DEBUG: Temporärer Browser bleibt offen.", file=sys.stderr)
 
     if not captured_token:
         print("\nFEHLER: Kein Outlook-Token abgefangen.", file=sys.stderr)
@@ -521,6 +511,8 @@ def main() -> None:
     p_fetch = sub.add_parser("fetch", help="Token per Playwright aus Outlook Web extrahieren")
     p_fetch.add_argument("--headless", action="store_true",
                          help="Browser headless starten (nur ohne CDP)")
+    p_fetch.add_argument("--debug", action="store_true",
+                         help="Temporären Tab/Browser nach dem Lauf offen lassen")
 
     sub.add_parser("check-token", help="Token dekodieren und Scopes anzeigen")
     sub.add_parser("probe", help="Outlook REST API Endpunkte testen")
@@ -529,7 +521,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.command == "fetch":
-        cmd_fetch(headless=args.headless)
+        cmd_fetch(headless=args.headless, debug=args.debug)
         return
 
     token = _get_token(getattr(args, "token", None))

@@ -107,6 +107,7 @@ def test_resolve_via_playwright_bridge_restores_previous_cache_on_invalid_result
     cache_file.write_text(previous_raw, encoding="utf-8")
     monkeypatch.setattr(mod, "CACHE_FILE_TEAMS", cache_file)
     monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    close_calls: list[tuple[str, ...]] = []
 
     class FakeClient:
         def __init__(self, _config):
@@ -127,9 +128,89 @@ def test_resolve_via_playwright_bridge_restores_previous_cache_on_invalid_result
     monkeypatch.setattr(mod, "_load_playwright_server_config", lambda: object())
     monkeypatch.setattr(mod, "_ensure_required_tools", lambda _client: None)
     monkeypatch.setattr(mod, "_call_tool_with_retry", fake_call)
+    monkeypatch.setattr(mod, "_close_matching_browser_tab", lambda _client, fragments: close_calls.append(fragments))
     monkeypatch.setattr(mod, "_validate_graph_token", lambda token: True)
 
     candidate = mod._resolve_via_playwright_bridge(("Mail.Read",), None, 0)
 
     assert candidate is None
+    assert close_calls == [("teams.microsoft.com/v2/",)]
     assert cache_file.read_text(encoding="utf-8") == previous_raw
+
+
+def test_resolve_via_playwright_bridge_closes_teams_tab_on_success(tmp_path: Path, monkeypatch):
+    now = int(time.time())
+    token = _jwt(now + 1800, "Mail.Read")
+    cache_file = tmp_path / ".graph_token_cache_teams.json"
+    monkeypatch.setattr(mod, "CACHE_FILE_TEAMS", cache_file)
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    close_calls: list[tuple[str, ...]] = []
+
+    class FakeClient:
+        def __init__(self, _config):
+            pass
+
+        def start(self):
+            return None
+
+        def close(self):
+            return None
+
+    def fake_call(_client, name, arguments=None):
+        if name == "browser_evaluate":
+            cache_file.write_text(
+                json.dumps(json.dumps({"token": token, "exp": now + 1800, "source": "teams-bridge-cache-write"})),
+                encoding="utf-8",
+            )
+        return {"content": [{"type": "text", "text": "ok"}]}
+
+    monkeypatch.setattr(mod, "McpStdioClient", FakeClient)
+    monkeypatch.setattr(mod, "_load_playwright_server_config", lambda: object())
+    monkeypatch.setattr(mod, "_ensure_required_tools", lambda _client: None)
+    monkeypatch.setattr(mod, "_call_tool_with_retry", fake_call)
+    monkeypatch.setattr(mod, "_close_matching_browser_tab", lambda _client, fragments: close_calls.append(fragments))
+    monkeypatch.setattr(mod, "_validate_graph_token", lambda _token: True)
+
+    candidate = mod._resolve_via_playwright_bridge(("Mail.Read",), None, 0)
+
+    assert candidate == (token, now + 1800, "teams-bridge-cache-write")
+    assert close_calls == [("teams.microsoft.com/v2/",)]
+
+
+def test_resolve_via_playwright_bridge_leaves_teams_tab_open_in_debug_mode(tmp_path: Path, monkeypatch):
+    now = int(time.time())
+    token = _jwt(now + 1800, "Mail.Read")
+    cache_file = tmp_path / ".graph_token_cache_teams.json"
+    monkeypatch.setattr(mod, "CACHE_FILE_TEAMS", cache_file)
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    close_calls: list[tuple[str, ...]] = []
+
+    class FakeClient:
+        def __init__(self, _config):
+            pass
+
+        def start(self):
+            return None
+
+        def close(self):
+            return None
+
+    def fake_call(_client, name, arguments=None):
+        if name == "browser_evaluate":
+            cache_file.write_text(
+                json.dumps(json.dumps({"token": token, "exp": now + 1800, "source": "teams-bridge-cache-write"})),
+                encoding="utf-8",
+            )
+        return {"content": [{"type": "text", "text": "ok"}]}
+
+    monkeypatch.setattr(mod, "McpStdioClient", FakeClient)
+    monkeypatch.setattr(mod, "_load_playwright_server_config", lambda: object())
+    monkeypatch.setattr(mod, "_ensure_required_tools", lambda _client: None)
+    monkeypatch.setattr(mod, "_call_tool_with_retry", fake_call)
+    monkeypatch.setattr(mod, "_close_matching_browser_tab", lambda _client, fragments: close_calls.append(fragments))
+    monkeypatch.setattr(mod, "_validate_graph_token", lambda _token: True)
+
+    candidate = mod._resolve_via_playwright_bridge(("Mail.Read",), None, 0, debug=True)
+
+    assert candidate == (token, now + 1800, "teams-bridge-cache-write")
+    assert close_calls == []

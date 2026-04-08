@@ -17,6 +17,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -66,6 +67,8 @@ TRANSIENT_BRIDGE_ERROR_PATTERNS = (
     "Cannot read properties of undefined",
     "MCP-Verbindung beendet",
 )
+
+_TAB_LINE_RE = re.compile(r"- (\d+):.*\]\((https?://[^)]+)\)")
 
 GET_TOKEN_JS = f"""
 async () => {{
@@ -329,6 +332,15 @@ def _extract_playwright_result_text(text: str) -> str:
     return _unwrap_evaluate_output(text.strip())
 
 
+def _parse_tab_list(text: str) -> list[tuple[int, str]]:
+    """Parse browser_tabs list output into (index, url) pairs."""
+    return [
+        (int(match.group(1)), match.group(2))
+        for line in text.splitlines()
+        if (match := _TAB_LINE_RE.match(line))
+    ]
+
+
 def _load_playwright_server_config() -> PlaywrightServerConfig:
     if not MCP_CONFIG.exists():
         raise TokenResolverError("MCP_CONFIG_MISSING", f"Playwright MCP Konfiguration fehlt: {MCP_CONFIG}")
@@ -409,6 +421,36 @@ def _tool_text_with_retry(
 ) -> str:
     text = _extract_text_content(_call_tool_with_retry(client, name, arguments))
     return _extract_playwright_result_text(text)
+
+
+def _close_matching_browser_tab(client: McpStdioClient, url_fragments: tuple[str, ...]) -> None:
+    """Close tabs whose URL contains one of the given fragments, fallback to browser_close."""
+    try:
+        result = client.call_tool("browser_tabs", {"action": "list"})
+        text = _extract_text_content(result)
+        tabs = _parse_tab_list(text)
+        indices = [
+            idx
+            for idx, url in tabs
+            if any(fragment in url for fragment in url_fragments)
+        ]
+        if indices:
+            for idx in sorted(indices, reverse=True):
+                try:
+                    client.call_tool("browser_tabs", {"action": "close", "index": idx})
+                except Exception as exc:
+                    print(
+                        f"[close] Tab {idx} schliessen fehlgeschlagen: {exc}",
+                        file=sys.stderr,
+                    )
+            return
+    except Exception as exc:
+        print(f"[close] Tab-Liste nicht verfuegbar: {exc}", file=sys.stderr)
+
+    try:
+        client.call_tool("browser_close", {})
+    except Exception as exc:
+        print(f"[close] browser_close fehlgeschlagen: {exc}", file=sys.stderr)
 
 
 def _decode_jwt_payload(token: str) -> dict[str, Any]:
@@ -500,7 +542,7 @@ def _get_cached_token_if_valid() -> tuple[str, int, str] | None:
     return token, exp, source
 
 
-def _fetch_token_via_mcp() -> tuple[str, int, str]:
+def _fetch_token_via_mcp(debug: bool = False) -> tuple[str, int, str]:
     config = _load_playwright_server_config()
     last_error: Exception | None = None
 
@@ -533,16 +575,14 @@ def _fetch_token_via_mcp() -> tuple[str, int, str]:
 
             source = str(data.get("source", "m365-copilot-naa")).strip() or "m365-copilot-naa"
             _save_cache(token, validated_exp, source)
-            try:
-                _call_tool_with_retry(client, "browser_close", {})
-            except Exception:
-                pass
             return token, validated_exp, source
         except (McpError, McpToolError, TokenResolverError, ValueError) as exc:
             last_error = exc
             if attempt == 0:
                 continue
         finally:
+            if not debug:
+                _close_matching_browser_tab(client, ("m365.cloud.microsoft/chat",))
             client.close()
 
     if isinstance(last_error, TokenResolverError):
@@ -552,7 +592,7 @@ def _fetch_token_via_mcp() -> tuple[str, int, str]:
     raise TokenResolverError("TOKEN_REQUEST_FAILED", "Unbekannter Fehler bei der Token-Beschaffung.")
 
 
-def ensure_token(force: bool = False) -> tuple[str, int, str]:
+def ensure_token(force: bool = False, debug: bool = False) -> tuple[str, int, str]:
     if force:
         _delete_cache()
     else:
@@ -560,11 +600,11 @@ def ensure_token(force: bool = False) -> tuple[str, int, str]:
         if cached is not None:
             return cached
 
-    return _fetch_token_via_mcp()
+    return _fetch_token_via_mcp(debug=debug)
 
 
-def cmd_ensure(force: bool) -> None:
-    token, exp, source = ensure_token(force=force)
+def cmd_ensure(force: bool, debug: bool = False) -> None:
+    token, exp, source = ensure_token(force=force, debug=debug)
     remaining = int(exp - time.time())
     print(f"VALID (expires in {remaining // 60}m {remaining % 60}s)")
     print(f"Source: {source}")
@@ -595,13 +635,14 @@ def main() -> None:
 
     p_ensure = sub.add_parser("ensure", help="Graph-Token sicherstellen")
     p_ensure.add_argument("--force", action="store_true", help="Cache ignorieren und frischen Token holen")
+    p_ensure.add_argument("--debug", action="store_true", help="Browser-Tab nach dem Lauf offen lassen")
     sub.add_parser("check-token", help="Cache-Status pruefen")
 
     args = parser.parse_args()
 
     try:
         if args.command == "ensure":
-            cmd_ensure(getattr(args, "force", False))
+            cmd_ensure(getattr(args, "force", False), getattr(args, "debug", False))
         elif args.command == "check-token":
             cmd_check_token()
     except TokenResolverError as exc:
