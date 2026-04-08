@@ -126,7 +126,7 @@ def _execute_search_request(token: str, query: str) -> requests.Response:
         sys.exit(1)
 
 
-def cmd_search(query: str, token: str | None = None, force: bool = False) -> None:
+def cmd_search(query: str, token: str | None = None, force: bool = False, debug: bool = False) -> None:
     exp_to_cache: int | None = None
     if token:
         try:
@@ -135,7 +135,7 @@ def cmd_search(query: str, token: str | None = None, force: bool = False) -> Non
             exp_to_cache = None
     else:
         try:
-            token, _exp, _source = ensure_token(force=force)
+            token, _exp, _source = ensure_token(force=force, debug=debug)
         except TokenResolverError as exc:
             print(exc.code, file=sys.stderr)
             print(str(exc), file=sys.stderr)
@@ -188,16 +188,17 @@ def main() -> None:
     command = sys.argv[1]
     if command == "search":
         if len(sys.argv) < 3:
-            print('Usage: python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "Suchbegriff" [--force] [--token TOKEN]')
+            print('Usage: python .agents/skills/skill-m365-copilot-file-search/copilot_file_search.py search "Suchbegriff" [--force] [--debug] [--token TOKEN]')
             sys.exit(1)
         query = sys.argv[2]
         token = None
         force = "--force" in sys.argv
+        debug = "--debug" in sys.argv
         if "--token" in sys.argv:
             idx = sys.argv.index("--token")
             if idx + 1 < len(sys.argv):
                 token = sys.argv[idx + 1]
-        cmd_search(query, token=token, force=force)
+        cmd_search(query, token=token, force=force, debug=debug)
         return
 
     if command == "cache-token":

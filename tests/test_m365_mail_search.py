@@ -240,7 +240,7 @@ def test_cmd_search_events_only_writes_event_output_and_uses_event_request(tmp_p
     monkeypatch.setattr(
         mod,
         "_resolve_token",
-        lambda _token=None, scope_options=mod.MAIL_SCOPE_OPTIONS, scope_error_code="NO_MAIL_SCOPE", scope_error_message="": "token",
+        lambda _token=None, scope_options=mod.MAIL_SCOPE_OPTIONS, scope_error_code="NO_MAIL_SCOPE", scope_error_message="", debug=False: "token",
     )
     monkeypatch.setattr(mod, "_event_series_now", lambda: mod.datetime(2026, 4, 5, 8, 0, tzinfo=mod.timezone.utc))
     monkeypatch.setattr(mod.time, "strftime", lambda _fmt: "20260404_120002")
@@ -698,13 +698,14 @@ def test_series_dedupe_prefers_next_instance_from_series_master(monkeypatch):
 def test_main_passes_events_flag_to_cmd_search(monkeypatch):
     seen = {}
 
-    def fake_cmd_search(query, token=None, size=mod.DEFAULT_PAGE_SIZE, top_results=True, only_summary=False, events_only=False):
+    def fake_cmd_search(query, token=None, size=mod.DEFAULT_PAGE_SIZE, top_results=True, only_summary=False, events_only=False, debug=False):
         seen["query"] = query
         seen["token"] = token
         seen["size"] = size
         seen["top_results"] = top_results
         seen["only_summary"] = only_summary
         seen["events_only"] = events_only
+        seen["debug"] = debug
 
     monkeypatch.setattr(mod, "cmd_search", fake_cmd_search)
     monkeypatch.setattr(mod.sys, "argv", ["m365_mail_search.py", "search", "Workshop", "--events", "--size", "5"])
@@ -718,6 +719,7 @@ def test_main_passes_events_flag_to_cmd_search(monkeypatch):
         "top_results": True,
         "only_summary": False,
         "events_only": True,
+        "debug": False,
     }
 
 
@@ -811,6 +813,29 @@ def test_cmd_read_convert_to_markdown_success(tmp_path, monkeypatch, capsys):
     # Markdown-Inhalt korrekt
     md_content = (att_dir / "bericht.md").read_text(encoding="utf-8")
     assert "# bericht.docx" in md_content
+
+
+def test_cmd_read_prints_output_locations_before_mail_content(tmp_path, monkeypatch, capsys):
+    """Speicherorte werden vor dem eigentlichen Mailinhalt ausgegeben."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "token")
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        if "/attachments" in url:
+            return FakeResponse(200, _make_att_payload())
+        if "/messages/" in url:
+            return FakeResponse(200, _make_read_msg_payload())
+        raise AssertionError(f"Unexpected GET {url}")
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    mod.cmd_read("msg-1", save_attachments=True)
+
+    stdout = capsys.readouterr().out
+    pos_saved = stdout.index("Gespeichert in:")
+    pos_att = stdout.index("Anhaenge gespeichert in:")
+    pos_from = stdout.index("Von: Alice")
+    assert pos_saved < pos_att < pos_from
 
 
 def test_cmd_read_convert_to_markdown_failure_writes_error_md(tmp_path, monkeypatch, capsys):
@@ -1702,7 +1727,7 @@ def test_cmd_read_thread_html_tables_rendered_as_markdown(tmp_path, monkeypatch,
 
 
 def test_cmd_read_thread_writes_email_thread_md(tmp_path, monkeypatch, capsys):
-    """read_thread schreibt analog zu read eine email_thread.md in tmp/threads."""
+    """read_thread schreibt analog zu read eine email_thread.md in tmp/emails/."""
     monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
 
@@ -1736,7 +1761,7 @@ def test_cmd_read_thread_writes_email_thread_md(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Gespeichert in:" in out
 
-    thread_files = list((tmp_path / "tmp" / "threads").glob("*/email_thread.md"))
+    thread_files = list((tmp_path / "tmp" / "emails").glob("*/email_thread.md"))
     assert len(thread_files) == 1
     content = thread_files[0].read_text(encoding="utf-8")
     assert "=== Thread: Thema (2 Nachrichten) ===" in content
@@ -1744,6 +1769,42 @@ def test_cmd_read_thread_writes_email_thread_md(tmp_path, monkeypatch, capsys):
     assert "=== Email [1/2] ===" in content
     assert "Zweite Nachricht" in content
     assert "Erste Nachricht" in content
+
+
+def test_cmd_read_thread_prints_output_locations_before_thread_content(tmp_path, monkeypatch, capsys):
+    """Thread-Speicherorte werden vor Header und Mailinhalt ausgegeben."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    msgs = [
+        _make_thread_msg(
+            "m1", "Thema", "Alice", "alice@vw.de", "2026-04-05T10:00:00Z",
+            unique_body="Erste Nachricht", body="Erste Nachricht", has_attachments=True,
+            to=[("Bob", "bob@vw.de")],
+        ),
+    ]
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-order", "subject": "Thema"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        if "/attachments" in url:
+            return FakeResponse(200, _make_att_payload())
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    mod.cmd_read_thread("m1", save_attachments=True)
+
+    out = capsys.readouterr().out
+    pos_saved = out.index("Gespeichert in:")
+    pos_att = out.index("Anhaenge gespeichert in:")
+    pos_thread = out.index("=== Thread: Thema (1 Nachrichten) ===")
+    assert pos_saved < pos_att < pos_thread
 
 
 def test_cmd_read_thread_convert_outputs_attachment_text_per_email(tmp_path, monkeypatch, capsys):
@@ -1838,7 +1899,7 @@ def test_cmd_read_thread_reuses_identical_forwarded_attachments(tmp_path, monkey
     out = capsys.readouterr().out
     assert "bericht (2).docx" not in out
 
-    thread_dirs = list((tmp_path / "tmp" / "threads").iterdir())
+    thread_dirs = list((tmp_path / "tmp" / "emails").iterdir())
     assert len(thread_dirs) == 1
     files = sorted(p.name for p in (thread_dirs[0] / "attachments").iterdir())
     assert files == ["bericht.docx"]
@@ -1891,7 +1952,7 @@ def test_cmd_read_thread_convert_to_markdown_implicit_save_and_flags(tmp_path, m
     assert len(seen_flags) == 2
     assert all(no_llm_pdf is True and no_llm is True for _, no_llm_pdf, no_llm in seen_flags)
 
-    thread_dirs = list((tmp_path / "tmp" / "threads").iterdir())
+    thread_dirs = list((tmp_path / "tmp" / "emails").iterdir())
     assert len(thread_dirs) == 1
     att_dir = thread_dirs[0] / "attachments"
     assert (att_dir / "bericht.docx").is_file()
@@ -1950,7 +2011,7 @@ def test_cmd_read_thread_no_inline_llm_opt_out(tmp_path, monkeypatch, capsys):
     assert "![Bild](" in out
     assert "LLM-beschrieben" not in out
 
-    thread_files = list((tmp_path / "tmp" / "threads").glob("*/email_thread.md"))
+    thread_files = list((tmp_path / "tmp" / "emails").glob("*/email_thread.md"))
     assert len(thread_files) == 1
     content = thread_files[0].read_text(encoding="utf-8")
     assert "Inline-Bilder:" in content
@@ -2005,7 +2066,7 @@ def test_cmd_read_thread_inline_image_llm_failure_marks_conversion_error(tmp_pat
     assert "Inline-Bilder (Konvertierungsfehler):" in out.out
     assert "- screenshot.png (Konvertierungsfehler)" in out.out
 
-    thread_files = list((tmp_path / "tmp" / "threads").glob("*/email_thread.md"))
+    thread_files = list((tmp_path / "tmp" / "emails").glob("*/email_thread.md"))
     assert len(thread_files) == 1
     content = thread_files[0].read_text(encoding="utf-8")
     assert "Inline-Bilder (LLM-beschrieben):" not in content

@@ -104,6 +104,7 @@ def _resolve_token(
     scope_options: tuple[tuple[str, ...], ...] = MAIL_SCOPE_OPTIONS,
     scope_error_code: str = "NO_MAIL_SCOPE",
     scope_error_message: str = "Der uebergebene Token hat keinen Mail.Read Scope.",
+    debug: bool = False,
 ) -> str:
     """Liefert einen gueltigen Graph-Token fuer die benoetigten Scopes.
 
@@ -128,7 +129,7 @@ def _resolve_token(
     last_exc: TokenAcquisitionError | None = None
     for required_scopes in scope_options:
         try:
-            token, _exp, _source = fetch_graph_token(required_scopes=required_scopes)
+            token, _exp, _source = fetch_graph_token(required_scopes=required_scopes, debug=debug)
             return token
         except TokenAcquisitionError as exc:
             last_exc = exc
@@ -1171,20 +1172,30 @@ def cmd_search(
     top_results: bool = True,
     only_summary: bool = False,
     events_only: bool = False,
+    debug: bool = False,
 ) -> None:
     """Fuehrt wahlweise Mail- oder Event-Suche aus."""
     if events_only:
-        token = _resolve_token(
-            token,
-            scope_options=EVENT_SCOPE_OPTIONS,
-            scope_error_code="NO_CALENDAR_SCOPE",
-            scope_error_message="Der uebergebene Token hat keinen Calendars.Read Scope.",
-        )
+        if debug:
+            token = _resolve_token(
+                token,
+                scope_options=EVENT_SCOPE_OPTIONS,
+                scope_error_code="NO_CALENDAR_SCOPE",
+                scope_error_message="Der uebergebene Token hat keinen Calendars.Read Scope.",
+                debug=debug,
+            )
+        else:
+            token = _resolve_token(
+                token,
+                scope_options=EVENT_SCOPE_OPTIONS,
+                scope_error_code="NO_CALENDAR_SCOPE",
+                scope_error_message="Der uebergebene Token hat keinen Calendars.Read Scope.",
+            )
         total, rendered_hits = _collect_rendered_event_hits(query, token, size)
         _write_event_search_results(query, total, rendered_hits, token)
         return
 
-    token = _resolve_token(token)
+    token = _resolve_token(token, debug=debug) if debug else _resolve_token(token)
     data = _execute_search_request(
         token,
         query,
@@ -1702,6 +1713,15 @@ def _emit_attachment_outputs(saved_att_names: list[str], md_converted_names: lis
             print(text)
 
 
+def _print_output_locations(out_dir: Path, *, show_attachments: bool = False) -> None:
+    """Gibt die relevanten Speicherorte vor dem eigentlichen Inhalt aus."""
+    rel_out = out_dir.relative_to(REPO_ROOT)
+    print(f"Gespeichert in: {rel_out}")
+    if show_attachments:
+        print(f"Anhaenge gespeichert in: {rel_out}/attachments/")
+    print()
+
+
 # ---------------------------------------------------------------------------
 # CMD: read
 # ---------------------------------------------------------------------------
@@ -1724,7 +1744,7 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
     """
     if convert_to_markdown:
         save_attachments = True
-    token = _resolve_token(token)
+    token = _resolve_token(token, debug=debug) if debug else _resolve_token(token)
 
     encoded_message_id = _encode_graph_id_for_path(message_id)
     url = f"https://graph.microsoft.com/v1.0/me/messages/{encoded_message_id}"
@@ -1797,7 +1817,8 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
     email_md_path = out_dir / "email.md"
     email_md_path.write_text("\n".join(md_lines), encoding="utf-8")
 
-    # Konsole: gleiches Format wie email.md
+    # Konsole: Speicherorte zuerst, dann gleiches Format wie email.md
+    _print_output_locations(out_dir, show_attachments=save_attachments)
     for line in md_lines:
         print(line)
     _emit_attachment_outputs(
@@ -1805,9 +1826,6 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
         render_data["md_converted_names"],
         render_data["converted"],
     )
-
-    rel_out = out_dir.relative_to(REPO_ROOT)
-    print(f"\nGespeichert in: {rel_out}")
 
     # Thread nachladen
     if include_thread:
@@ -1888,7 +1906,7 @@ def cmd_read_thread(
     """
     if convert_to_markdown:
         save_attachments = True
-    token = _resolve_token(token)
+    token = _resolve_token(token, debug=debug) if debug else _resolve_token(token)
 
     # --- Seed-Mail: conversationId holen ---
     encoded_id = _encode_graph_id_for_path(message_id)
@@ -1957,7 +1975,7 @@ def cmd_read_thread(
         first_msg.get("receivedDateTime", ""), sender_addr,
         first_msg.get("subject", seed.get("subject", "")), message_id,
     )
-    out_dir = REPO_ROOT / "tmp" / "threads" / folder
+    out_dir = REPO_ROOT / "tmp" / "emails" / folder
     att_base_dir = out_dir / "attachments"
     out_dir.mkdir(parents=True, exist_ok=True)
     thread_header = f"=== Thread: {seed.get('subject', '?')} ({n} Nachrichten) ===\n"
@@ -2002,7 +2020,8 @@ def cmd_read_thread(
         thread_md_lines.extend(block_lines)
 
         if not thread_header_printed:
-            print(f"\n{thread_header}")
+            _print_output_locations(out_dir, show_attachments=save_attachments)
+            print(thread_header)
             thread_header_printed = True
 
         for line in block_lines:
@@ -2016,11 +2035,9 @@ def cmd_read_thread(
     thread_md_path = out_dir / "email_thread.md"
     thread_md_path.write_text("\n".join(thread_md_lines), encoding="utf-8")
 
-    if save_attachments:
-        rel = att_base_dir.parent.relative_to(REPO_ROOT)
-        print(f"Anhaenge gespeichert in: {rel}/attachments/")
-    rel_out = out_dir.relative_to(REPO_ROOT)
-    print(f"Gespeichert in: {rel_out}")
+    if not thread_header_printed:
+        _print_output_locations(out_dir, show_attachments=save_attachments)
+        print(thread_header)
 
 
 # ---------------------------------------------------------------------------
@@ -2044,6 +2061,7 @@ def main() -> None:
         top_results = "--date-order" not in sys.argv
         only_summary = "--only-summary" in sys.argv
         events_only = "--events" in sys.argv
+        do_debug = "--debug" in sys.argv
         if "--token" in sys.argv:
             idx = sys.argv.index("--token")
             if idx + 1 < len(sys.argv):
@@ -2052,7 +2070,7 @@ def main() -> None:
             idx = sys.argv.index("--size")
             if idx + 1 < len(sys.argv):
                 size = int(sys.argv[idx + 1])
-        cmd_search(query, token, size, top_results, only_summary, events_only)
+        cmd_search(query, token, size, top_results, only_summary, events_only, do_debug)
 
     elif cmd == "read":
         if len(sys.argv) < 3:

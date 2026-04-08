@@ -80,7 +80,7 @@ def _to_markdown(input_path: Path, output_path: Path, *, no_llm_pdf: bool = Fals
         print(f"ERROR: Markdown-Konvertierung Timeout nach {COM_TIMEOUT_SECONDS}s", file=sys.stderr)
         return 1
 
-    if result.stdout:
+    if result.stdout and (result.returncode != 0 or debug):
         print(result.stdout, end="")
     if result.stderr and (result.returncode != 0 or debug):
         print(result.stderr, end="", file=sys.stderr)

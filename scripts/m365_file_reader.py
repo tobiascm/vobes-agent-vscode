@@ -49,9 +49,9 @@ if sys.platform == "win32":
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 
-def _require_token() -> str:
+def _require_token(debug: bool = False) -> str:
     try:
-        token, _exp, _source = ensure_token()
+        token, _exp, _source = ensure_token(debug=debug)
         return token
     except TokenResolverError as exc:
         print(exc.code, file=sys.stderr)
@@ -183,8 +183,8 @@ from file_parsers import (
 # Commands
 # ---------------------------------------------------------------------------
 
-def cmd_search(query: str) -> None:
-    token = _require_token()
+def cmd_search(query: str, debug: bool = False) -> None:
+    token = _require_token(debug=debug)
     results = _search_drive_item(query, token)
     print(f"### Graph Search: \"{query}\"\n")
     print(f"**{len(results)} Treffer**\n")
@@ -203,8 +203,8 @@ def cmd_search(query: str) -> None:
         print(f"| {i} | [{name}]({r['webUrl']}) | {size_kb} KB | {modified} | `{r['driveId'][:20]}...` | `{r['itemId'][:20]}...` |")
 
 
-def cmd_read(target: str, download_path: str | None = None) -> None:
-    token = _require_token()
+def cmd_read(target: str, download_path: str | None = None, debug: bool = False) -> None:
+    token = _require_token(debug=debug)
 
     # Bestimme driveId + itemId
     if target.startswith("http"):
@@ -286,7 +286,7 @@ def main() -> None:
         if len(sys.argv) < 3:
             print("Usage: python m365_file_reader.py search \"Dateiname\"", file=sys.stderr)
             sys.exit(1)
-        cmd_search(sys.argv[2])
+        cmd_search(sys.argv[2], debug="--debug" in sys.argv)
 
     elif cmd == "read":
         if len(sys.argv) < 3:
@@ -298,7 +298,7 @@ def main() -> None:
             idx = sys.argv.index("--download")
             if idx + 1 < len(sys.argv):
                 download_path = sys.argv[idx + 1]
-        cmd_read(target, download_path)
+        cmd_read(target, download_path, debug="--debug" in sys.argv)
 
     else:
         print(f"Unbekannter Befehl: {cmd}", file=sys.stderr)
