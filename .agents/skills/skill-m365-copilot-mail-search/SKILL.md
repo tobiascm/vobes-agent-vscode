@@ -21,7 +21,7 @@ Das Script unterstuetzt zusaetzlich einen exklusiven Kalender-Modus per `--event
 | Aufgabe | Stattdessen verwenden |
 |---------|-----------------------|
 | Dokumente in SharePoint/OneDrive suchen | `$skill-m365-copilot-file-search` |
-| Mail-Thread per Entry-ID nachladen | `$skill-outlook` |
+| Mail-Thread tokensparsam lesen | Diesen Skill: `read_thread` |
 | Verwandte Mails per Outlook COM suchen | `$skill-outlook` |
 | Confluence/Jira durchsuchen | `local_rag` oder `mcp-atlassian` |
 
@@ -247,6 +247,25 @@ for slide in prs.slides:
 
 > **Tipp:** Fuer SharePoint-/OneDrive-Dateien direkt `scripts/m365_file_reader.py read URL` verwenden — das macht Download + Konvertierung in einem Schritt.
 
+### Schritt 3c: Ganzen Thread tokensparsam lesen
+
+Statt einzelne Mails nacheinander zu lesen, kann der gesamte Thread in einem Aufruf geladen werden.
+Nutzt `uniqueBody` fuer minimalen Token-Verbrauch (nur der jeweils neu geschriebene Text pro Antwort).
+
+```bash
+# Thread lesen (neueste Mail oben, nur unique Bodies, Anhaenge pro Mail)
+python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read_thread "MESSAGE_ID"
+
+# Thread lesen + Anhaenge herunterladen
+python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read_thread "MESSAGE_ID" --save-attachments
+```
+
+- Zeigt alle Nachrichten der Unterhaltung, neueste zuerst
+- Jede Mail wird im gleichen Format wie `read` dargestellt (Von, Gesendet, An, Cc, Betreff, Anhaenge, Body)
+- Nutzt `uniqueBody` (nur der neu geschriebene Teil pro Mail) — drastisch tokensparsamer als `body`
+- Anhaenge werden pro Mail aufgelistet (wie bei `read`)
+- `--save-attachments` laedt Anhaenge in `tmp/threads/` herunter
+
 ### Schritt 4: Ergebnisse praesentieren
 
 Das Script gibt die Suchtreffer auf STDOUT als kompakte Markdown-Bloecke aus mit:
@@ -283,6 +302,8 @@ Rauschworte wie `INTERNAL` werden aus `summary` und `bodyPreview` entfernt.
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --save-attachments` | Mail laden + Anhaenge nach tmp/emails/.../attachments/ speichern |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --convert` | Mail laden + Anhaenge als Text extrahieren (PDF, DOCX, XLSX, PPTX) |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read "MESSAGE_ID" --include-thread` | Mail laden + alle Thread-Nachrichten chronologisch auflisten |
+| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read_thread "MESSAGE_ID"` | Thread tokensparsam lesen (uniqueBody, neueste zuerst) |
+| `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read_thread "MESSAGE_ID" --save-attachments` | Thread lesen + Anhaenge herunterladen |
 | `python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py check-token` | Prueft ob Token mit Mail.Read vorhanden |
 
 ---

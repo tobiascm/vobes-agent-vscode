@@ -17,6 +17,7 @@ Usage:
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID --save-attachments --convert-to-markdown
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID --save-attachments --convert-to-markdown --no-llm-pdf
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read MESSAGE_ID --include-thread
+    python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read_thread MESSAGE_ID [--save-attachments] [--convert] [--convert-to-markdown] [--no-llm-pdf] [--no-llm] [--no-inline-llm]
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py check-token
 
 Token-Caching:
@@ -269,12 +270,30 @@ _VW_FOOTER_RE = re.compile(
 )
 
 
+def _normalize_body_whitespace(text: str) -> str:
+    """Normalisiert Zeilenumbrueche und kollabiert Whitespace-only-Zeilen robust."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\xa0", " ")
+
+    normalized_lines: list[str] = []
+    prev_blank = False
+    for raw_line in text.split("\n"):
+        line = raw_line.rstrip()
+        if not line.strip():
+            if not prev_blank:
+                normalized_lines.append("")
+            prev_blank = True
+            continue
+        normalized_lines.append(line)
+        prev_blank = False
+
+    return "\n".join(normalized_lines).strip()
+
+
 def _strip_email_noise(text: str) -> str:
     """Entfernt bekannte Rauschtexte aus Mail-Bodies (spart Tokens)."""
     text = _strip_noise_terms(text)
     text = _VW_FOOTER_RE.sub("", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    return _normalize_body_whitespace(text)
 
 
 def _strip_email_addresses(text: str) -> str:
@@ -305,13 +324,19 @@ def _sanitize_att_name(name: str) -> str:
     return safe or "attachment"
 
 
-def _unique_att_path(directory: Path, name: str) -> Path:
-    """Eindeutiger Pfad: name (2).ext, name (3).ext bei Kollision."""
+def _unique_att_path(directory: Path, name: str, raw_bytes: bytes | None = None) -> Path:
+    """Eindeutiger Pfad mit Wiederverwendung identischer Dateien."""
     safe = _sanitize_att_name(name)
     stem, ext = os.path.splitext(safe)
     candidate = directory / safe
     idx = 2
     while candidate.exists():
+        if raw_bytes is not None:
+            try:
+                if candidate.read_bytes() == raw_bytes:
+                    return candidate
+            except OSError:
+                pass
         candidate = directory / f"{stem} ({idx}){ext}"
         idx += 1
     return candidate
@@ -583,8 +608,9 @@ def _try_download_sp_file(url: str, att_dir: Path) -> tuple[Path | None, str | N
 
     parsed = _urlparse(url)
     filename = _unquote(parsed.path.split("/")[-1]) or "sharepoint_file"
-    att_path = _unique_att_path(att_dir, filename)
-    att_path.write_bytes(raw_bytes)
+    att_path = _unique_att_path(att_dir, filename, raw_bytes)
+    if not att_path.exists():
+        att_path.write_bytes(raw_bytes)
     return att_path, None
 
 
@@ -1345,6 +1371,338 @@ def _decode_attachment_bytes(content_bytes: str, att_name: str) -> bytes | None:
 
 
 # ---------------------------------------------------------------------------
+# Shared: Inline-Bilder + Body-Konvertierung (genutzt von cmd_read & cmd_read_thread)
+# ---------------------------------------------------------------------------
+
+def _process_inline_and_body(
+    body_raw: str, body_type: str, attachments: list[dict], att_dir: Path, *,
+    no_inline_llm: bool = False, no_llm: bool = False, no_llm_pdf: bool = False,
+    debug: bool = False,
+) -> tuple[str, str, list[str], list[str], list[str]]:
+    """Inline-Bilder speichern/LLM-beschreiben, cid ersetzen, HTML→Text, Rauschen entfernen.
+
+    Returns:
+      (body_text, body_raw_nach_cid_ersetzung, inline_saved_paths,
+       inline_described_names, inline_failed_names)
+    """
+    att_dir.mkdir(parents=True, exist_ok=True)
+    inline_saved: list[str] = []
+    inline_descriptions: dict[str, str] = {}
+    inline_described_names: list[str] = []
+    inline_failed_names: list[str] = []
+
+    for att in attachments:
+        if not att.get("isInline"):
+            continue
+        content_bytes = att.get("contentBytes", "")
+        if not content_bytes:
+            continue
+        att_name = att.get("name", "inline_image")
+        content_id = att.get("contentId", "")
+        raw_bytes = _decode_attachment_bytes(content_bytes, att_name)
+        if raw_bytes is None:
+            continue
+        att_path = _unique_att_path(att_dir, att_name, raw_bytes)
+        if not att_path.exists():
+            att_path.write_bytes(raw_bytes)
+        inline_saved.append(str(att_path))
+        if not no_inline_llm:
+            try:
+                from file_converter import _to_markdown
+                md_out = att_path.with_suffix(".md")
+                rc = _to_markdown(att_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm, debug=debug)
+                if rc == 0 and md_out.is_file():
+                    raw_desc = md_out.read_text(encoding="utf-8")
+                    inline_descriptions[str(att_path)] = re.sub(r"<!--.*?-->\n?", "", raw_desc).strip()
+                    inline_described_names.append(att_name)
+                else:
+                    inline_failed_names.append(att_name)
+            except Exception as e:
+                inline_failed_names.append(att_name)
+                print(f"WARNING: LLM-Beschreibung fuer {att_name} fehlgeschlagen: {e}", file=sys.stderr)
+        if content_id and body_type == "html":
+            body_raw = body_raw.replace(f"cid:{content_id}", str(att_path))
+
+    # HTML → Text (Tabellen → Markdown)
+    if body_type == "html":
+        body_text = _html_to_text(body_raw)
+    else:
+        body_text = body_raw
+
+    # Inline-Bild-Referenzen durch LLM-Beschreibungen ersetzen
+    for att_path_str, description in inline_descriptions.items():
+        att_name = Path(att_path_str).name
+        marker = f"![Bild]({att_path_str})"
+        replacement = f"[Inline-Bild {att_name}:\n{description}]"
+        body_text = body_text.replace(marker, replacement)
+
+    body_text = _strip_email_noise(body_text)
+    return body_text, body_raw, inline_saved, inline_described_names, inline_failed_names
+
+
+def _extract_message_metadata(msg: dict) -> dict:
+    """Extrahiert normalisierte Headerdaten aus einer Graph-Message."""
+    sender = (msg.get("from") or {}).get("emailAddress", {})
+    return {
+        "subject": msg.get("subject", "?"),
+        "from_str": _fmt_sender(sender.get("name", ""), sender.get("address", "")),
+        "sender_address": sender.get("address", ""),
+        "received": (msg.get("receivedDateTime", "?") or "?")[:19].replace("T", " "),
+        "importance": msg.get("importance", "normal"),
+        "to_list": [
+            _fmt_sender(t["emailAddress"].get("name", ""), t["emailAddress"].get("address", ""))
+            for t in (msg.get("toRecipients") or [])
+        ],
+        "cc_list": [
+            _fmt_sender(c["emailAddress"].get("name", ""), c["emailAddress"].get("address", ""))
+            for c in (msg.get("ccRecipients") or [])
+        ],
+    }
+
+
+def _resolve_message_body(msg: dict, *, prefer_unique_body: bool = False) -> tuple[str, str]:
+    """Liefert den zu rendernden Body und bevorzugt optional uniqueBody."""
+    if prefer_unique_body:
+        unique_body = msg.get("uniqueBody") or {}
+        body_raw = (unique_body.get("content") or "").strip()
+        body_type = unique_body.get("contentType", "text")
+        if body_raw:
+            return body_raw, body_type
+
+    raw_body = msg.get("body") or {}
+    return (raw_body.get("content") or "").strip(), raw_body.get("contentType", "text")
+
+
+def _load_message_attachments(
+    message_id: str,
+    body_raw: str,
+    has_attachments: bool,
+    token: str,
+    *,
+    include_content_bytes: bool = True,
+) -> list[dict]:
+    """Laedt Message-Attachments, auch wenn nur cid:-Referenzen im Body vorkommen."""
+    attachments: list[dict] = []
+    if not has_attachments and "cid:" not in body_raw:
+        return attachments
+
+    encoded_message_id = _encode_graph_id_for_path(message_id)
+    att_url = f"https://graph.microsoft.com/v1.0/me/messages/{encoded_message_id}/attachments"
+    params = None
+    if not include_content_bytes:
+        params = {"$select": "id,name,isInline,contentId,contentType,size"}
+    try:
+        r_att = requests.get(att_url, headers={"Authorization": f"Bearer {token}"}, params=params, timeout=20)
+        if r_att.status_code == 200:
+            attachments = r_att.json().get("value", [])
+    except requests.RequestException:
+        pass
+    return attachments
+
+
+def _process_message_output(
+    msg: dict,
+    *,
+    message_id: str,
+    token: str,
+    att_dir: Path,
+    body_raw: str,
+    body_type: str,
+    attachments: list[dict],
+    save_attachments: bool = False,
+    convert: bool = False,
+    convert_to_markdown: bool = False,
+    no_llm_pdf: bool = False,
+    no_llm: bool = False,
+    no_inline_llm: bool = False,
+    debug: bool = False,
+) -> dict:
+    """Verarbeitet eine Mail komplett und liefert Render-/Ausgabedaten."""
+    metadata = _extract_message_metadata(msg)
+    non_inline = [a for a in attachments if not a.get("isInline")]
+    saved_att_names: list[str] = []
+    converted: list[tuple[str, str]] = []
+    md_converted_names: list[str] = []
+
+    if (save_attachments or convert) and non_inline:
+        att_dir.mkdir(parents=True, exist_ok=True)
+        for att in non_inline:
+            content_bytes = att.get("contentBytes", "")
+            if not content_bytes:
+                continue
+            att_name = att.get("name", "attachment")
+            raw_bytes = _decode_attachment_bytes(content_bytes, att_name)
+            if raw_bytes is None:
+                continue
+            att_path: Path | None = None
+            if save_attachments:
+                att_path = _unique_att_path(att_dir, att_name, raw_bytes)
+                if not att_path.exists():
+                    att_path.write_bytes(raw_bytes)
+                saved_att_names.append(att_path.name)
+            if convert:
+                from file_parsers import convert_bytes as _convert_bytes
+                try:
+                    text = _convert_bytes(raw_bytes, att_name)
+                    if text:
+                        converted.append((att_name, text))
+                except Exception as e:
+                    converted.append((att_name, f"_(Konvertierung fehlgeschlagen: {e})_"))
+            if convert_to_markdown and att_path is not None:
+                from file_converter import _to_markdown
+                md_out = att_path.with_suffix(".md")
+                rc = _to_markdown(att_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm, debug=debug)
+                if rc == 0 and md_out.is_file():
+                    md_converted_names.append(md_out.name)
+                    print(f"Markdown-Konvertierung OK: {att_path.name} -> {md_out.name}")
+                else:
+                    err_msg = f"Konvertierung von {att_path.name} fehlgeschlagen (exit code {rc})"
+                    print(f"ERROR: {err_msg}")
+                    md_out.write_text(
+                        f"# {att_path.name}\n\n> Konvertierung fehlgeschlagen\n\n"
+                        f"Exit-Code: {rc}\n",
+                        encoding="utf-8",
+                    )
+                    md_converted_names.append(md_out.name)
+
+    body_text, body_raw_after_inline, inline_saved, inline_described_names, inline_failed_names = _process_inline_and_body(
+        body_raw, body_type, attachments, att_dir,
+        no_inline_llm=no_inline_llm, no_llm=no_llm, no_llm_pdf=no_llm_pdf, debug=debug,
+    )
+
+    cloud_entries = _extract_cloud_links_from_body(body_raw_after_inline, body_type)
+    sp_downloaded_urls: set[str] = set()
+    if save_attachments and cloud_entries:
+        att_dir.mkdir(parents=True, exist_ok=True)
+        print(f"\n{len(cloud_entries)} SharePoint/OneDrive-Link(s) erkannt, starte Download...")
+        for entry in cloud_entries:
+            sp_url = entry["url"]
+            sp_label = entry["name"]
+            sp_path, sp_err = _try_download_sp_file(sp_url, att_dir)
+            if sp_path is not None:
+                saved_att_names.append(sp_path.name)
+                sp_downloaded_urls.add(sp_url)
+                print(f"  SP-Download OK: {sp_label} -> {sp_path.name}")
+                if convert_to_markdown:
+                    from file_converter import _to_markdown
+                    md_out = sp_path.with_suffix(".md")
+                    rc = _to_markdown(sp_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm, debug=debug)
+                    if rc == 0 and md_out.is_file():
+                        md_converted_names.append(md_out.name)
+                        print(f"  Markdown-Konvertierung OK: {sp_path.name} -> {md_out.name}")
+                    else:
+                        print(f"  ERROR: Konvertierung von {sp_path.name} fehlgeschlagen (exit code {rc})")
+                        md_out.write_text(
+                            f"# {sp_path.name}\n\n> Konvertierung fehlgeschlagen\n\n"
+                            f"Exit-Code: {rc}\n",
+                            encoding="utf-8",
+                        )
+                        md_converted_names.append(md_out.name)
+                if convert:
+                    from file_parsers import convert_bytes as _convert_bytes
+                    try:
+                        text = _convert_bytes(sp_path.read_bytes(), sp_path.name)
+                        if text:
+                            converted.append((sp_path.name, text))
+                    except Exception as e:
+                        converted.append((sp_path.name, f"_(Konvertierung fehlgeschlagen: {e})_"))
+            else:
+                print(f"  SP-Download fehlgeschlagen: {sp_label} — {sp_err}", file=sys.stderr)
+
+    inline_atts = [a for a in attachments if a.get("isInline")]
+    if saved_att_names:
+        att_lines = ["Anhaenge:"] + [f"- attachments/{name}" for name in saved_att_names]
+    elif non_inline:
+        att_lines = ["Anhaenge:"] + [f"- {a.get('name', '?')}" for a in non_inline]
+    else:
+        att_lines = ["Anhaenge: -"]
+
+    if inline_atts:
+        inline_lines = []
+        if inline_described_names:
+            inline_lines.extend(["Inline-Bilder (LLM-beschrieben):"] + [f"- {name}" for name in inline_described_names])
+        if inline_failed_names:
+            inline_lines.extend(["Inline-Bilder (Konvertierungsfehler):"] + [f"- {name} (Konvertierungsfehler)" for name in inline_failed_names])
+        remaining_inline_names = [
+            a.get("name", "?")
+            for a in inline_atts
+            if a.get("name", "?") not in inline_described_names and a.get("name", "?") not in inline_failed_names
+        ]
+        if remaining_inline_names:
+            inline_lines.extend(["Inline-Bilder:"] + [f"- {name}" for name in remaining_inline_names])
+    else:
+        inline_lines = []
+
+    not_downloaded = [entry for entry in cloud_entries if entry["url"] not in sp_downloaded_urls]
+    if not_downloaded:
+        sp_link_lines = ["SharePoint-Links:"] + [f"- [{e['name']}]({e['url']})" for e in not_downloaded]
+    else:
+        sp_link_lines = []
+
+    header_lines = [
+        f"Von: {metadata['from_str']}",
+        f"Gesendet: {metadata['received']}",
+    ]
+    if metadata["importance"] != "normal":
+        header_lines.append(f"Prioritaet: {metadata['importance']}")
+    header_lines += [
+        f"An: {_fmt_recipients(metadata['to_list'])}",
+        f"Cc: {_fmt_recipients(metadata['cc_list'])}",
+        f"Betreff: {metadata['subject']}",
+    ]
+
+    return {
+        "metadata": metadata,
+        "header_lines": header_lines,
+        "att_lines": att_lines,
+        "inline_lines": inline_lines,
+        "sp_link_lines": sp_link_lines,
+        "body_text": body_text or "(kein Inhalt)",
+        "saved_att_names": saved_att_names,
+        "md_converted_names": md_converted_names,
+        "converted": converted,
+    }
+
+
+def _build_message_block_lines(
+    *,
+    header_lines: list[str],
+    att_lines: list[str],
+    inline_lines: list[str],
+    sp_link_lines: list[str],
+    body_text: str,
+    section_heading: str | None = None,
+    trailing_blank: bool = False,
+) -> list[str]:
+    """Baut konsistente Ausgabezeilen fuer Konsole/Markdown."""
+    lines: list[str] = []
+    if section_heading:
+        lines.append(section_heading)
+    lines.extend(header_lines + att_lines + inline_lines + sp_link_lines + ["", body_text])
+    if trailing_blank:
+        lines.append("")
+    return lines
+
+
+def _emit_attachment_outputs(saved_att_names: list[str], md_converted_names: list[str], converted: list[tuple[str, str]]) -> None:
+    """Gibt gespeicherte/konvertierte Attachment-Infos aus."""
+    if saved_att_names:
+        print(f"\n{len(saved_att_names)} Anhang/Anhaenge gespeichert in attachments/:")
+        for name in saved_att_names:
+            print(f"  - {name}")
+
+    if md_converted_names:
+        print(f"\n{len(md_converted_names)} Anhang/Anhaenge nach Markdown konvertiert:")
+        for name in md_converted_names:
+            print(f"  - attachments/{name}")
+
+    if converted:
+        for att_name, text in converted:
+            print(f"\nAnhang: {att_name}\n")
+            print(text)
+
+
+# ---------------------------------------------------------------------------
 # CMD: read
 # ---------------------------------------------------------------------------
 
@@ -1394,240 +1752,59 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
         sys.exit(1)
 
     msg = r.json()
-
-    # Header-Daten
-    subject = msg.get("subject", "?")
-    sender = msg.get("from", {}).get("emailAddress", {})
-    from_str = _fmt_sender(sender.get("name", ""), sender.get("address", ""))
-    sender_address = sender.get("address", "")
-    received = msg.get("receivedDateTime", "?")[:19].replace("T", " ")
-    importance = msg.get("importance", "normal")
-    has_attach = msg.get("hasAttachments", False)
-
-    to_list = [_fmt_sender(t["emailAddress"].get("name", ""), t["emailAddress"].get("address", ""))
-               for t in msg.get("toRecipients", [])]
-    cc_list = [_fmt_sender(c["emailAddress"].get("name", ""), c["emailAddress"].get("address", ""))
-               for c in msg.get("ccRecipients", [])]
+    metadata = _extract_message_metadata(msg)
 
     # Ausgabe-Ordner: tmp/emails/YYYYmmdd_HHMM_sender_subject_hash8/
     folder_name = _make_email_folder_name(
-        msg.get("receivedDateTime", ""), sender_address, subject, message_id,
+        msg.get("receivedDateTime", ""), metadata["sender_address"], metadata["subject"], message_id,
     )
     out_dir = REPO_ROOT / "tmp" / "emails" / folder_name
     att_dir = out_dir / "attachments"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Body (roh — wird erst nach Inline-Bild-Verarbeitung konvertiert)
-    body_raw = msg.get("body", {}).get("content", "")
-    body_type = msg.get("body", {}).get("contentType", "text")
-
-    # Anhaenge laden (auch bei hasAttachments=false wenn cid: im Body)
-    attachments = []
-    has_cid = "cid:" in body_raw
-    if has_attach or has_cid:
-        att_url = f"https://graph.microsoft.com/v1.0/me/messages/{encoded_message_id}/attachments"
-        try:
-            r_att = requests.get(att_url, headers={"Authorization": f"Bearer {token}"}, timeout=20)
-            if r_att.status_code == 200:
-                attachments = r_att.json().get("value", [])
-        except requests.RequestException:
-            pass
-
-    non_inline = [a for a in attachments if not a.get("isInline")]
-
-    # Nicht-Inline-Anhaenge speichern (VOR email.md, damit Dateinamen verfuegbar)
-    saved_att_names: list[str] = []
-    converted: list[tuple[str, str]] = []
-    md_converted_names: list[str] = []
-    if (save_attachments or convert) and non_inline:
-        att_dir.mkdir(parents=True, exist_ok=True)
-        for att in non_inline:
-            content_bytes = att.get("contentBytes", "")
-            if not content_bytes:
-                continue
-            att_name = att.get("name", "attachment")
-            raw_bytes = _decode_attachment_bytes(content_bytes, att_name)
-            if raw_bytes is None:
-                continue
-            if save_attachments:
-                att_path = _unique_att_path(att_dir, att_name)
-                att_path.write_bytes(raw_bytes)
-                saved_att_names.append(att_path.name)
-            if convert:
-                from file_parsers import convert_bytes as _convert_bytes
-                try:
-                    text = _convert_bytes(raw_bytes, att_name)
-                    if text:
-                        converted.append((att_name, text))
-                except Exception as e:
-                    converted.append((att_name, f"_(Konvertierung fehlgeschlagen: {e})_"))
-            if convert_to_markdown and save_attachments:
-                from file_converter import _to_markdown
-                md_out = att_path.with_suffix(".md")
-                rc = _to_markdown(att_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm, debug=debug)
-                if rc == 0 and md_out.is_file():
-                    md_converted_names.append(md_out.name)
-                    print(f"Markdown-Konvertierung OK: {att_path.name} -> {md_out.name}")
-                else:
-                    err_msg = f"Konvertierung von {att_path.name} fehlgeschlagen (exit code {rc})"
-                    print(f"ERROR: {err_msg}")
-                    md_out.write_text(
-                        f"# {att_path.name}\n\n> Konvertierung fehlgeschlagen\n\n"
-                        f"Exit-Code: {rc}\n",
-                        encoding="utf-8",
-                    )
-                    md_converted_names.append(md_out.name)
-
-    # Inline-Bilder in attachments/ speichern, per LLM beschreiben und cid:-Referenzen ersetzen
-    att_dir.mkdir(parents=True, exist_ok=True)
-    inline_saved = []
-    inline_descriptions: dict[str, str] = {}  # att_path -> LLM-Beschreibungstext
-    for att in attachments:
-        if not att.get("isInline"):
-            continue
-        content_bytes = att.get("contentBytes", "")
-        if not content_bytes:
-            continue
-        att_name = att.get("name", "inline_image")
-        content_id = att.get("contentId", "")
-        raw_bytes = _decode_attachment_bytes(content_bytes, att_name)
-        if raw_bytes is None:
-            continue
-        att_path = _unique_att_path(att_dir, att_name)
-        att_path.write_bytes(raw_bytes)
-        inline_saved.append(str(att_path))
-        # LLM-Bildbeschreibung (Default, Opt-out via --no-inline-llm)
-        if not no_inline_llm:
-            try:
-                from file_converter import _to_markdown
-                md_out = att_path.with_suffix(".md")
-                rc = _to_markdown(att_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm, debug=debug)
-                if rc == 0 and md_out.is_file():
-                    raw_desc = md_out.read_text(encoding="utf-8")
-                    inline_descriptions[str(att_path)] = re.sub(r"<!--.*?-->\n?", "", raw_desc).strip()
-            except Exception as e:
-                print(f"WARNING: LLM-Beschreibung fuer {att_name} fehlgeschlagen: {e}", file=sys.stderr)
-        if content_id and body_type == "html":
-            body_raw = body_raw.replace(f"cid:{content_id}", str(att_path))
-
-    # SharePoint/OneDrive-Links aus Mail-Body extrahieren (immer, fuer email.md)
-    cloud_entries = _extract_cloud_links_from_body(body_raw, body_type)
-    sp_downloaded_urls: set[str] = set()
-    if save_attachments and cloud_entries:
-        att_dir.mkdir(parents=True, exist_ok=True)
-        print(f"\n{len(cloud_entries)} SharePoint/OneDrive-Link(s) erkannt, starte Download...")
-        for entry in cloud_entries:
-                sp_url = entry["url"]
-                sp_label = entry["name"]
-                sp_path, sp_err = _try_download_sp_file(sp_url, att_dir)
-                if sp_path is not None:
-                    saved_att_names.append(sp_path.name)
-                    sp_downloaded_urls.add(sp_url)
-                    print(f"  SP-Download OK: {sp_label} -> {sp_path.name}")
-                    if convert_to_markdown:
-                        from file_converter import _to_markdown
-                        md_out = sp_path.with_suffix(".md")
-                        rc = _to_markdown(sp_path, md_out, no_llm_pdf=no_llm_pdf, no_llm=no_llm, debug=debug)
-                        if rc == 0 and md_out.is_file():
-                            md_converted_names.append(md_out.name)
-                            print(f"  Markdown-Konvertierung OK: {sp_path.name} -> {md_out.name}")
-                        else:
-                            print(f"  ERROR: Konvertierung von {sp_path.name} fehlgeschlagen (exit code {rc})")
-                            md_out.write_text(
-                                f"# {sp_path.name}\n\n> Konvertierung fehlgeschlagen\n\n"
-                                f"Exit-Code: {rc}\n",
-                                encoding="utf-8",
-                            )
-                            md_converted_names.append(md_out.name)
-                    if convert:
-                        from file_parsers import convert_bytes as _convert_bytes
-                        try:
-                            text = _convert_bytes(sp_path.read_bytes(), sp_path.name)
-                            if text:
-                                converted.append((sp_path.name, text))
-                        except Exception as e:
-                            converted.append((sp_path.name, f"_(Konvertierung fehlgeschlagen: {e})_"))
-                else:
-                    print(f"  SP-Download fehlgeschlagen: {sp_label} — {sp_err}", file=sys.stderr)
-
-    # Body konvertieren (nach cid-Ersetzung, damit lokale Pfade erhalten bleiben)
-    if body_type == "html":
-        body_text = _html_to_text(body_raw)
-    else:
-        body_text = body_raw
-
-    # Inline-Bild-Referenzen durch LLM-Beschreibungen ersetzen
-    for att_path_str, description in inline_descriptions.items():
-        att_name = Path(att_path_str).name
-        marker = f"![Bild]({att_path_str})"
-        replacement = f"[Inline-Bild {att_name}:\n{description}]"
-        body_text = body_text.replace(marker, replacement)
-
-    # Rauschen entfernen (INTERNAL, VW-Fusszeilen etc.)
-    body_text = _strip_email_noise(body_text)
-
-    # email.md aufbauen — outlook-agent Format (Plaintext-Header)
-    inline_atts = [a for a in attachments if a.get("isInline")]
-
-    if saved_att_names:
-        att_lines = ["Anhaenge:"] + [f"- attachments/{n}" for n in saved_att_names]
-    elif non_inline:
-        att_lines = ["Anhaenge:"] + [f"- {a.get('name', '?')}" for a in non_inline]
-    else:
-        att_lines = ["Anhaenge: -"]
-
-    if inline_atts:
-        if inline_descriptions:
-            inline_lines = ["Inline-Bilder (LLM-beschrieben):"] + [f"- {a.get('name', '?')}" for a in inline_atts]
-        else:
-            inline_lines = ["Inline-Bilder:"] + [f"- {a.get('name', '?')}" for a in inline_atts]
-    else:
-        inline_lines = []
-
-    # SharePoint-/OneDrive-Links (immer anzeigen, auch ohne Download)
-    sp_link_lines: list[str] = []
-    not_downloaded = [e for e in cloud_entries if e["url"] not in sp_downloaded_urls]
-    if not_downloaded:
-        sp_link_lines = ["SharePoint-Links:"] + [f"- [{e['name']}]({e['url']})" for e in not_downloaded]
-
-    header_lines = [
-        f"Von: {from_str}",
-        f"Gesendet: {received}",
-    ]
-    if importance != "normal":
-        header_lines.append(f"Prioritaet: {importance}")
-    header_lines += [
-        f"An: {_fmt_recipients(to_list)}",
-        f"Cc: {_fmt_recipients(cc_list)}",
-        f"Betreff: {subject}",
-    ]
-
-    md_lines = header_lines + att_lines + inline_lines + sp_link_lines + ["", body_text]
+    body_raw, body_type = _resolve_message_body(msg)
+    attachments = _load_message_attachments(
+        message_id,
+        body_raw,
+        msg.get("hasAttachments", False),
+        token,
+        include_content_bytes=True,
+    )
+    render_data = _process_message_output(
+        msg,
+        message_id=message_id,
+        token=token,
+        att_dir=att_dir,
+        body_raw=body_raw,
+        body_type=body_type,
+        attachments=attachments,
+        save_attachments=save_attachments,
+        convert=convert,
+        convert_to_markdown=convert_to_markdown,
+        no_llm_pdf=no_llm_pdf,
+        no_llm=no_llm,
+        no_inline_llm=no_inline_llm,
+        debug=debug,
+    )
+    md_lines = _build_message_block_lines(
+        header_lines=render_data["header_lines"],
+        att_lines=render_data["att_lines"],
+        inline_lines=render_data["inline_lines"],
+        sp_link_lines=render_data["sp_link_lines"],
+        body_text=render_data["body_text"],
+    )
 
     email_md_path = out_dir / "email.md"
     email_md_path.write_text("\n".join(md_lines), encoding="utf-8")
 
     # Konsole: gleiches Format wie email.md
-    for line in header_lines + att_lines + inline_lines + sp_link_lines:
+    for line in md_lines:
         print(line)
-    print()
-    print(body_text)
-
-    # Konsole: gespeicherte Anhaenge
-    if saved_att_names:
-        print(f"\n{len(saved_att_names)} Anhang/Anhaenge gespeichert in attachments/:")
-        for name in saved_att_names:
-            print(f"  - {name}")
-
-    if md_converted_names:
-        print(f"\n{len(md_converted_names)} Anhang/Anhaenge nach Markdown konvertiert:")
-        for name in md_converted_names:
-            print(f"  - attachments/{name}")
-
-    if converted:
-        for att_name, text in converted:
-            print(f"\nAnhang: {att_name}\n")
-            print(text)
+    _emit_attachment_outputs(
+        render_data["saved_att_names"],
+        render_data["md_converted_names"],
+        render_data["converted"],
+    )
 
     rel_out = out_dir.relative_to(REPO_ROOT)
     print(f"\nGespeichert in: {rel_out}")
@@ -1688,6 +1865,165 @@ def cmd_read(message_id: str, token: str | None = None, save_attachments: bool =
 
 
 # ---------------------------------------------------------------------------
+# CMD: read_thread
+# ---------------------------------------------------------------------------
+
+def cmd_read_thread(
+    message_id: str,
+    token: str | None = None,
+    save_attachments: bool = False,
+    convert: bool = False,
+    convert_to_markdown: bool = False,
+    no_llm_pdf: bool = False,
+    no_llm: bool = False,
+    no_inline_llm: bool = False,
+    debug: bool = False,
+) -> None:
+    """Liest einen kompletten Mail-Thread tokensparsam via uniqueBody.
+
+    Nutzt uniqueBody (nur der neu geschriebene Teil pro Antwort) statt body,
+    um doppelte Zitatketten zu vermeiden. Jede Mail wird im gleichen Format
+    wie cmd_read dargestellt (Von, Gesendet, An, Cc, Betreff, Anhaenge, Body).
+    Neueste Mail zuerst.
+    """
+    if convert_to_markdown:
+        save_attachments = True
+    token = _resolve_token(token)
+
+    # --- Seed-Mail: conversationId holen ---
+    encoded_id = _encode_graph_id_for_path(message_id)
+    seed_url = f"https://graph.microsoft.com/v1.0/me/messages/{encoded_id}"
+    try:
+        r = requests.get(seed_url, headers={"Authorization": f"Bearer {token}"},
+                         params={"$select": "conversationId,subject"}, timeout=15)
+    except requests.RequestException as e:
+        print(f"ERROR: Request failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    if r.status_code == 401:
+        print("TOKEN_EXPIRED", file=sys.stderr)
+        sys.exit(2)
+    if r.status_code == 404:
+        print(f"ERROR: Message nicht gefunden (404). ID: {message_id[:40]}...", file=sys.stderr)
+        sys.exit(1)
+    if r.status_code != 200:
+        data = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+        print(f"ERROR {r.status_code}: {data.get('error', {}).get('message', r.text[:200])}", file=sys.stderr)
+        sys.exit(1)
+
+    seed = r.json()
+    conversation_id = seed.get("conversationId")
+    if not conversation_id:
+        print("ERROR: Kein conversationId vorhanden — Thread kann nicht geladen werden.", file=sys.stderr)
+        sys.exit(1)
+
+    # --- Alle Thread-Mails laden (mit uniqueBody) ---
+    thread_url = "https://graph.microsoft.com/v1.0/me/messages"
+    thread_params = {
+        "$filter": f"conversationId eq '{conversation_id}'",
+        "$select": "id,subject,from,toRecipients,ccRecipients,receivedDateTime,uniqueBody,body,hasAttachments,importance",
+        "$top": 50,
+    }
+    auth_headers = {
+        "Authorization": f"Bearer {token}",
+    }
+
+    all_msgs: list[dict] = []
+    url: str | None = thread_url
+    params: dict | None = thread_params
+    while url:
+        try:
+            r_t = requests.get(url, headers=auth_headers, params=params, timeout=20)
+        except requests.RequestException as e:
+            print(f"ERROR: Thread-Abfrage fehlgeschlagen: {e}", file=sys.stderr)
+            sys.exit(1)
+        if r_t.status_code != 200:
+            d = r_t.json() if r_t.headers.get("content-type", "").startswith("application/json") else {}
+            print(f"ERROR Thread {r_t.status_code}: {d.get('error', {}).get('message', r_t.text[:200])}", file=sys.stderr)
+            sys.exit(1)
+        data = r_t.json()
+        all_msgs.extend(data.get("value", []))
+        url = data.get("@odata.nextLink")
+        params = None  # nextLink enthaelt alle Query-Parameter
+
+    # Neueste zuerst
+    all_msgs.sort(key=lambda m: m.get("receivedDateTime", ""), reverse=True)
+    n = len(all_msgs)
+
+    # --- Ausgabe-Ordner analog zu read ---
+    first_msg = all_msgs[-1] if all_msgs else seed
+    sender_addr = (first_msg.get("from") or {}).get("emailAddress", {}).get("address", "")
+    folder = _make_email_folder_name(
+        first_msg.get("receivedDateTime", ""), sender_addr,
+        first_msg.get("subject", seed.get("subject", "")), message_id,
+    )
+    out_dir = REPO_ROOT / "tmp" / "threads" / folder
+    att_base_dir = out_dir / "attachments"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    thread_header = f"=== Thread: {seed.get('subject', '?')} ({n} Nachrichten) ===\n"
+    thread_header_printed = False
+    thread_md_lines = [thread_header]
+
+    for i, m in enumerate(all_msgs, 1):
+        body_raw, body_type = _resolve_message_body(m, prefer_unique_body=True)
+        need_attachment_content = save_attachments or convert or convert_to_markdown or ("cid:" in body_raw)
+        attachments = _load_message_attachments(
+            m["id"],
+            body_raw,
+            m.get("hasAttachments", False),
+            token,
+            include_content_bytes=need_attachment_content,
+        )
+        render_data = _process_message_output(
+            m,
+            message_id=m["id"],
+            token=token,
+            att_dir=att_base_dir,
+            body_raw=body_raw,
+            body_type=body_type,
+            attachments=attachments,
+            save_attachments=save_attachments,
+            convert=convert,
+            convert_to_markdown=convert_to_markdown,
+            no_llm_pdf=no_llm_pdf,
+            no_llm=no_llm,
+            no_inline_llm=no_inline_llm,
+            debug=debug,
+        )
+        block_lines = _build_message_block_lines(
+            header_lines=render_data["header_lines"],
+            att_lines=render_data["att_lines"],
+            inline_lines=render_data["inline_lines"],
+            sp_link_lines=render_data["sp_link_lines"],
+            body_text=render_data["body_text"],
+            section_heading=f"=== Email [{n - i + 1}/{n}] ===",
+            trailing_blank=True,
+        )
+        thread_md_lines.extend(block_lines)
+
+        if not thread_header_printed:
+            print(f"\n{thread_header}")
+            thread_header_printed = True
+
+        for line in block_lines:
+            print(line)
+        _emit_attachment_outputs(
+            render_data["saved_att_names"],
+            render_data["md_converted_names"],
+            render_data["converted"],
+        )
+
+    thread_md_path = out_dir / "email_thread.md"
+    thread_md_path.write_text("\n".join(thread_md_lines), encoding="utf-8")
+
+    if save_attachments:
+        rel = att_base_dir.parent.relative_to(REPO_ROOT)
+        print(f"Anhaenge gespeichert in: {rel}/attachments/")
+    rel_out = out_dir.relative_to(REPO_ROOT)
+    print(f"Gespeichert in: {rel_out}")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1737,6 +2073,25 @@ def main() -> None:
             if idx + 1 < len(sys.argv):
                 token = sys.argv[idx + 1]
         cmd_read(message_id, token, save_att, do_convert, inc_thread, do_convert_md, do_no_llm_pdf, do_no_llm, do_no_inline_llm, do_debug)
+
+    elif cmd == "read_thread":
+        if len(sys.argv) < 3:
+            print("Usage: python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search.py read_thread MESSAGE_ID [--save-attachments] [--convert] [--convert-to-markdown] [--no-llm-pdf] [--no-llm] [--no-inline-llm] [--debug] [--token TOKEN]")
+            sys.exit(1)
+        message_id = sys.argv[2]
+        token = None
+        save_att = "--save-attachments" in sys.argv
+        do_convert = "--convert" in sys.argv
+        do_convert_md = "--convert-to-markdown" in sys.argv
+        do_no_llm_pdf = "--no-llm-pdf" in sys.argv
+        do_no_llm = "--no-llm" in sys.argv
+        do_no_inline_llm = "--no-inline-llm" in sys.argv
+        do_debug = "--debug" in sys.argv
+        if "--token" in sys.argv:
+            idx = sys.argv.index("--token")
+            if idx + 1 < len(sys.argv):
+                token = sys.argv[idx + 1]
+        cmd_read_thread(message_id, token, save_att, do_convert, do_convert_md, do_no_llm_pdf, do_no_llm, do_no_inline_llm, do_debug)
 
     elif cmd == "check-token":
         cmd_check_token()

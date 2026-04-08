@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 import re
 import shutil
@@ -1383,7 +1384,11 @@ def test_cmd_read_inline_image_llm_failure_non_blocking(tmp_path, monkeypatch, c
     # email.md trotzdem erstellt mit Fallback (roher Bildlink)
     email_dirs = list((tmp_path / "tmp" / "emails").iterdir())
     assert len(email_dirs) == 1
-    assert (email_dirs[0] / "email.md").is_file()
+    email_md = (email_dirs[0] / "email.md").read_text(encoding="utf-8")
+    assert "Inline-Bilder (LLM-beschrieben):" not in email_md
+    assert "Inline-Bilder (Konvertierungsfehler):" in email_md
+    assert "- screenshot.png (Konvertierungsfehler)" in email_md
+    assert "![Bild](" in email_md
 
 
 # ---------------------------------------------------------------------------
@@ -1436,3 +1441,573 @@ def test_html_to_text_mixed_content_table_and_text():
     assert "Vor der Tabelle" in result
     assert "| Zelle |" in result
     assert "Nach der Tabelle" in result
+
+
+def test_process_inline_and_body_collapses_whitespace_only_lines_from_unique_body_html(tmp_path):
+    html = (
+        "<html><body><div>\r\n"
+        "<div>\r\n"
+        '<p style="margin:0;">Moin,</p>\r\n'
+        '<p style="margin:0;">&nbsp;</p>\r\n'
+        '<p style="margin:0;">heute gibt es ein Update.</p>\r\n'
+        '<p style="margin:0;"><br></p>\r\n'
+        '<p style="margin:0;">Gruss,</p>\r\n'
+        "</div>\r\n"
+        "</div></body></html>"
+    )
+
+    body_text, _, inline_saved, _, _ = mod._process_inline_and_body(
+        html, "html", [], tmp_path / "attachments"
+    )
+
+    assert inline_saved == []
+    assert body_text == "Moin,\n\nheute gibt es ein Update.\n\nGruss,"
+
+
+def test_unique_att_path_reuses_identical_file_and_suffixes_different_content(tmp_path):
+    att_dir = tmp_path / "attachments"
+    att_dir.mkdir()
+
+    existing = att_dir / "report.pdf"
+    existing.write_bytes(b"same-bytes")
+
+    same_path = mod._unique_att_path(att_dir, "report.pdf", b"same-bytes")
+    other_path = mod._unique_att_path(att_dir, "report.pdf", b"other-bytes")
+
+    assert same_path == existing
+    assert other_path == att_dir / "report (2).pdf"
+
+
+# ---------------------------------------------------------------------------
+# cmd_read_thread tests
+# ---------------------------------------------------------------------------
+
+def _make_thread_msg(msg_id, subject, sender_name, sender_addr, received,
+                     unique_body="", body="", has_attachments=False,
+                     to=None, cc=None, importance="normal"):
+    """Helper: baut ein Graph-API message dict fuer Thread-Tests."""
+    m = {
+        "id": msg_id,
+        "subject": subject,
+        "from": {"emailAddress": {"name": sender_name, "address": sender_addr}},
+        "toRecipients": [{"emailAddress": {"name": n, "address": a}} for n, a in (to or [])],
+        "ccRecipients": [{"emailAddress": {"name": n, "address": a}} for n, a in (cc or [])],
+        "receivedDateTime": received,
+        "uniqueBody": {"content": unique_body, "contentType": "text"},
+        "body": {"content": body, "contentType": "text"},
+        "hasAttachments": has_attachments,
+        "importance": importance,
+    }
+    return m
+
+
+def test_cmd_read_thread_reverse_chronological_with_unique_body(tmp_path, monkeypatch, capsys):
+    """Thread-Mails werden neuste-zuerst ausgegeben, uniqueBody wird bevorzugt."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    msgs = [
+        _make_thread_msg("m1", "Thema", "Alice", "alice@vw.de", "2026-04-05T10:00:00Z",
+                         unique_body="Erste Nachricht komplett", body="Erste Nachricht komplett",
+                         to=[("Bob", "bob@vw.de")]),
+        _make_thread_msg("m2", "RE: Thema", "Bob", "bob@vw.de", "2026-04-06T11:00:00Z",
+                         unique_body="Bobs Antwort nur neu", body="Bobs Antwort nur neu\n>Erste Nachricht komplett",
+                         to=[("Alice", "alice@vw.de")]),
+        _make_thread_msg("m3", "RE: Thema", "Alice", "alice@vw.de", "2026-04-07T09:00:00Z",
+                         unique_body="Alices Rueckmeldung", body="Alices Rueckmeldung\n>Bobs Antwort\n>Erste Nachricht",
+                         to=[("Bob", "bob@vw.de")]),
+    ]
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            # Seed-Mail
+            return FakeResponse(200, {"conversationId": "conv-1", "subject": "Thema"})
+        if call_count[0] == 2:
+            # Thread-Abfrage
+            return FakeResponse(200, {"value": msgs})
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    mod.cmd_read_thread("m1")
+
+    out = capsys.readouterr().out
+    # Thread-Header
+    assert "Thread: Thema (3 Nachrichten)" in out
+    # Anzeige: neueste zuerst, aber mit chronologischer Positionsnummer
+    assert "=== Email [3/3] ===" in out
+    assert "=== Email [2/3] ===" in out
+    assert "=== Email [1/3] ===" in out
+    pos_3 = out.index("=== Email [3/3] ===")
+    pos_2 = out.index("=== Email [2/3] ===")
+    pos_1 = out.index("=== Email [1/3] ===")
+    assert pos_3 < pos_2 < pos_1
+    # uniqueBody wird verwendet, nicht body mit Quotes
+    assert "Alices Rueckmeldung" in out
+    assert "Bobs Antwort nur neu" in out
+    assert "Erste Nachricht komplett" in out
+    # Keine Quotes aus body
+    assert ">Erste Nachricht" not in out
+    assert ">Bobs Antwort" not in out
+
+
+def test_cmd_read_thread_falls_back_to_body(tmp_path, monkeypatch, capsys):
+    """Wenn uniqueBody leer ist, wird body.content verwendet."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    msgs = [
+        _make_thread_msg("m1", "Test", "Alice", "alice@vw.de", "2026-04-05T10:00:00Z",
+                         unique_body="", body="Fallback-Body-Inhalt",
+                         to=[("Bob", "bob@vw.de")]),
+    ]
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-2", "subject": "Test"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    mod.cmd_read_thread("m1")
+
+    out = capsys.readouterr().out
+    assert "Fallback-Body-Inhalt" in out
+
+
+def test_cmd_read_thread_shows_attachments_per_mail(tmp_path, monkeypatch, capsys):
+    """Anhaenge werden bei der jeweiligen Mail angezeigt, nicht zentral."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    msgs = [
+        _make_thread_msg("m1", "Thema", "Alice", "alice@vw.de", "2026-04-05T10:00:00Z",
+                         unique_body="Erste Mail", has_attachments=True,
+                         to=[("Bob", "bob@vw.de")]),
+        _make_thread_msg("m2", "RE: Thema", "Bob", "bob@vw.de", "2026-04-06T11:00:00Z",
+                         unique_body="Antwort ohne Anhang", has_attachments=False,
+                         to=[("Alice", "alice@vw.de")]),
+    ]
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-3", "subject": "Thema"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        if "/attachments" in url:
+            return FakeResponse(200, {"value": [
+                {"id": "a1", "name": "Projektplan.pdf", "size": 12345,
+                 "contentType": "application/pdf", "isInline": False},
+                {"id": "a2", "name": "sig.png", "size": 100,
+                 "contentType": "image/png", "isInline": True},
+            ]})
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    mod.cmd_read_thread("m1")
+
+    out = capsys.readouterr().out
+    # Mail 2 (neueste, Bob) hat keine Anhaenge
+    # Mail 1 (Alice) hat Projektplan.pdf; Inline-Bilder werden separat wie in read angezeigt
+    assert "- Projektplan.pdf" in out
+    assert "Inline-Bilder:" in out
+    assert "- sig.png" in out
+    # Bob's Mail zeigt "Anhaenge: -"
+    # Zaehle wie oft "Anhaenge:" vorkommt (sollte 2x sein, einmal pro Mail)
+    assert out.count("Anhaenge:") == 2
+
+
+def test_cmd_read_thread_uses_lightweight_attachment_fetch_without_convert(tmp_path, monkeypatch, capsys):
+    """Plain read_thread soll Attachments ohne contentBytes nachladen koennen."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    msgs = [
+        _make_thread_msg(
+            "m1", "Thema", "Alice", "alice@vw.de", "2026-04-05T10:00:00Z",
+            unique_body="Erste Mail", has_attachments=True, to=[("Bob", "bob@vw.de")],
+        ),
+    ]
+
+    attachment_params = []
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-light", "subject": "Thema"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        if "/attachments" in url:
+            attachment_params.append(params)
+            return FakeResponse(200, {"value": [
+                {"id": "a1", "name": "Projektplan.pdf", "isInline": False},
+                {"id": "a2", "name": "sig.png", "isInline": True, "contentId": "img1"},
+            ]})
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    mod.cmd_read_thread("m1")
+
+    out = capsys.readouterr().out
+    assert "- Projektplan.pdf" in out
+    assert attachment_params == [{"$select": "id,name,isInline,contentId,contentType,size"}]
+
+
+def test_cmd_read_thread_html_tables_rendered_as_markdown(tmp_path, monkeypatch, capsys):
+    """HTML-Tabellen im uniqueBody werden als Markdown-Tabellen gerendert."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    html_body = "<p>Ergebnis:</p><table><tr><th>Name</th><th>Wert</th></tr><tr><td>Alpha</td><td>100</td></tr></table>"
+    msgs = [{
+        "id": "m1", "subject": "Tabelle", "receivedDateTime": "2026-04-05T10:00:00Z",
+        "from": {"emailAddress": {"name": "Alice", "address": "alice@vw.de"}},
+        "toRecipients": [], "ccRecipients": [],
+        "uniqueBody": {"content": html_body, "contentType": "html"},
+        "body": {"content": html_body, "contentType": "html"},
+        "hasAttachments": False, "importance": "normal",
+    }]
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-t", "subject": "Tabelle"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    mod.cmd_read_thread("m1")
+
+    out = capsys.readouterr().out
+    assert "| Name | Wert |" in out
+    assert "| Alpha | 100 |" in out
+
+
+def test_cmd_read_thread_writes_email_thread_md(tmp_path, monkeypatch, capsys):
+    """read_thread schreibt analog zu read eine email_thread.md in tmp/threads."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    msgs = [
+        _make_thread_msg(
+            "m1", "Thema", "Alice", "alice@vw.de", "2026-04-05T10:00:00Z",
+            unique_body="Erste Nachricht", body="Erste Nachricht",
+            to=[("Bob", "bob@vw.de")],
+        ),
+        _make_thread_msg(
+            "m2", "RE: Thema", "Bob", "bob@vw.de", "2026-04-06T11:00:00Z",
+            unique_body="Zweite Nachricht", body="Zweite Nachricht",
+            to=[("Alice", "alice@vw.de")],
+        ),
+    ]
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-md", "subject": "Thema"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    mod.cmd_read_thread("m1")
+
+    out = capsys.readouterr().out
+    assert "Gespeichert in:" in out
+
+    thread_files = list((tmp_path / "tmp" / "threads").glob("*/email_thread.md"))
+    assert len(thread_files) == 1
+    content = thread_files[0].read_text(encoding="utf-8")
+    assert "=== Thread: Thema (2 Nachrichten) ===" in content
+    assert "=== Email [2/2] ===" in content
+    assert "=== Email [1/2] ===" in content
+    assert "Zweite Nachricht" in content
+    assert "Erste Nachricht" in content
+
+
+def test_cmd_read_thread_convert_outputs_attachment_text_per_email(tmp_path, monkeypatch, capsys):
+    """--convert gibt konvertierte Attachment-Inhalte pro Mail aus."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    msgs = [
+        _make_thread_msg(
+            "m1", "Thema", "Alice", "alice@vw.de", "2026-04-05T10:00:00Z",
+            unique_body="Erste Nachricht", body="Erste Nachricht", has_attachments=True,
+            to=[("Bob", "bob@vw.de")],
+        ),
+    ]
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-convert", "subject": "Thema"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        if "/attachments" in url:
+            return FakeResponse(200, _make_att_payload())
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    import file_parsers
+
+    def fake_convert_bytes(raw_bytes, att_name):
+        return f"Konvertierter Inhalt fuer {att_name}"
+
+    monkeypatch.setattr(file_parsers, "convert_bytes", fake_convert_bytes)
+
+    mod.cmd_read_thread("m1", convert=True)
+
+    out = capsys.readouterr().out
+    assert "Anhang: bericht.docx" in out
+    assert "Konvertierter Inhalt fuer bericht.docx" in out
+    assert "Anhang: foto.png" in out
+    assert "Konvertierter Inhalt fuer foto.png" in out
+
+
+def test_cmd_read_thread_reuses_identical_forwarded_attachments(tmp_path, monkeypatch, capsys):
+    """Identische Anhaenge in mehreren Thread-Mails werden nicht als (2) dupliziert."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    msgs = [
+        _make_thread_msg(
+            "m1", "Thema", "Alice", "alice@vw.de", "2026-04-05T10:00:00Z",
+            unique_body="Erste Nachricht", body="Erste Nachricht", has_attachments=True,
+            to=[("Bob", "bob@vw.de")],
+        ),
+        _make_thread_msg(
+            "m2", "RE: Thema", "Bob", "bob@vw.de", "2026-04-06T11:00:00Z",
+            unique_body="Weitergeleitet", body="Weitergeleitet", has_attachments=True,
+            to=[("Alice", "alice@vw.de")],
+        ),
+    ]
+
+    shared_attachment = {
+        "value": [
+            {
+                "@odata.type": "#microsoft.graph.fileAttachment",
+                "id": "att-docx",
+                "name": "bericht.docx",
+                "isInline": False,
+                "contentBytes": base64.b64encode(b"identical-content").decode(),
+            }
+        ]
+    }
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-dedup", "subject": "Thema"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        if "/attachments" in url:
+            return FakeResponse(200, shared_attachment)
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    mod.cmd_read_thread("m1", save_attachments=True)
+
+    out = capsys.readouterr().out
+    assert "bericht (2).docx" not in out
+
+    thread_dirs = list((tmp_path / "tmp" / "threads").iterdir())
+    assert len(thread_dirs) == 1
+    files = sorted(p.name for p in (thread_dirs[0] / "attachments").iterdir())
+    assert files == ["bericht.docx"]
+
+
+def test_cmd_read_thread_convert_to_markdown_implicit_save_and_flags(tmp_path, monkeypatch, capsys):
+    """--convert-to-markdown impliziert save_attachments und reicht Flags durch."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    msgs = [
+        _make_thread_msg(
+            "m1", "Thema", "Alice", "alice@vw.de", "2026-04-05T10:00:00Z",
+            unique_body="Erste Nachricht", body="Erste Nachricht", has_attachments=True,
+            to=[("Bob", "bob@vw.de")],
+        ),
+    ]
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-md-flags", "subject": "Thema"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        if "/attachments" in url:
+            return FakeResponse(200, _make_att_payload())
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    seen_flags = []
+
+    import file_converter
+
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False, debug=False):
+        seen_flags.append((input_path.name, no_llm_pdf, no_llm))
+        output_path.write_text(f"# {input_path.name}\n\nKonvertiert.", encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(file_converter, "_to_markdown", fake_to_markdown)
+
+    mod.cmd_read_thread("m1", convert_to_markdown=True, no_llm_pdf=True, no_llm=True)
+
+    out = capsys.readouterr().out
+    assert "Markdown-Konvertierung OK: bericht.docx -> bericht.md" in out
+    assert "Markdown-Konvertierung OK: foto.png -> foto.md" in out
+    assert "Anhaenge gespeichert in:" in out
+    assert len(seen_flags) == 2
+    assert all(no_llm_pdf is True and no_llm is True for _, no_llm_pdf, no_llm in seen_flags)
+
+    thread_dirs = list((tmp_path / "tmp" / "threads").iterdir())
+    assert len(thread_dirs) == 1
+    att_dir = thread_dirs[0] / "attachments"
+    assert (att_dir / "bericht.docx").is_file()
+    assert (att_dir / "bericht.md").is_file()
+    assert (att_dir / "foto.png").is_file()
+    assert (att_dir / "foto.md").is_file()
+
+
+def test_cmd_read_thread_no_inline_llm_opt_out(tmp_path, monkeypatch, capsys):
+    """--no-inline-llm deaktiviert die Inline-Bildbeschreibung auch im Thread."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    html_body = '<p>Hallo, hier der Screenshot:</p><img src="cid:img001" /><p>Ende.</p>'
+    msgs = [{
+        "id": "m1",
+        "subject": "Thread mit Screenshot",
+        "from": {"emailAddress": {"name": "Alice", "address": "alice@vw.de"}},
+        "toRecipients": [],
+        "ccRecipients": [],
+        "receivedDateTime": "2026-04-05T10:00:00Z",
+        "uniqueBody": {"content": html_body, "contentType": "html"},
+        "body": {"content": html_body, "contentType": "html"},
+        "hasAttachments": True,
+        "importance": "normal",
+    }]
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-inline-thread", "subject": "Thread mit Screenshot"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        if "/attachments" in url:
+            return FakeResponse(200, _make_inline_att_payload())
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    import file_converter
+
+    calls = []
+
+    def fake_to_markdown(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False, debug=False):
+        calls.append(input_path.name)
+        return 0
+
+    monkeypatch.setattr(file_converter, "_to_markdown", fake_to_markdown)
+
+    mod.cmd_read_thread("m1", no_inline_llm=True)
+
+    out = capsys.readouterr().out
+    assert calls == []
+    assert "![Bild](" in out
+    assert "LLM-beschrieben" not in out
+
+    thread_files = list((tmp_path / "tmp" / "threads").glob("*/email_thread.md"))
+    assert len(thread_files) == 1
+    content = thread_files[0].read_text(encoding="utf-8")
+    assert "Inline-Bilder:" in content
+    assert "LLM-beschrieben" not in content
+
+
+def test_cmd_read_thread_inline_image_llm_failure_marks_conversion_error(tmp_path, monkeypatch, capsys):
+    """Inline-Bildfehler im Thread werden sichtbar als Konvertierungsfehler ausgewiesen."""
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(mod, "_resolve_token", lambda _token=None: "tok")
+
+    html_body = '<p>Hallo, hier der Screenshot:</p><img src="cid:img001" /><p>Ende.</p>'
+    msgs = [{
+        "id": "m1",
+        "subject": "Thread mit Screenshot",
+        "from": {"emailAddress": {"name": "Alice", "address": "alice@vw.de"}},
+        "toRecipients": [],
+        "ccRecipients": [],
+        "receivedDateTime": "2026-04-05T10:00:00Z",
+        "uniqueBody": {"content": html_body, "contentType": "html"},
+        "body": {"content": html_body, "contentType": "html"},
+        "hasAttachments": True,
+        "importance": "normal",
+    }]
+
+    call_count = [0]
+
+    def fake_get(url, headers=None, params=None, timeout=None):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return FakeResponse(200, {"conversationId": "conv-inline-fail", "subject": "Thread mit Screenshot"})
+        if call_count[0] == 2:
+            return FakeResponse(200, {"value": msgs})
+        if "/attachments" in url:
+            return FakeResponse(200, _make_inline_att_payload())
+        return FakeResponse(200, {"value": []})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    import file_converter
+
+    def fake_to_markdown_crash(input_path, output_path, *, no_llm_pdf=False, no_llm=False, all_sheets=False, debug=False):
+        raise RuntimeError("LLM nicht erreichbar")
+
+    monkeypatch.setattr(file_converter, "_to_markdown", fake_to_markdown_crash)
+
+    mod.cmd_read_thread("m1")
+
+    out = capsys.readouterr()
+    assert "LLM-Beschreibung" in out.err
+    assert "Inline-Bilder (LLM-beschrieben):" not in out.out
+    assert "Inline-Bilder (Konvertierungsfehler):" in out.out
+    assert "- screenshot.png (Konvertierungsfehler)" in out.out
+
+    thread_files = list((tmp_path / "tmp" / "threads").glob("*/email_thread.md"))
+    assert len(thread_files) == 1
+    content = thread_files[0].read_text(encoding="utf-8")
+    assert "Inline-Bilder (LLM-beschrieben):" not in content
+    assert "Inline-Bilder (Konvertierungsfehler):" in content
+    assert "- screenshot.png (Konvertierungsfehler)" in content
