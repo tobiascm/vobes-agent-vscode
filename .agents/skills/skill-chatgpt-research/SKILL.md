@@ -134,7 +134,7 @@ Wichtig:
 - Der Agent wartet im Standardlauf entsprechend lange und bricht erst nach Ablauf dieses Timeouts mit Exit `4` ab.
 - Ein kurzer Einleitungssatz gilt nicht mehr sofort als fertig; das Script wartet standardmaessig auf mindestens `15` Sekunden stabilen Inhalt und blockt sehr kurze Zwischenstaende.
 - Im Thinking-Modus wird ein sichtbares `TL;DR`/`Fazit` zusaetzlich als starkes Abschluss-Indiz genutzt. Fehlt das, wartet der Wrapper deutlich laenger, bevor er einen stabilen Zwischenstand akzeptiert.
-- Zusaetzlich injiziert der Wrapper standardmaessig ein Abschluss-Token `---fertig---`. Sobald dieses am Antwortende erscheint, kann der Lauf deutlich frueher und zuverlaessiger als abgeschlossen erkannt werden.
+- Zusaetzlich injiziert der Wrapper standardmaessig ein Abschluss-Token `---fertig---`. Sobald `---fertig---`, `---fertig` oder `--- fertig` am Antwortende erscheint, kann der Lauf deutlich frueher und zuverlaessiger als abgeschlossen erkannt werden.
 - Fuer kurze Testprompts oder 2-3 Zeilen Antwort `--quick` verwenden. Dann sind die Abschluss-Schwellen deutlich kuerzer und das Script beendet frueher, sobald der kurze Inhalt stabil ist.
 
 Der durch `run` verwendete ChatGPT-Tab wird nach dem Lauf automatisch geschlossen. Das explizite `close`-Subcommand brauchst du nur noch, wenn du einen separat offen gebliebenen Tab manuell schliessen willst:

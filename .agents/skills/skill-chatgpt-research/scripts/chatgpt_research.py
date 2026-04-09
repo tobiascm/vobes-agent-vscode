@@ -75,6 +75,7 @@ DEFAULT_COMPLETION_MIN_CHARS = 200
 DEFAULT_NO_GENERATION_GRACE_SECONDS = 90
 DEFAULT_THINKING_TLDR_GRACE_SECONDS = 300
 DEFAULT_COMPLETION_SENTINEL = "---fertig---"
+COMPLETION_SENTINEL_PATTERN = re.compile(r"---\s*fertig\s*(?:---)?", re.IGNORECASE)
 SHORT_COMPLETION_STABLE_SECONDS = 6
 SHORT_COMPLETION_MIN_CHARS = 0
 SHORT_NO_GENERATION_GRACE_SECONDS = 20
@@ -565,13 +566,16 @@ def _prompt_with_completion_sentinel(prompt: str) -> str:
 
 
 def _has_completion_sentinel(*texts: str) -> bool:
-    sentinel = DEFAULT_COMPLETION_SENTINEL.lower()
-    return any(sentinel in (text or "").lower() for text in texts)
+    return any(COMPLETION_SENTINEL_PATTERN.search(text or "") for text in texts)
 
 
 def _strip_completion_sentinel(text: str) -> str:
-    sentinel = re.escape(DEFAULT_COMPLETION_SENTINEL)
-    cleaned = re.sub(rf"\n?\s*{sentinel}\s*$", "", text.strip(), flags=re.IGNORECASE)
+    cleaned = re.sub(
+        rf"\n?\s*{COMPLETION_SENTINEL_PATTERN.pattern}\s*$",
+        "",
+        text.strip(),
+        flags=re.IGNORECASE,
+    )
     return cleaned.strip()
 
 

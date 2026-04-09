@@ -106,6 +106,20 @@ def test_write_markdown_from_html_handles_wrapped_evaluate_output(tmp_path: Path
     assert output_file.read_text(encoding="utf-8") == content
 
 
+@pytest.mark.parametrize(
+    "sentinel",
+    [
+        "---fertig---",
+        "---fertig",
+        "--- fertig",
+        "--- FERTIG",
+    ],
+)
+def test_completion_sentinel_accepts_exact_and_short_forms(sentinel: str):
+    assert mod._has_completion_sentinel(f"Antwort\n{sentinel}")
+    assert mod._strip_completion_sentinel(f"Antwort\n{sentinel}") == "Antwort"
+
+
 def test_extract_playwright_result_text_unwraps_markdown_report():
     raw = (
         "### Result\n"
