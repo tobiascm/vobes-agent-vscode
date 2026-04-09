@@ -558,8 +558,8 @@ def _prompt_with_completion_sentinel(prompt: str) -> str:
     if sentinel in prompt:
         return prompt
     instruction = (
-        "\n\nWichtig: Beende deine finale Antwort mit der exakten Zeile "
-        f"{sentinel} "
+        "\n\nWichtig: Beende deine finale Antwort mit der exakten Zeile:\n"
+        f"{sentinel}\n"
         "und verwende diese Markierung nicht vorher."
     )
     return prompt.rstrip() + instruction

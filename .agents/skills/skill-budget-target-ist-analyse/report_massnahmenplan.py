@@ -23,6 +23,34 @@ TARGET_CSV = os.path.join(SCRIPT_DIR, "target.csv")
 STATUS_CSV = os.path.join(SCRIPT_DIR, "status_mapping.csv")
 PRAEMISSEN_MD = os.path.join(SCRIPT_DIR, "praemissen.md")
 
+PDF_CSS = """
+body {
+  font-family: Arial, sans-serif;
+  font-size: 8pt;
+  line-height: 1.25;
+}
+h1, h2, h3 { margin: 10pt 0 4pt; }
+p, li { margin: 2pt 0; }
+hr {
+  border: 0;
+  border-top: 1px solid #999;
+  margin: 8pt 0;
+}
+table {
+  width: auto;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: 6.5pt;
+  margin: 0 0 6pt 0;
+}
+th, td {
+  border: 0.4pt solid #999;
+  padding: 1pt 6pt;
+  vertical-align: top;
+  white-space: nowrap;
+}
+"""
+
 # ── CSV laden: 2025 + Target ──────────────────────────────────────────
 
 def load_status_mapping() -> dict[str, str]:
@@ -57,6 +85,27 @@ def load_praemissen() -> str:
     """Liest praemissen.md als String."""
     with open(PRAEMISSEN_MD, encoding="utf-8") as f:
         return f.read().strip()
+
+
+def write_pdf_beside_markdown(md_file: str) -> str | None:
+    """Best-effort Markdown->PDF Export im A4-Querformat."""
+    pdf_file = os.path.splitext(md_file)[0] + ".pdf"
+    try:
+        from markdown_pdf import MarkdownPdf, Section
+    except ImportError as exc:
+        print(f"WARNUNG: PDF-Export übersprungen: markdown-pdf nicht installiert ({exc})", file=sys.stderr)
+        return None
+
+    try:
+        with open(md_file, encoding="utf-8") as f:
+            md_text = f.read()
+        pdf = MarkdownPdf(toc_level=2, optimize=True)
+        pdf.add_section(Section(md_text, paper_size="A4-L"), user_css=PDF_CSS)
+        pdf.save(pdf_file)
+        return pdf_file
+    except Exception as exc:  # PDF ist Zusatzartefakt; Markdown/CSV bleiben gültig.
+        print(f"WARNUNG: PDF-Export fehlgeschlagen: {exc}", file=sys.stderr)
+        return None
 
 # ── AUDI fest (aus Target-CSV abgeleitet) ─────────────────────────────
 AUDI_KEY = "AUDI - Bibliotheksarbeiten (Audi)"
@@ -172,7 +221,7 @@ def main():
     q_ratio = num_q / 4
 
     # ── BMs laden (inkl. Status) ───────────────────────────────────────
-    sql = "SELECT concept, title, planned_value, company, status, bm_text FROM btl"
+    sql = "SELECT concept, ea, title, planned_value, company, status, bm_text FROM btl"
     rows = run_sql(sql, year)
 
     # ── Status-Mapping aus CSV laden ───────────────────────────────────
@@ -188,12 +237,14 @@ def main():
     area_values: dict[str, int] = {a: 0 for a in AREA_ORDER}
     area_values["_SONSTIGE"] = 0
     firm_values: dict[str, dict] = {}  # firm → {sum, count, beauftragt}
+    firm_bms: dict[str, list[dict]] = {}  # firm → [{concept, ea, title, value, status_label}, ...]
     # Für Soll-Berechnung: Firma→Area→Ist-Anteil
     firm_area_ist: dict[str, dict[str, int]] = {}
 
     for row in rows:
         pv = int(float(row.get("planned_value", "0")))
         company = row.get("company", "")
+        ea = row.get("ea", "")
         title = row.get("title", "")
         status = row.get("status", "")
         bm_text = row.get("bm_text", "")
@@ -212,6 +263,19 @@ def main():
             firm_values[company]["durchlauf"] += pv
         elif benennung == "Konzept":
             firm_values[company]["konzept"] += pv
+
+        # BM-Einzeldaten für Korrektur-Abschnitt sammeln
+        if benennung in ("Konzept", "im Durchlauf", "bestellt"):
+            if company not in firm_bms:
+                firm_bms[company] = []
+            firm_bms[company].append({
+                "concept": row.get("concept", ""),
+                "ea": ea,
+                "title": title,
+                "value": pv,
+                "status_label": benennung,
+                "status_raw": status,
+            })
 
         # Firma→Area Zuordnung für Soll-Verteilung
         if area != "_SONSTIGE":
@@ -234,6 +298,12 @@ def main():
         for area, val in areas.items():
             area_totals[area] = area_totals.get(area, 0) + val
 
+    # AUDI-Target dem Systemschaltpläne-Target zuschlagen (AUDI-Ist steckt in EDAG-BMs)
+    soll_targets: dict[str, int] = {a: v for a, v in TARGET_2026.items()}
+    if AUDI_FIXED and AUDI_KEY in soll_targets:
+        soll_targets[sysschalt_key] = soll_targets.get(sysschalt_key, 0) + AUDI_FIXED
+        soll_targets.pop(AUDI_KEY, None)
+
     firm_soll: dict[str, int] = {}
     firm_soll_q: dict[str, int] = {}
     for firm, areas in firm_area_ist.items():
@@ -241,7 +311,7 @@ def main():
         soll_q = 0
         for area, val in areas.items():
             total = area_totals.get(area, 1)
-            target = TARGET_2026.get(area, 0) * 1000
+            target = soll_targets.get(area, 0) * 1000
             area_soll = round(target * val / total) if total > 0 else 0
             soll += area_soll
             # Area-spezifische Q-Ratio (Start_Q berücksichtigen)
@@ -339,8 +409,21 @@ def main():
         diff_q = soll_q - (durchlauf + bestellt)
         c = data["count"]
         firm_short = firm.split()[0] if firm.strip() else firm
-        md.append(f"| {firm_short} | {c} | {fmt(soll)} | {fmt(ist)} | {delta_fmt(diff_planung)} | {fmt(soll_q)} | {fmt(bestellt)} | {fmt(durchlauf)} | {fmt(konzept)} | {delta_fmt(diff_q)} | |")
-        csv_rows.append([firm, c, soll, ist, diff_planung, soll_q, bestellt, durchlauf, konzept, diff_q, ""])
+
+        # Maßnahmen automatisch befüllen
+        massnahmen_parts: list[str] = []
+        if diff_q < 0:
+            massnahmen_parts.append(f"Quartal überplant: {fmt(abs(diff_q))} zurückholen")
+        elif diff_q > 0:
+            massnahmen_parts.append(f"Quartalswert zu gering: {fmt(diff_q)} beauftragen")
+        if diff_planung > 0:
+            massnahmen_parts.append(f"Jahr überplant: {fmt(diff_planung)} streichen")
+        elif diff_planung < 0:
+            massnahmen_parts.append(f"Jahreswert zu gering: {fmt(abs(diff_planung))} einplanen")
+        massnahmen = "; ".join(massnahmen_parts)
+
+        md.append(f"| {firm_short} | {c} | {fmt(soll)} | {fmt(ist)} | {delta_fmt(diff_planung)} | {fmt(soll_q)} | {fmt(bestellt)} | {fmt(durchlauf)} | {fmt(konzept)} | {delta_fmt(diff_q)} | {massnahmen} |")
+        csv_rows.append([firm, c, soll, ist, diff_planung, soll_q, bestellt, durchlauf, konzept, diff_q, massnahmen])
         firm_total += ist
         firm_total_soll += soll
         firm_total_bestellt += bestellt
@@ -353,6 +436,123 @@ def main():
     firm_total_diff_planung = firm_total - firm_total_soll
     md.append(f"| **Gesamt** | **{firm_count_total}** | **{fmt(firm_total_soll)}** | **{fmt(firm_total)}** | **{delta_fmt(firm_total_diff_planung)}** | **{fmt(firm_total_soll_q)}** | **{fmt(firm_total_bestellt)}** | **{fmt(firm_total_durchlauf)}** | **{fmt(firm_total_konzept)}** | **{delta_fmt(firm_total_diff_q)}** | |")
     csv_rows.append(["Gesamt", firm_count_total, firm_total_soll, firm_total, firm_total_diff_planung, firm_total_soll_q, firm_total_bestellt, firm_total_durchlauf, firm_total_konzept, firm_total_diff_q, ""])
+
+    # ── Tabelle 3: Korrektur Überplanung ──────────────────────────────
+    # Berechne Deltas pro Firma (in T€) für Quartals- und Jahres-Überplanung
+    korrektur_firmen: list[dict] = []
+    for firm, data in sorted(firm_values.items(), key=lambda x: -x[1]["sum"]):
+        ist = round(data["sum"] / 1000)
+        soll = round(firm_soll.get(firm, 0) / 1000)
+        bestellt_te = round(data["bestellt"] / 1000)
+        durchlauf_te = round(data["durchlauf"] / 1000)
+        soll_q_te = round(firm_soll_q.get(firm, 0) / 1000)
+        diff_jahr = ist - soll
+        diff_q = soll_q_te - (durchlauf_te + bestellt_te)
+        if diff_jahr > 0 or diff_q < 0:
+            korrektur_firmen.append({
+                "firm": firm,
+                "diff_jahr": diff_jahr,
+                "diff_q": diff_q,
+            })
+
+    csv_korrektur_rows: list[list] = []
+
+    if korrektur_firmen:
+        md.append("")
+        md.append("---")
+        md.append("")
+        md.append("## Korrektur Überplanung")
+        md.append("")
+        md.append("Überplante Lieferanten mit einzelnen Vorgängen zum Rückzug oder zur Reduzierung.")
+        md.append("**Aktion-Spalte** manuell befüllen (z.B. _zurückziehen_, _reduzieren auf X T€_, _verschieben Q3_).")
+        md.append("")
+
+        # Sortieren: höchste Überplanung zuerst
+        korrektur_firmen.sort(key=lambda x: -(x["diff_jahr"] + abs(min(x["diff_q"], 0))))
+
+        for kf in korrektur_firmen:
+            firm = kf["firm"]
+            firm_short = firm.split()[0] if firm.strip() else firm
+            bms = firm_bms.get(firm, [])
+            diff_jahr = kf["diff_jahr"]
+            diff_q = kf["diff_q"]
+
+            # ── a) Quartals-Korrektur ──────────────────────────────────
+            if diff_q < 0:
+                reduce_q = abs(diff_q)
+                section_title = f"{firm_short} — Quartals-Korrektur ({q_label}): {fmt(reduce_q)} zu reduzieren"
+                md.append(f"### {section_title}")
+                md.append("")
+                md.append("| Konzept | EA | BM-Titel | Wert | Status | Aktion |")
+                md.append("|---|---|---|---:|---|---|")
+                csv_korrektur_rows.append([section_title, "", "", "", "", "", ""])
+
+                # Prio 1: im Durchlauf
+                prio1 = sorted([b for b in bms if b["status_label"] == "im Durchlauf"], key=lambda x: -x["value"])
+                sum_p1 = 0
+                for b in prio1:
+                    v = round(b["value"] / 1000)
+                    md.append(f"| {b['concept']} | {b['ea']} | {b['title']} | {fmt(v)} | {b['status_raw']} | |")
+                    csv_korrektur_rows.append([b["concept"], b["ea"], b["title"], v, b["status_raw"], "", ""])
+                    sum_p1 += v
+                if prio1:
+                    md.append(f"| | | **Summe im Durchlauf** | **{fmt(sum_p1)}** | | |")
+                    csv_korrektur_rows.append(["", "", "Summe im Durchlauf", sum_p1, "", "", ""])
+
+                # Prio 2: bestellt (nur wenn Summe im Durchlauf nicht reicht)
+                if sum_p1 < reduce_q:
+                    prio2 = sorted([b for b in bms if b["status_label"] == "bestellt"], key=lambda x: -x["value"])
+                    sum_p2 = 0
+                    for b in prio2:
+                        v = round(b["value"] / 1000)
+                        md.append(f"| {b['concept']} | {b['ea']} | {b['title']} | {fmt(v)} | {b['status_raw']} | |")
+                        csv_korrektur_rows.append([b["concept"], b["ea"], b["title"], v, b["status_raw"], "", ""])
+                        sum_p2 += v
+                    if prio2:
+                        md.append(f"| | | **Summe bestellt** | **{fmt(sum_p2)}** | | |")
+                        csv_korrektur_rows.append(["", "", "Summe bestellt", sum_p2, "", "", ""])
+
+                if not prio1 and not [b for b in bms if b["status_label"] == "bestellt"]:
+                    md.append("| | | _Keine rückziehbaren Vorgänge vorhanden_ | | | |")
+                md.append("")
+
+            # ── b) Jahres-Korrektur ────────────────────────────────────
+            if diff_jahr > 0:
+                section_title = f"{firm_short} — Jahres-Korrektur: {fmt(diff_jahr)} zu reduzieren"
+                md.append(f"### {section_title}")
+                md.append("")
+                md.append("| Konzept | EA | BM-Titel | Wert | Status | Aktion |")
+                md.append("|---|---|---|---:|---|---|")
+                csv_korrektur_rows.append([section_title, "", "", "", "", "", ""])
+
+                # Prio 1: 01 Erstellung (Konzept) — nicht einreichen
+                prio1 = sorted([b for b in bms if b["status_label"] == "Konzept"], key=lambda x: -x["value"])
+                sum_p1 = 0
+                for b in prio1:
+                    v = round(b["value"] / 1000)
+                    md.append(f"| {b['concept']} | {b['ea']} | {b['title']} | {fmt(v)} | {b['status_raw']} | |")
+                    csv_korrektur_rows.append([b["concept"], b["ea"], b["title"], v, b["status_raw"], "", ""])
+                    sum_p1 += v
+                if prio1:
+                    md.append(f"| | | **Summe 01 Erstellung** | **{fmt(sum_p1)}** | | |")
+                    csv_korrektur_rows.append(["", "", "Summe 01 Erstellung", sum_p1, "", "", ""])
+
+                # Prio 2: im Durchlauf (nur wenn 01 Erstellung nicht reicht)
+                if sum_p1 < diff_jahr:
+                    prio2 = sorted([b for b in bms if b["status_label"] == "im Durchlauf"], key=lambda x: -x["value"])
+                    sum_p2 = 0
+                    for b in prio2:
+                        v = round(b["value"] / 1000)
+                        md.append(f"| {b['concept']} | {b['ea']} | {b['title']} | {fmt(v)} | {b['status_raw']} | |")
+                        csv_korrektur_rows.append([b["concept"], b["ea"], b["title"], v, b["status_raw"], "", ""])
+                        sum_p2 += v
+                    if prio2:
+                        md.append(f"| | | **Summe im Durchlauf** | **{fmt(sum_p2)}** | | |")
+                        csv_korrektur_rows.append(["", "", "Summe im Durchlauf", sum_p2, "", "", ""])
+
+                if not prio1 and not [b for b in bms if b["status_label"] == "im Durchlauf"]:
+                    md.append("| | | _Keine rückziehbaren Vorgänge vorhanden_ | | | |")
+                md.append("")
 
     # ── Prämissen (am Ende) ───────────────────────────────────────────
     md.append("")
@@ -368,19 +568,28 @@ def main():
     with open(out_file, "w", encoding="utf-8") as f:
         f.write("\n".join(md) + "\n")
 
-    # ── CSV schreiben (Firmen-Übersicht) ──────────────────────────────
+    # ── CSV schreiben (Firmen-Übersicht + Korrektur) ──────────────────
     csv_file = os.path.join(OUT_DIR, f"{ts}_budget_massnahmenplan_ekek1.csv")
     csv_header = ["Firma", "BMs", "Soll", "Ist", "DIFF Ges.", f"Soll {q_label}", "bestellt", "im Durchlauf", "01 Erstellung", f"DIFF {q_label}", "Maßnahmen"]
     with open(csv_file, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f, delimiter=";")
         writer.writerow(csv_header)
         writer.writerows(csv_rows)
+        if csv_korrektur_rows:
+            writer.writerow([])  # Leerzeile als Trenner
+            writer.writerow(["Konzept", "EA", "BM-Titel", "Wert T€", "Status", "", "Aktion"])
+            writer.writerows(csv_korrektur_rows)
+
+    pdf_file = write_pdf_beside_markdown(out_file)
 
     # Nur Pfad ausgeben (relative zum Repo)
     rel = os.path.relpath(out_file, REPO_ROOT)
     rel_csv = os.path.relpath(csv_file, REPO_ROOT)
     print(rel)
     print(rel_csv)
+    if pdf_file:
+        rel_pdf = os.path.relpath(pdf_file, REPO_ROOT)
+        print(rel_pdf)
 
 
 if __name__ == "__main__":
