@@ -1301,12 +1301,21 @@ def _submit_prompt(client: McpStdioClient, prompt: str) -> None:
     await page.keyboard.press('Backspace');
   } catch (e) {}
 
-  let fillMethod = 'fill';
+  const promptLines = prompt.split(/\r?\n/);
+  let fillMethod = 'typed-lines';
   try {
-    await textbox.fill(prompt);
+    for (let i = 0; i < promptLines.length; i += 1) {
+      const line = promptLines[i];
+      if (line) {
+        await page.keyboard.insertText(line);
+      }
+      if (i < promptLines.length - 1) {
+        await page.keyboard.press('Shift+Enter');
+      }
+    }
   } catch (e) {
-    fillMethod = 'insertText';
-    await page.keyboard.insertText(prompt);
+    fillMethod = 'fill-fallback';
+    await textbox.fill(prompt);
   }
 
   const sendCandidates = [

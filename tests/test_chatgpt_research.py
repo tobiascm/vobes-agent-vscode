@@ -131,6 +131,23 @@ def test_extract_playwright_result_text_unwraps_markdown_report():
     assert mod._extract_playwright_result_text(raw) == '{"ok": true, "value": 3}'
 
 
+def test_submit_prompt_uses_shift_enter_for_multiline_prompt(monkeypatch):
+    captured = {}
+
+    def fake_tool_text(client, tool_name, arguments, allow_reset=True):
+        captured["tool_name"] = tool_name
+        captured["code"] = arguments["code"]
+        return json.dumps({"submitted": True, "submittedVia": "button", "fillMethod": "typed-lines"})
+
+    monkeypatch.setattr(mod, "_tool_text_with_retry", fake_tool_text)
+
+    mod._submit_prompt(object(), "erste zeile\nzweite zeile")  # type: ignore[arg-type]
+
+    assert captured["tool_name"] == "browser_run_code"
+    assert "prompt.split(/\\r?\\n/)" in captured["code"]
+    assert "page.keyboard.press('Shift+Enter')" in captured["code"]
+
+
 def test_load_gate_state_recovers_from_invalid_json(tmp_path: Path):
     state_path = tmp_path / "gate.json"
     state_path.write_text("{invalid", encoding="utf-8")

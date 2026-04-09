@@ -25,7 +25,11 @@
 - Die **Targetsumme** muss komplett in BPLUS als Summe aller Vorgänge eingetragen sein (Spalte „Ist").
 - Jedoch darf pro Quartal nur die jeweilige **Quartalssumme** im Status „im Durchlauf" + „bestellt" stehen.
 - Die Finanz trackt das Target auf Quartalsebene — d.h. DIFF Q1-x zeigt, ob das Quartalsbudget eingehalten wird.
-
+### Korrektur Überplanung
+- Nur Firmen mit **DIFF Ges. > 0** (Jahresüberplanung) oder **DIFF Q < 0** (Quartalsüberplanung) erhalten einen Korrekturabschnitt.
+- **Quartals-Korrektur** (DIFF Q < 0): Prio 1 = BMs „im Durchlauf“, Prio 2 = BMs „bestellt“ (nur wenn Summe Prio 1 nicht ausreicht).
+- **Jahres-Korrektur** (DIFF Ges. > 0): Prio 1 = BMs „01 Erstellung“ (nicht einreichen), Prio 2 = BMs „im Durchlauf“ (nur wenn Summe Prio 1 nicht ausreicht).
+- **Aktion-Spalte** bleibt leer — User entscheidet manuell (z.B. zurückziehen, reduzieren, verschieben).
 ---
 
 ### Hardcoded im Script (report_massnahmenplan.py)
