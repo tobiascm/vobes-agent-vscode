@@ -23,6 +23,17 @@ Der RAG-MCP-Server local-rag stellt zwei Tool-Arten zur Verfügung:
 1) Retrieval-Tool für Suche/Kontextaufbau
 2) Readback-Tools zum gezielten Nachladen von Dokument- oder Attachment-Inhalten aus der Datenbank
 
+CLI-Fallback fuer Debugging und manuelle Verifikation:
+- Fuer normale Skill-Nutzung verwende weiterhin direkt die MCP-Tools.
+- Wenn du Tool-Namen oder Tool-Argumente ausserhalb eines MCP-Clients pruefen musst, nutze den Workspace-Wrapper `python scripts/query_local_rag.py ...`.
+- Der Wrapper startet `query_rag_mcp` in einem Unterprozess mit `cwd=C:\Daten\Python\lightrag_test` und fuehrt danach keinen persistenten Verzeichniswechsel im aktuellen Agenten-Kontext aus.
+- Vorhandener Modus `chat` des Zielmoduls bleibt bestehen.
+- Neue generische Modi:
+  - `python scripts/query_local_rag.py list-tools`
+  - `python scripts/query_local_rag.py call rag_retrieve --args-json "{\"question\":\"Was ist MCP?\",\"knowledgebase\":\"default\"}"`
+- Nutze `call <tool> --args-json ...` auch fuer Readback-Tools, z. B. `get_document_content`, `list_attachments`, `get_attachment_content`.
+- `--args-json` muss valides JSON enthalten und zur Tool-Signatur passen. Vorher bei Bedarf immer erst `list-tools` ausfuehren.
+
 Ziel:
 - Nutze die Tools so, dass du zuerst relevanten Kontext findest und anschließend bei Bedarf Originalinhalte gezielt nachlädst.
 - Antworte in der Sprache des Nutzers.
