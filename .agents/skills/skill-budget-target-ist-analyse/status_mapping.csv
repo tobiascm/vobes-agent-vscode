@@ -1,0 +1,26 @@
+Status;Fortschrittszahl;Benennung
+01_In Erstellung;1;Konzept
+02_Freigabe Kostenstelle;2;im Durchlauf
+06_In Bearbeitung BM-Team;3;im Durchlauf
+07_In Planen-BM: Erstellt;4;im Durchlauf
+07_In Planen-BM: Aussteller Entwurf;4;im Durchlauf
+07_In Planen-BM: Aussteller in Arbeit;4;im Durchlauf
+07_In Planen-BM: Aussteller Vorlage;4;im Durchlauf
+07_In Planen-BM: Aussteller Steuerung in Arbeit;4;im Durchlauf
+07_In Planen-BM: Aussteller Steuerung Vorlage;4;im Durchlauf
+07_In Planen-BM: Anfordernde Kostenst Vorlage;4;im Durchlauf
+07_In Planen-BM: Steuerrung PKO Vorlage;4;im Durchlauf
+07_In Planen-BM: Budget-Controlling Vorlage;4;im Durchlauf
+07_In Planen-BM: Dienstleister Vorlage;4;im Durchlauf
+07_In Planen-BM: Fachl. Genehmigung Vorlage;5;im Durchlauf
+07_In Planen-BM: Fachl. Genehmigung Vorlage zum Sichtvermerk;5;im Durchlauf
+07_In Planen-BM: Projektcontrolling in Arbeit;6;im Durchlauf
+07_In Planen-BM: Projektcontrolling Vorlage;6;im Durchlauf
+07_In Planen-BM: Projektleitung in Arbeit;7;im Durchlauf
+07_In Planen-BM: Projektleitung Vorlage;7;im Durchlauf
+07_In Planen-BM: in den Einkauf übertragen;10;im Durchlauf
+07_In Planen-BM: Bestellt;10;bestellt
+07_In Planen-BM: abgelehnt Aussteller;-1;abgelehnt
+07_In Planen-BM: abgelehnt Projektcontrolling;-1;abgelehnt
+97_Abgelehnt;-1;abgelehnt
+98_Storniert;0;storniert

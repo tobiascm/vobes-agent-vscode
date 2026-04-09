@@ -28,6 +28,9 @@ Bevor ein Skill geladen wird, der einen MCP-Server benoetigt, MUSS geprueft werd
 
 # Fehlerfälle
 
+## Token-Probleme (TOKEN_EXPIRED, 401, AADSTS-Fehler)
+Bei Token-Problemen mit M365-Skills (Mail Search, File Search, Graph Scope Probe) die Debugging-Referenz lesen: `docs/teams-token-debugging.md`. Enthaelt die 6-Stufen-Fallback-Kette, bekannte Pitfalls (LevelDB Multi-Needle, SPA Origin-Header) und Code-Beispiele zum manuellen Debugging.
+
 ## Plan-Modus aktiv
  Falls ein MCP-Tools nicht verfuegbar prüfe über aufruf  `tool_search_tool_regex` mit dem passenden Pattern. Liefert die Suche KEINE Ergebnisse, sind die MCP-Tools nicht verfuegbar (z.B. weil der Plan-Modus aktiv ist). Wenn Ergebnis = leer → **SOFORT** folgende Meldung ausgeben und die Aufgabe abbrechen:
 
@@ -59,6 +62,8 @@ Bevor ein Skill geladen wird, der einen MCP-Server benoetigt, MUSS geprueft werd
 → PFLICHT: Skill `$skill-budget-eigenleistung-el` laden und befolgen.
 - Plausibilisierung | Begruendung | BM-Text | Aufwandsplausibilisierung | Nachfrage Controller | warum wird X benoetigt | Aufwaende begruenden  
 → PFLICHT: Skill `$skill-budget-plausibilisierung` laden und befolgen.
+- Massnahmenplan | Budget-Massnahmenplan | Budget-Arbeitstabelle | Aufgabenbereiche mit Massnahmen | Budget-Vergleich Vorjahr Target Ist  
+→ PFLICHT: Skill `$skill-budget-target-ist-analyse` laden und befolgen. Erzeugt Markdown mit Aufgabenbereich- und Firmen-Tabelle, Massnahmen-Spalte bleibt leer fuer Agent.
 - Webseite oeffnen | Intranet-Seite durchsuchen | Screenshot von Seite | Daten von Webseite extrahieren | Formular auf Webseite ausfuellen (per Playwright MCP, nicht dev-browser)  
 → PFLICHT: Skill `$skill-browse-intranet` laden und befolgen.
 - Deep Research | Recherchiere systematisch | Untersuche systematisch | Multi-Source-Recherche | evidence-backed research across portals  
