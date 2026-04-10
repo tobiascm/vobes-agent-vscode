@@ -6,6 +6,7 @@
 - FES, FEV → Projektbüro / Prüfbüro
 - SEBN → Pilot und Anwendertest VOBES2025
 - Voitas → RuleChecker (ab Q3/2026 durch 4soft, daher Start_Q=3 in target.csv)
+- Für die **Firmen-Sicht** werden verbleibende VOITAS-Vorgänge im Bereich `RuleChecker (4soft, ex Voitas)` ab 2026 fachlich **4soft** zugerechnet.
 
 ### Split-Firmen
 - **4soft:** BM-Titel enthält `TE-PMT`/`Bordnetz`/`Konzeptentw`/`Integration` → SW-Entwicklung VOBES2025; Rest → Vorentwicklung
@@ -16,6 +17,7 @@
 - BordnetzGPT: entfällt ab 2026 (war MSG)
 - SYS-Flow: entfällt ab 2026 (war PEC)
 - Voitas: Ende 2025 raus → RuleChecker geht ab Q3/2026 an 4soft (Soll Q1-2 = 0)
+- Restpositionen von VOITAS in BPLUS bleiben als Rohdaten bestehen, werden für Soll/Ist/Maßnahmen in der Firmenübersicht aber **4soft** zugeschlagen.
 
 ### Referenzwerte
 - 2025-Werte: aus Vorjahresplanung (fest, siehe target.csv)
@@ -28,7 +30,8 @@
 ### Korrektur Überplanung
 - Nur Firmen mit **DIFF Ges. > 0** (Jahresüberplanung) oder **DIFF Q < 0** (Quartalsüberplanung) erhalten einen Korrekturabschnitt.
 - **Quartals-Korrektur** (DIFF Q < 0): Prio 1 = BMs „im Durchlauf“, Prio 2 = BMs „bestellt“ (nur wenn Summe Prio 1 nicht ausreicht).
-- **Jahres-Korrektur** (DIFF Ges. > 0): Prio 1 = BMs „01 Erstellung“ (nicht einreichen), Prio 2 = BMs „im Durchlauf“ (nur wenn Summe Prio 1 nicht ausreicht).
+- **Korrektur-Start pro überplanter Firma**: Zuerst alle BMs „storniert“ mit Aktion „löschen“ auflisten.
+- **Jahres-Korrektur** (DIFF Ges. > 0): Danach Prio 1 = BMs „01 Erstellung“ (nicht einreichen), Prio 2 = BMs „im Durchlauf“ (nur wenn Summe Prio 1 nicht ausreicht).
 - **Aktion-Spalte** bleibt leer — User entscheidet manuell (z.B. zurückziehen, reduzieren, verschieben).
 ---
 

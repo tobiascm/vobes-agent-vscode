@@ -20,7 +20,7 @@ Die Spalte **Maßnahmen** bleibt initial leer und wird durch den Agent nach User
 
 | Datei | Zweck |
 |---|---|
-| `report_massnahmenplan.py` | Erzeugt den Markdown-Report, CSV-Export und optional den PDF-Export |
+| `report_massnahmenplan.py` | Erzeugt den Markdown-, CSV- und XLSX-Report sowie optional den PDF-Export |
 | `target.csv` | 2025-Referenzwerte + 2026-Targets (editierbar, Semikolon-getrennt) |
 | `praemissen.md` | Zuordnungsregeln, Split-Logik, feste Werte (wird in Report eingebettet) |
 
@@ -35,8 +35,9 @@ Die Spalte **Maßnahmen** bleibt initial leer und wird durch den Agent nach User
    - Lädt Prämissen-Text aus `praemissen.md`
    - Synchronisiert BTL-Daten (aktuelles Jahr) aus BPLUS-NG
    - Ordnet BMs den Aufgabenbereichen zu (Firma→Bereich-Mapping inkl. Split-Logik)
-   - Schreibt Markdown, CSV und bei installierter Dependency `markdown-pdf` eine PDF-Datei nach `userdata/budget/`
-   - Gibt die erzeugten Dateipfade auf stdout aus (Markdown, CSV, optional PDF)
+   - Schreibt Markdown, CSV, XLSX und bei installierter Dependency `markdown-pdf` eine PDF-Datei nach `userdata/budget/`
+   - Übernimmt in der XLSX manuelle Notizen/Aktionen aus der letzten älteren Maßnahmenplan-Datei (oder optional via `--inherit-notes-from <xlsx>`) per stabilem Schlüssel
+   - Gibt die erzeugten Dateipfade auf stdout aus (Markdown, CSV, XLSX, optional PDF)
 3. **Agent liest die erzeugte Datei** und präsentiert sie dem User.
 4. **User gibt Maßnahmen vor** → Agent füllt die Maßnahmen-Spalte per Datei-Edit.
 
@@ -46,15 +47,20 @@ Die Spalte **Maßnahmen** bleibt initial leer und wird durch den Agent nach User
 2. **Prämissen** — aus `praemissen.md` + Sync-Zeitpunkt
 3. **Tabelle: Aufgabenbereiche** — 2025, Target, Ist, Delta, Maßnahmen (leer)
 4. **Tabelle: Firmen-Übersicht** — Firma, Anzahl BMs, Ist, Maßnahmen (leer)
-5. **Korrektur Überplanung** — Pro überplanter Firma: Einzelvorgänge (Konzept, EA, BM-Titel, Wert, Status, Aktion) als Rückzugs-/Streichkandidaten. Quartals-Korrektur (im Durchlauf → bestellt) und Jahres-Korrektur (01 Erstellung → im Durchlauf) mit Priorisierung.
+5. **Korrektur Überplanung** — Pro überplanter Firma werden zuerst stornierte Vorgänge mit Aktion `löschen` aufgeführt. Danach folgen Quartals-Korrektur (im Durchlauf → bestellt) und Jahres-Korrektur (01 Erstellung → im Durchlauf) mit Priorisierung.
 6. **Gesamtübersicht** — Ist vs. Target, Delta
 
 ## Wichtig
 
 - **Maßnahmen in der Firmen-Übersicht** werden automatisch befüllt (Quartal/Jahr überplant bzw. zu gering).
 - **Aktion-Spalte in Korrektur Überplanung NIE automatisch befüllen** — immer dem User überlassen.
-- PDF-Export ist Best-effort im A4-Querformat. Fehler oder fehlendes `markdown-pdf` werden auf stderr gewarnt und dürfen Markdown/CSV nicht abbrechen.
+- PDF-Export ist Best-effort im A4-Querformat. Fehler oder fehlendes `markdown-pdf` werden auf stderr gewarnt und dürfen Markdown/CSV/XLSX nicht abbrechen.
 - **IMMER** `report_massnahmenplan.py` ausführen, NIE eine vorhandene Datei wiederverwenden.
+- In der XLSX werden manuelle Notizen/Aktionen aus der Vor-Datei fortgeschrieben:
+  - Bereiche über Aufgabenbereich
+  - Firmen über Firmenname
+  - Korrekturen über Firma + Blocktyp + Vorgangsnummer (`Konzept`)
 - Targets ändern → `target.csv` editieren, kein Scriptumbau nötig.
+- Feste Firmen-Targets können optional direkt in `target.csv` ergänzt werden, z.B. zusätzliche Spalten wie `Bertrandt_Target_2026`.
 - Prämissen ändern → `praemissen.md` editieren.
 - Das Script verwendet `budget_db.py` für DB-Sync und SQL-Queries.
