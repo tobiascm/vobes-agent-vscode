@@ -43,8 +43,8 @@ from urllib.parse import urlsplit
 
 # Windows UTF-8
 if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
     os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 def _discover_project_root(start_dir: Path) -> Path:
@@ -961,7 +961,8 @@ class McpStdioClient:
             stderr_tail = "\n".join(self._stderr_lines[-5:])
             raise McpError(f"MCP-Verbindung beendet.\n{stderr_tail}".strip())
         try:
-            return json.loads(body.decode("utf-8").strip())
+            text = body.decode("utf-8") if isinstance(body, (bytes, bytearray)) else str(body)
+            return json.loads(text.strip())
         except json.JSONDecodeError as exc:
             raise McpError(f"Ungueltige MCP-JSON-Antwort: {body[:200]!r}") from exc
 
