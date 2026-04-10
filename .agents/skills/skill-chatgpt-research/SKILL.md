@@ -91,22 +91,14 @@ Globaler Schutz:
 > 3. `ChatGPT recherchiert noch (0:30 / max 30 Min.), bitte warten...` (alle 30s)
 > 4. `OK: Antwort gespeichert → tmp/...` (am Ende)
 
-### 1. Schnellcheck
+Der normale Ablauf ist **direkt `run`**. Ein separater `doctor`-Aufruf ist davor **nicht** vorgesehen, weil `run` den relevanten Preflight bereits selbst ausfuehrt:
+- Bridge/MCP starten
+- erforderliche Tools pruefen
+- `chatgpt.com` oeffnen
+- Login / Textbox pruefen
+- Readiness der Eingabe abwarten
 
-```bash
-python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py doctor
-```
-
-Erwartung:
-- Bridge/MCP startet
-- erforderliche Tools sind da
-- ChatGPT-Seite ist erreichbar
-- Textbox ist sichtbar
-
-Wenn `doctor` mit Exit-Code `3` endet:
-- User ist nicht eingeloggt oder die Chat-Seite zeigt keine Eingabebox
-
-### 2. Recherche ausfuehren
+### 1. Recherche ausfuehren
 
 ```bash
 python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run \
@@ -143,7 +135,7 @@ Der durch `run` verwendete ChatGPT-Tab wird nach dem Lauf automatisch geschlosse
 python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py close
 ```
 
-### 3. Outputs
+### 2. Outputs
 
 Standardmaessig:
 - Markdown: `tmp/YYYYMMDD_chatgpt_<slug>.md`
@@ -154,7 +146,8 @@ Standardmaessig:
 
 ## Fallback / Debug
 
-Wenn der Ein-Kommandopfad klemmt, zuerst:
+`doctor` ist nur fuer Diagnose gedacht, **nicht** fuer den normalen Ablauf vor `run`.
+Nur verwenden, wenn der direkte `run`-Pfad fehlschlaegt und separat geklaert werden soll, ob Bridge, Tools oder Login funktionieren:
 
 ```bash
 python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py doctor
