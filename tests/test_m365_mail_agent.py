@@ -321,6 +321,24 @@ def test_analyze_case_finalizes_with_agent_payload(fake_case_environment):
     assert "ich bereite die Rueckmeldung an Skoda vor" in reply
 
 
+def test_analysis_omits_open_points_section_when_none_exist(fake_case_environment):
+    analysis_payload = {
+        "tlmdr": "Keine offenen Punkte im Fall",
+        "analysis_md": "Finale Bewertung: Der Fall ist fachlich ausreichend geklaert.",
+        "core_topic": "Budget Abstimmung MQB Classic",
+        "key_points": ["Sachverhalt ist geklaert"],
+        "deadlines": [],
+        "relevant_aspects": ["Keine weitere Eskalation erforderlich"],
+        "open_points": [],
+        "decision": {"criteria": [], "options": [], "recommendation": {"option_title": "-", "rationale": "-"}} ,
+        "actions": [],
+    }
+    case_dir = mod.analyze_case("msg-seed", debug=True, analysis_payload=analysis_payload)
+    analysis = (case_dir / "00_analyse.md").read_text(encoding="utf-8")
+    assert "# Offene Punkte" not in analysis
+    assert "Keine offenen Punkte benannt" not in analysis
+
+
 def test_query_resolution_warns_on_ambiguous_seed(fake_case_environment):
     case_dir = mod.analyze_case(query="Seed query", selection_index=1, debug=True)
     data = (case_dir / "case.json").read_text(encoding="utf-8")
@@ -418,6 +436,37 @@ def test_analyze_case_resume_records_followup_turn_and_active_pointer(fake_case_
     active_case = json.loads((mod.CASE_BASE_DIR / "_session" / "active_case.json").read_text(encoding="utf-8"))
     assert active_case["case_id"] == case_dir.name
     assert active_case["session_status"] == "completed"
+
+
+def test_followup_analysis_preserves_markdown_strikethrough_in_open_points(fake_case_environment):
+    initial_payload = {
+        "tlmdr": "Erste Analyse",
+        "analysis_md": "Initiale Bewertung mit offenem Freigabepunkt.",
+        "core_topic": "Budget Abstimmung MQB Classic",
+        "key_points": ["Freigabe ist noch offen"],
+        "deadlines": [],
+        "relevant_aspects": [],
+        "open_points": ["Freigabe durch Fachbereich fehlt"],
+        "decision": {"criteria": [], "options": [], "recommendation": {"option_title": "-", "rationale": "-"}} ,
+        "actions": [],
+    }
+    case_dir = mod.analyze_case("msg-seed", debug=True, analysis_payload=initial_payload)
+    followup_payload = {
+        "tlmdr": "Folgefrage eingeordnet",
+        "analysis_md": "Folgeanalyse: Ein Punkt ist geklaert, ein anderer bleibt offen.",
+        "core_topic": "Budget Abstimmung MQB Classic",
+        "key_points": ["Ein offener Punkt wurde geklaert"],
+        "deadlines": [],
+        "relevant_aspects": [],
+        "open_points": ["~~Freigabe durch Fachbereich fehlt~~", "Analyse: Belastbare Aussage zur Skoda-Rueckmeldung fehlt noch"],
+        "decision": {"criteria": [], "options": [], "recommendation": {"option_title": "-", "rationale": "-"}} ,
+        "actions": [],
+    }
+    mod.analyze_case(case_id=case_dir.name, debug=True, analysis_payload=followup_payload)
+    analysis = (case_dir / "00_analyse.md").read_text(encoding="utf-8")
+    assert "# Offene Punkte" in analysis
+    assert "~~Freigabe durch Fachbereich fehlt~~" in analysis
+    assert "Analyse: Belastbare Aussage zur Skoda-Rueckmeldung fehlt noch" in analysis
 
 
 def test_analyze_case_resume_via_case_dir_sets_resume_source(fake_case_environment):

@@ -193,6 +193,15 @@ def _normalize_subject(subject: str) -> str:
     return cleaned.strip()
 
 
+def _normalize_text_list(items: list[Any] | None) -> list[str]:
+    normalized: list[str] = []
+    for item in items or []:
+        text = str(item).strip()
+        if text:
+            normalized.append(text)
+    return normalized
+
+
 def _dedupe_keep_order(items: list[str]) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []
@@ -977,7 +986,7 @@ def _render_analysis_markdown(
     summary = analysis_payload.get("summary") or {}
     decision = analysis_payload.get("decision") or _default_decision()
     core_topic = analysis_payload.get("core_topic") or summary.get("core_topic") or "-"
-    open_points = analysis_payload.get("open_points") or summary.get("open_points") or []
+    open_points = _normalize_text_list(analysis_payload.get("open_points") or summary.get("open_points") or [])
     lines = [
         f"TL;DR: {analysis_payload.get('tlmdr') or 'Vom Agenten nachzureichen.'}",
         "",
@@ -1016,15 +1025,11 @@ def _render_analysis_markdown(
             "",
             f"Vollstaendiger Rechercheverlauf: `logs/agent_trace.md` / `logs/agent_trace.json`.",
             "Untersuchte Mail-/Kalender-Kontexte: `logs/thread_context.md`, `logs/related_mails.md`, `logs/calendar_context.md`.",
-            "",
-            "# Offene Punkte",
-            "",
         ]
     )
     if open_points:
+        lines.extend(["", "# Offene Punkte", ""])
         lines.extend(f"- {item}" for item in open_points)
-    else:
-        lines.append("- Keine offenen Punkte benannt.")
     lines.extend(["", "# Quellen"])
     for source in sources:
         lines.append(f"- [{source['type']}] {source['label']} ({source['location_hint']}): {source['excerpt']}")

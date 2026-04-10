@@ -164,6 +164,17 @@ python .agents/skills/skill-m365-mail-agent/scripts/analyze_case.py --case-id "<
 
 `tlmdr` darf der Agent erst ganz zum Schluss formulieren; das Skript rendert ihn trotzdem ganz oben in `00_analyse.md`.
 
+`open_points` bleibt bewusst eine freie `list[str]`. Liste dort alle offenen Punkte auf, die der Agent in seiner Analyse identifiziert hat, z. B.:
+- was fuer die Analyse noch unklar oder nicht belastbar ist
+- wo die Recherche nicht weiterkam oder Evidenz fehlt
+- wo Rueckmeldung/Entscheidung vom User gebraucht wird
+- was bei Mail, Termin, TODO oder weiteren Schritten noch nicht eindeutig ist
+- u.s.w.
+
+Wenn nichts offen ist, soll `open_points` leer bleiben. Dann wird in `00_analyse.md` keine Sektion `Offene Punkte` erzeugt.
+
+Bei Folgefragen darf der Agent bereits geklaerte Punkte sichtbar als Markdown-Strikethrough stehen lassen, z. B. `~~Freigabe durch Fachbereich fehlt~~`, aber nur dann, wenn daneben noch echte offene Punkte fuer den aktuellen Fall uebrig sind.
+
 ## Case-Vertrag
 
 Die Ablage liegt immer unter:
@@ -223,6 +234,9 @@ Muss enthalten:
 - Entscheidungsmatrix
 - klare Empfehlung
 
+Optional:
+- `Offene Punkte`, aber nur wenn wirklich noch etwas offen ist
+
 Soll nicht enthalten:
 - lange Liste aller Suchqueries
 - Runde-fuer-Runde Rechercheprotokoll
@@ -271,6 +285,8 @@ Soll mindestens enthalten:
    - `Aufwand Anwender`
    - `Aufwand Softwareänderungen`
    Diese beiden Kriterien nur verwenden, wenn der Fall tatsaechlich Prozessworkaround, Absicherung, Toolanpassung oder Softwareaenderung gegeneinander abwaegt.
+10. `open_points` nur fuer echten Klaerungsbedarf verwenden, nicht fuer Wiederholungen aus Analyse, Warnungen oder bereits eindeutigen Actions
+11. Bei Folgefragen duerfen bereits geklaerte offene Punkte als `~~durchgestrichen~~` sichtbar bleiben, sofern weiterhin mindestens ein echter offener Punkt verbleibt
 
 ## Explizit verboten
 
