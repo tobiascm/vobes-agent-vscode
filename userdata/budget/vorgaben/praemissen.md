@@ -5,7 +5,7 @@
 - GroupServices (ex T-Systems) → CATIA-Bibliothek
 - FES, FEV → Projektbüro / Prüfbüro
 - SEBN → Pilot und Anwendertest VOBES2025
-- Voitas → RuleChecker (ab Q3/2026 durch 4soft, daher Start_Q=3 in target.csv)
+- Voitas → RuleChecker (ab Q3/2026 durch 4soft, daher Start_Q=3 in `userdata/budget/vorgaben/target.csv`)
 - Für die **Firmen-Sicht** werden verbleibende VOITAS-Vorgänge im Bereich `RuleChecker (4soft, ex Voitas)` ab 2026 fachlich **4soft** zugerechnet.
 
 ### Split-Firmen
@@ -20,8 +20,8 @@
 - Restpositionen von VOITAS in BPLUS bleiben als Rohdaten bestehen, werden für Soll/Ist/Maßnahmen in der Firmenübersicht aber **4soft** zugeschlagen.
 
 ### Referenzwerte
-- 2025-Werte: aus Vorjahresplanung (fest, siehe target.csv)
-- 2026-Target: aus Budgetplanung (fest, siehe target.csv)
+- 2025-Werte: aus Vorjahresplanung (fest, siehe `userdata/budget/vorgaben/target.csv`)
+- 2026-Target: aus Budgetplanung (fest, siehe `userdata/budget/vorgaben/target.csv`)
 
 ### Budget-Tracking durch Finanz
 - Die **Targetsumme** muss komplett in BPLUS als Summe aller Vorgänge eingetragen sein (Spalte „Ist").
@@ -39,12 +39,12 @@
 - Firma→Aufgabenbereich Mapping (classify_bm-Funktion): welche Firma zu welchem Bereich gehört
 - Split-Keywords für 4soft: `TE-PMT`, `BORDNETZ`, `KONZEPTENTW`, `INTEGRATION`
 - Split-Logik für Thiesen: Gewerk-Nummern aus BM-Text (`#2` only → Spez.; multi-Gewerk → Bordnetz Support)
-- AUDI-Korrektur: fester Abzug vom Systemschaltplan-Bereich, Wert aus target.csv
+- AUDI-Korrektur: fester Abzug vom Systemschaltplan-Bereich, Wert aus `userdata/budget/vorgaben/target.csv`
 - AUDI_KEY: "AUDI - Bibliotheksarbeiten (Audi)" als Sonder-Kategorie
 
 ### Vom Agent zu beachten
 - Maßnahmen-Spalte NIE automatisch befüllen — User entscheidet
 - Bei neuen Firmen oder geänderten Zuordnungen: `classify_bm()` im Script anpassen
-- Bei neuen Aufgabenbereichen: Zeile in `target.csv` ergänzen
+- Bei neuen Aufgabenbereichen: Zeile in `userdata/budget/vorgaben/target.csv` ergänzen
 - Bei geänderten Split-Keywords (z.B. neue BM-Titel bei 4soft/Thiesen): Script anpassen
 - 2026-Ist: BPLUS-NG live-Sync

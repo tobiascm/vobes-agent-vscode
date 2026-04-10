@@ -18,6 +18,7 @@ from copy import copy
 from dataclasses import dataclass, field
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -25,9 +26,11 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 BUDGET_DB = os.path.join(REPO_ROOT, "scripts", "budget", "budget_db.py")
 OUT_DIR = os.path.join(REPO_ROOT, "userdata", "budget")
-TARGET_CSV = os.path.join(SCRIPT_DIR, "target.csv")
+VORGABEN_DIR = os.path.join(OUT_DIR, "vorgaben")
+TARGET_CSV = os.path.join(VORGABEN_DIR, "target.csv")
 STATUS_CSV = os.path.join(SCRIPT_DIR, "status_mapping.csv")
-PRAEMISSEN_MD = os.path.join(SCRIPT_DIR, "praemissen.md")
+PRAEMISSEN_MD = os.path.join(VORGABEN_DIR, "praemissen.md")
+TARGET_IMAGE = os.path.join(VORGABEN_DIR, "target.png")
 
 PDF_CSS = """
 body {
@@ -124,9 +127,19 @@ def write_pdf_beside_markdown(md_file: str) -> str | None:
         pdf.add_section(Section(md_text, paper_size="A4-L"), user_css=PDF_CSS)
         pdf.save(pdf_file)
         return pdf_file
-    except Exception as exc:  # PDF ist Zusatzartefakt; Markdown/CSV bleiben gültig.
+    except Exception as exc:  # PDF ist Zusatzartefakt; Markdown/XLSX bleiben gültig.
         print(f"WARNUNG: PDF-Export fehlgeschlagen: {exc}", file=sys.stderr)
         return None
+
+
+def open_excel_file(xlsx_file: str) -> None:
+    """Öffnet die erzeugte XLSX-Datei auf Windows in der Standardanwendung (Excel)."""
+    if os.name != "nt":
+        return
+    try:
+        os.startfile(xlsx_file)
+    except OSError as exc:
+        print(f"WARNUNG: Excel-Datei konnte nicht automatisch geöffnet werden: {exc}", file=sys.stderr)
 
 # ── AUDI fest (aus Target-CSV abgeleitet) ─────────────────────────────
 AUDI_KEY = "AUDI - Bibliotheksarbeiten (Audi)"
@@ -358,6 +371,37 @@ def _copy_note_cell(source_ws, target_ws, source_row: int, source_col: int, targ
         target_ws.row_dimensions[target_row].height = source_height
 
 
+def _column_width_to_pixels(width: float | None) -> int:
+    width = 8.43 if width is None else width
+    return int(width * 7 + 5)
+
+
+def _row_height_to_pixels(height: float | None) -> int:
+    height = 15 if height is None else height
+    return int(height * 4 / 3)
+
+
+def _embed_target_image(ws, image_path: str) -> None:
+    if not os.path.isfile(image_path):
+        return
+    img = XLImage(image_path)
+    start_col = 8   # H
+    end_col = 12    # L
+    start_row = 2
+    end_row = 25
+    target_width = sum(
+        _column_width_to_pixels(ws.column_dimensions[get_column_letter(col_idx)].width)
+        for col_idx in range(start_col, end_col + 1)
+    )
+    target_height = sum(
+        _row_height_to_pixels(ws.row_dimensions[row_idx].height)
+        for row_idx in range(start_row, end_row + 1)
+    )
+    img.width = target_width
+    img.height = target_height
+    ws.add_image(img, "H2")
+
+
 def _inherit_notes_from_workbook(workbook: Workbook, source_xlsx: str | None) -> None:
     if not source_xlsx or not os.path.isfile(source_xlsx):
         return
@@ -551,31 +595,6 @@ def render_markdown(report: ReportDocument) -> str:
             lines.extend(_render_table_markdown(section))
     lines.append("")
     return "\n".join(lines)
-
-
-def write_csv_report(report: ReportDocument, csv_file: str) -> None:
-    with open(csv_file, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.writer(f, delimiter=";")
-        writer.writerow([report.title])
-        for line in report.meta_lines:
-            writer.writerow([_strip_markdown(line)])
-
-        for section in report.sections:
-            writer.writerow([])
-            if isinstance(section, TextSection):
-                if section.title:
-                    writer.writerow([section.title])
-                for line in section.lines:
-                    clean = _strip_markdown(line)
-                    writer.writerow([clean] if clean else [])
-            else:
-                writer.writerow([section.title])
-                for line in section.intro_lines:
-                    clean = _strip_markdown(line)
-                    writer.writerow([clean] if clean else [])
-                writer.writerow(section.headers)
-                for row in section.rows:
-                    writer.writerow([_strip_markdown(value) for value in row.values])
 
 
 def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from: str | None = None) -> str:
@@ -831,6 +850,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
         first_col_max=20,
         fixed_widths={3: 48},
     )
+    _embed_target_image(overview_ws, TARGET_IMAGE)
 
     _, target_firm_rows = _collect_table_key_rows(overview_ws, "Firma")
     target_firm_header = _find_table_header_row(overview_ws, "Firma")
@@ -860,11 +880,12 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, default=datetime.date.today().year)
+    parser.add_argument("--pdf", action="store_true", help="Erzeugt zusaetzlich eine PDF-Datei neben Markdown und XLSX.")
     parser.add_argument("--inherit-notes-from")
     args = parser.parse_args()
     year = args.year
 
-    # ── CSV + Prämissen laden ──────────────────────────────────────────
+    # ── Vorgaben + Prämissen laden ─────────────────────────────────────
     REF_2025, TARGET_2026, AREA_ORDER, START_Q, COMPANY_TARGET_OVERRIDES = load_targets()
     praemissen_text = load_praemissen()
     AUDI_FIXED = TARGET_2026.get(AUDI_KEY, 0)
@@ -1358,24 +1379,21 @@ def main():
     with open(out_file, "w", encoding="utf-8") as f:
         f.write(md_text + "\n")
 
-    csv_file = os.path.join(OUT_DIR, f"{ts}_budget_massnahmenplan_ekek1.csv")
-    write_csv_report(report, csv_file)
-
     xlsx_file = os.path.join(OUT_DIR, f"{ts}_budget_massnahmenplan_ekek1.xlsx")
     inherit_notes_from = args.inherit_notes_from or _find_previous_xlsx(OUT_DIR, xlsx_file)
     write_xlsx_report(report, xlsx_file, inherit_notes_from=inherit_notes_from)
 
-    pdf_file = write_pdf_beside_markdown(out_file)
+    pdf_file = write_pdf_beside_markdown(out_file) if args.pdf else None
 
     rel = os.path.relpath(out_file, REPO_ROOT)
-    rel_csv = os.path.relpath(csv_file, REPO_ROOT)
     rel_xlsx = os.path.relpath(xlsx_file, REPO_ROOT)
     print(rel)
-    print(rel_csv)
     print(rel_xlsx)
     if pdf_file:
         rel_pdf = os.path.relpath(pdf_file, REPO_ROOT)
         print(rel_pdf)
+
+    open_excel_file(xlsx_file)
 
 
 if __name__ == "__main__":

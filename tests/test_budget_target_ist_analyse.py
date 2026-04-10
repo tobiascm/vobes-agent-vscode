@@ -75,21 +75,6 @@ def test_render_markdown_formats_summary_and_sections():
     assert "**Wichtig**" in content
 
 
-def test_write_csv_report_exports_all_sections(tmp_path):
-    mod = load_module()
-    report = sample_report(mod)
-    output = tmp_path / "report.csv"
-
-    mod.write_csv_report(report, str(output))
-
-    content = output.read_text(encoding="utf-8-sig")
-    assert "Testreport" in content
-    assert "Gesamtübersicht" in content
-    assert "Hinweise" in content
-    assert "Wichtig" in content
-    assert "**Wichtig**" not in content
-
-
 def test_exclude_from_budget_filters_storniert():
     mod = load_module()
 

@@ -20,9 +20,9 @@ Die Spalte **Maßnahmen** bleibt initial leer und wird durch den Agent nach User
 
 | Datei | Zweck |
 |---|---|
-| `report_massnahmenplan.py` | Erzeugt den Markdown-, CSV- und XLSX-Report sowie optional den PDF-Export |
-| `target.csv` | 2025-Referenzwerte + 2026-Targets (editierbar, Semikolon-getrennt) |
-| `praemissen.md` | Zuordnungsregeln, Split-Logik, feste Werte (wird in Report eingebettet) |
+| `report_massnahmenplan.py` | Erzeugt den Markdown- und XLSX-Report; PDF nur explizit mit `--pdf` |
+| `userdata/budget/vorgaben/target.csv` | 2025-Referenzwerte + 2026-Targets (editierbar, Semikolon-getrennt) |
+| `userdata/budget/vorgaben/praemissen.md` | Zuordnungsregeln, Split-Logik, feste Werte (wird in Report eingebettet) |
 
 ## Workflow
 
@@ -30,21 +30,26 @@ Die Spalte **Maßnahmen** bleibt initial leer und wird durch den Agent nach User
    ```bash
    python .agents/skills/skill-budget-target-ist-analyse/report_massnahmenplan.py
    ```
+   Für zusätzlichen PDF-Export:
+   ```bash
+   python .agents/skills/skill-budget-target-ist-analyse/report_massnahmenplan.py --pdf
+   ```
 2. Das Script:
-   - Lädt 2025 + Target aus `target.csv`
-   - Lädt Prämissen-Text aus `praemissen.md`
+   - Lädt 2025 + Target aus `userdata/budget/vorgaben/target.csv`
+   - Lädt Prämissen-Text aus `userdata/budget/vorgaben/praemissen.md`
    - Synchronisiert BTL-Daten (aktuelles Jahr) aus BPLUS-NG
    - Ordnet BMs den Aufgabenbereichen zu (Firma→Bereich-Mapping inkl. Split-Logik)
-   - Schreibt Markdown, CSV, XLSX und bei installierter Dependency `markdown-pdf` eine PDF-Datei nach `userdata/budget/`
+   - Schreibt standardmäßig Markdown und XLSX nach `userdata/budget/`
+   - Erzeugt nur mit `--pdf` und installierter Dependency `markdown-pdf` zusätzlich eine PDF-Datei
    - Übernimmt in der XLSX manuelle Notizen/Aktionen aus der letzten älteren Maßnahmenplan-Datei (oder optional via `--inherit-notes-from <xlsx>`) per stabilem Schlüssel
-   - Gibt die erzeugten Dateipfade auf stdout aus (Markdown, CSV, XLSX, optional PDF)
+   - Gibt die erzeugten Dateipfade auf stdout aus (Markdown, XLSX, optional PDF nur bei `--pdf`)
 3. **Agent liest die erzeugte Datei** und präsentiert sie dem User.
 4. **User gibt Maßnahmen vor** → Agent füllt die Maßnahmen-Spalte per Datei-Edit.
 
 ## Ausgabe-Struktur
 
 1. **Header** — Titel, BPLUS-Stand, Erstelldatum
-2. **Prämissen** — aus `praemissen.md` + Sync-Zeitpunkt
+2. **Prämissen** — aus `userdata/budget/vorgaben/praemissen.md` + Sync-Zeitpunkt
 3. **Tabelle: Aufgabenbereiche** — 2025, Target, Ist, Delta, Maßnahmen (leer)
 4. **Tabelle: Firmen-Übersicht** — Firma, Anzahl BMs, Ist, Maßnahmen (leer)
 5. **Korrektur Überplanung** — Pro überplanter Firma werden zuerst stornierte Vorgänge mit Aktion `löschen` aufgeführt. Danach folgen Quartals-Korrektur (im Durchlauf → bestellt) und Jahres-Korrektur (01 Erstellung → im Durchlauf) mit Priorisierung.
@@ -54,13 +59,13 @@ Die Spalte **Maßnahmen** bleibt initial leer und wird durch den Agent nach User
 
 - **Maßnahmen in der Firmen-Übersicht** werden automatisch befüllt (Quartal/Jahr überplant bzw. zu gering).
 - **Aktion-Spalte in Korrektur Überplanung NIE automatisch befüllen** — immer dem User überlassen.
-- PDF-Export ist Best-effort im A4-Querformat. Fehler oder fehlendes `markdown-pdf` werden auf stderr gewarnt und dürfen Markdown/CSV/XLSX nicht abbrechen.
+- PDF-Export ist optional und nur mit `--pdf` aktiv. Er bleibt Best-effort im A4-Querformat; Fehler oder fehlendes `markdown-pdf` werden auf stderr gewarnt und dürfen Markdown/XLSX nicht abbrechen.
 - **IMMER** `report_massnahmenplan.py` ausführen, NIE eine vorhandene Datei wiederverwenden.
 - In der XLSX werden manuelle Notizen/Aktionen aus der Vor-Datei fortgeschrieben:
   - Bereiche über Aufgabenbereich
   - Firmen über Firmenname
   - Korrekturen über Firma + Blocktyp + Vorgangsnummer (`Konzept`)
-- Targets ändern → `target.csv` editieren, kein Scriptumbau nötig.
-- Feste Firmen-Targets können optional direkt in `target.csv` ergänzt werden, z.B. zusätzliche Spalten wie `Bertrandt_Target_2026`.
-- Prämissen ändern → `praemissen.md` editieren.
+- Targets ändern → `userdata/budget/vorgaben/target.csv` editieren, kein Scriptumbau nötig.
+- Feste Firmen-Targets können optional direkt in `userdata/budget/vorgaben/target.csv` ergänzt werden, z.B. zusätzliche Spalten wie `Bertrandt_Target_2026`.
+- Prämissen ändern → `userdata/budget/vorgaben/praemissen.md` editieren.
 - Das Script verwendet `budget_db.py` für DB-Sync und SQL-Queries.
