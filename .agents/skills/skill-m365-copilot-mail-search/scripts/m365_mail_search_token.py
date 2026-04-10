@@ -6,6 +6,9 @@ Ziel:
 - sonst vorhandenen Refresh-Token verwenden
 - sonst Teams in Edge oeffnen und auf aktualisierte MSAL-Eintraege warten
 
+Bei Token-Problemen (TOKEN_EXPIRED, AADSTS-Fehler, LevelDB-Probleme) siehe:
+    docs/teams-token-debugging.md
+
 Usage:
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py fetch
     python .agents/skills/skill-m365-copilot-mail-search/scripts/m365_mail_search_token.py fetch --force
@@ -377,7 +380,13 @@ def _extract_balanced_json(blob: bytes, start_index: int) -> bytes | None:
 
 
 def _iter_local_storage_objects() -> list[dict]:
-    needle = b'{"homeAccountId":"'
+    # Multiple needles: MSAL AccessTokens typically start with {"homeAccountId":"
+    # but RefreshTokens often start with {"credentialType":" or {"clientId":".
+    needles = [
+        b'{"homeAccountId":"',
+        b'{"credentialType":"',
+        b'{"clientId":"',
+    ]
     results: list[dict] = []
     seen: set[str] = set()
     for path in _candidate_leveldb_files():
@@ -385,33 +394,34 @@ def _iter_local_storage_objects() -> list[dict]:
             blob = path.read_bytes()
         except OSError:
             continue
-        start = 0
-        while True:
-            index = blob.find(needle, start)
-            if index < 0:
-                break
-            raw_json = _extract_balanced_json(blob, index)
-            start = index + len(needle)
-            if not raw_json:
-                continue
-            try:
-                obj = json.loads(raw_json.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            marker = "|".join(
-                [
-                    obj.get("credentialType", ""),
-                    obj.get("clientId", ""),
-                    obj.get("target", "") or "",
-                    obj.get("expiresOn", "") or "",
-                    obj.get("secret", "")[:64],
-                ]
-            )
-            if marker in seen:
-                continue
-            seen.add(marker)
-            obj["_file_path"] = str(path)
-            results.append(obj)
+        for needle in needles:
+            start = 0
+            while True:
+                index = blob.find(needle, start)
+                if index < 0:
+                    break
+                raw_json = _extract_balanced_json(blob, index)
+                start = index + len(needle)
+                if not raw_json:
+                    continue
+                try:
+                    obj = json.loads(raw_json.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    continue
+                marker = "|".join(
+                    [
+                        obj.get("credentialType", ""),
+                        obj.get("clientId", ""),
+                        obj.get("target", "") or "",
+                        obj.get("expiresOn", "") or "",
+                        obj.get("secret", "")[:64],
+                    ]
+                )
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                obj["_file_path"] = str(path)
+                results.append(obj)
     return results
 
 
@@ -538,8 +548,11 @@ def _refresh_access_token(
         "refresh_token": refresh_record.secret,
         "scope": requested_scope,
     }
+    # Teams Web is registered as a SPA – Azure AD requires an Origin header
+    # for cross-origin token refresh requests (AADSTS9002327).
+    headers = {"Origin": "https://teams.microsoft.com"}
     try:
-        response = requests.post(token_url, data=body, timeout=20)
+        response = requests.post(token_url, data=body, headers=headers, timeout=20)
     except requests.RequestException as exc:
         raise TokenAcquisitionError("TOKEN_REQUEST_FAILED", f"Token-Refresh fehlgeschlagen: {exc}") from exc
 
@@ -547,7 +560,7 @@ def _refresh_access_token(
     if response.status_code != 200:
         error = payload.get("error", "unknown_error")
         description = (payload.get("error_description") or "")[:400]
-        if error == "invalid_grant":
+        if error in {"invalid_grant", "invalid_request"}:
             return None
         raise TokenAcquisitionError("TOKEN_REQUEST_FAILED", f"Token-Refresh fehlgeschlagen: {error} {description}".strip())
 
