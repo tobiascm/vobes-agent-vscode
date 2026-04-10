@@ -152,17 +152,29 @@ python .agents/skills/skill-m365-mail-agent/scripts/analyze_case.py --case-id "<
 `analysis.json` wird agentisch erzeugt und enthaelt mindestens:
 - `tlmdr`
 - `analysis_md` oder `final_analysis`
+- `problem_statement`
+- `resolution_status`
+- `expected_from_me`
 - `key_points`
 - `deadlines`
 - `relevant_aspects`
 - `open_points`
-- optional `core_topic`, `occasion`, `problem_statement`, `expected_from_me`, `history`, `participants`, `sources`
+- optional `core_topic`, `occasion`, `history`, `participants`, `sources`
 - `decision`
 - `actions`
 - optional `agent_decisions`
 - optional `analysis_warnings`
 
 `tlmdr` darf der Agent erst ganz zum Schluss formulieren; das Skript rendert ihn trotzdem ganz oben in `00_analyse.md`.
+Direkt darunter rendert das Skript zusaetzlich:
+- `Problem: <problem_statement>`
+- `Status: <resolution_status>`
+- `Erwartet von mir: <expected_from_me>`
+
+Fuelle diese drei Felder immer konkret und entscheidungsfaehig:
+- `problem_statement`: Was ist das eigentliche Problem oder Anliegen in 1-2 klaren Saetzen? Falls schon in tlmdr klar beschrieben, sage hier nur (siehe TL;DR) 
+- `resolution_status`: Ist der Fall bereits geloest, teilweise geloest oder noch offen? Begruende knapp.
+- `expected_from_me`: Was wird jetzt konkret vom User Tobias Carsten Müller erwartet? Wenn nichts noetig ist, schreibe das explizit.
 
 `open_points` bleibt bewusst eine freie `list[str]`. Liste dort alle offenen Punkte auf, die der Agent in seiner Analyse identifiziert hat, z. B.:
 - was fuer die Analyse noch unklar oder nicht belastbar ist
@@ -225,6 +237,7 @@ Struktur:
 
 Muss enthalten:
 - **TL;DR direkt am Anfang**
+- direkt darunter `Problem`, `Status`, `Erwartet von mir`
 - Kurzfassung / Key Points
 - frei formulierte finale Analyse des Agenten
 - Fristen

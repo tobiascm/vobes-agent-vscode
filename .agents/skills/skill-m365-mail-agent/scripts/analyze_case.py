@@ -887,6 +887,7 @@ def _default_summary(
         "core_topic": metadata["subject"],
         "occasion": metadata["subject"],
         "problem_statement": latest_preview,
+        "resolution_status": "Vom Agenten nach Retrieval-Verlauf zu bewerten.",
         "expected_from_me": "Vom Agenten nach Retrieval-Verlauf zu bewerten.",
         "deadlines": [],
         "relevant_aspects": [],
@@ -987,8 +988,30 @@ def _render_analysis_markdown(
     decision = analysis_payload.get("decision") or _default_decision()
     core_topic = analysis_payload.get("core_topic") or summary.get("core_topic") or "-"
     open_points = _normalize_text_list(analysis_payload.get("open_points") or summary.get("open_points") or [])
+    problem_statement = (
+        analysis_payload.get("problem_statement")
+        or summary.get("problem_statement")
+        or "Vom Agenten nicht explizit benannt."
+    )
+    resolution_status = (
+        analysis_payload.get("resolution_status")
+        or summary.get("resolution_status")
+        or (
+            "Offen bzw. nicht abschliessend geklaert."
+            if open_points
+            else "Kein offener Punkt dokumentiert; Loesungsstand nicht explizit bewertet."
+        )
+    )
+    expected_from_me = (
+        analysis_payload.get("expected_from_me")
+        or summary.get("expected_from_me")
+        or "Keine konkrete Erwartung benannt."
+    )
     lines = [
         f"TL;DR: {analysis_payload.get('tlmdr') or 'Vom Agenten nachzureichen.'}",
+        f"Problem: {problem_statement}",
+        f"Status: {resolution_status}",
+        f"Erwartet von mir: {expected_from_me}",
         "",
     ]
     key_points = analysis_payload.get("key_points") or []
@@ -1135,6 +1158,7 @@ def _build_case_json(
         "core_topic": summary.get("core_topic"),
         "occasion": summary.get("occasion"),
         "problem_statement": summary.get("problem_statement"),
+        "resolution_status": summary.get("resolution_status"),
         "expected_from_me": summary.get("expected_from_me"),
         "deadlines": summary.get("deadlines") or [],
         "relevant_aspects": summary.get("relevant_aspects") or [],
@@ -1264,6 +1288,7 @@ def finalize_case(
     summary["core_topic"] = analysis_payload.get("core_topic") or summary.get("core_topic")
     summary["occasion"] = analysis_payload.get("occasion") or summary.get("occasion")
     summary["problem_statement"] = analysis_payload.get("problem_statement") or summary.get("problem_statement")
+    summary["resolution_status"] = analysis_payload.get("resolution_status") or summary.get("resolution_status")
     summary["expected_from_me"] = analysis_payload.get("expected_from_me") or summary.get("expected_from_me")
     summary["history"] = analysis_payload.get("history") or summary.get("history")
     summary["participants"] = analysis_payload.get("participants") or summary.get("participants") or []
