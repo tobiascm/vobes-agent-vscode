@@ -56,6 +56,8 @@
     "chat.tools.terminal.autoApprove": {
         "/^code(\\.cmd)?\\b/i": true
     },
+    "chat.notifyWindowOnResponseReceived": "always",
+    "chat.notifyWindowOnConfirmation": "always",
     "custom-ui-style.watch": true,
     "custom-ui-style.stylesheet": {
         ".interactive-session": {
