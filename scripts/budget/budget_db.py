@@ -29,14 +29,23 @@ STATUS_MAP = {
     "WF_Archived": "99_Archiviert",
 }
 
-SCHEMA = [
-    """
-    CREATE TABLE IF NOT EXISTS btl (
+BTL_COLUMNS_SQL = """
         concept TEXT, ea TEXT, title TEXT, status TEXT, planned_value INTEGER,
         org_unit TEXT, company TEXT, creator TEXT, bm_number TEXT, az_number TEXT,
         projektfamilie TEXT, dev_order TEXT, bm_text TEXT, last_updated TEXT,
         category TEXT, cost_type TEXT, quantity TEXT, unit TEXT, supplier_number TEXT,
         first_signature TEXT, second_signature TEXT, target_date TEXT
+"""
+
+SCHEMA = [
+    f"""
+    CREATE TABLE IF NOT EXISTS btl (
+{BTL_COLUMNS_SQL}
+    )
+    """,
+    f"""
+    CREATE TABLE IF NOT EXISTS btl_all (
+{BTL_COLUMNS_SQL}
     )
     """,
     """
@@ -188,13 +197,13 @@ def replace_table(conn: sqlite3.Connection, table: str, columns: list[str], rows
     return len(rows)
 
 
-def sync_btl(conn: sqlite3.Connection, year: int, force: bool = False) -> int:
-    if not force and is_fresh(conn, "btl", year):
+def _sync_btl(conn: sqlite3.Connection, year: int, table: str, org_unit: str | None, force: bool = False) -> int:
+    if not force and is_fresh(conn, table, year):
         return 0
     raw = ps_json(f"{BASE_URL}/ek/api/Btl/GetAll?year={year}")
     rows = []
     for item in raw if isinstance(raw, list) else [raw]:
-        if trim(item.get("orgUnitName")) != ORG_UNIT:
+        if org_unit and trim(item.get("orgUnitName")) != org_unit:
             continue
         if trim(item.get("workFlowStatus")) == "WF_Archived":
             continue
@@ -228,7 +237,7 @@ def sync_btl(conn: sqlite3.Connection, year: int, force: bool = False) -> int:
         ))
     count = replace_table(
         conn,
-        "btl",
+        table,
         [
             "concept", "ea", "title", "status", "planned_value", "org_unit",
             "company", "creator", "bm_number", "az_number", "projektfamilie",
@@ -241,6 +250,14 @@ def sync_btl(conn: sqlite3.Connection, year: int, force: bool = False) -> int:
     )
     conn.commit()
     return count
+
+
+def sync_btl(conn: sqlite3.Connection, year: int, force: bool = False) -> int:
+    return _sync_btl(conn, year, "btl", ORG_UNIT, force=force)
+
+
+def sync_btl_all(conn: sqlite3.Connection, year: int, force: bool = False) -> int:
+    return _sync_btl(conn, year, "btl_all", None, force=force)
 
 
 def sync_devorder(conn: sqlite3.Connection, year: int, force: bool = False) -> int:
@@ -385,6 +402,7 @@ def sync_ua_leiter(conn: sqlite3.Connection, year: int, force: bool = False) -> 
 
 SYNC_FUNCS = {
     "btl": sync_btl,
+    "btl_all": sync_btl_all,
     "devorder": sync_devorder,
     "el_planning": sync_el_planning,
     "stundensaetze": sync_stundensaetze,

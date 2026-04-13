@@ -83,7 +83,7 @@ def btl_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
 def mock_args():
     """Factory to create argparse-like namespace for report_bplus filters."""
     def _make(**kwargs):
-        defaults = dict(firma=None, status=None, ea=None, projekt=None, oe=None, top=None)
+        defaults = dict(firma=None, status=None, ea=None, projekt=None, oe=None, top=None, all_org_units=False)
         defaults.update(kwargs)
         return SimpleNamespace(**defaults)
     return _make

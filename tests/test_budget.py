@@ -115,6 +115,7 @@ class TestSQLValidation:
 
     @pytest.mark.parametrize("sql, expected", [
         ("SELECT * FROM btl", ["btl"]),
+        ("SELECT * FROM btl_all", ["btl_all"]),
         ("SELECT * FROM btl JOIN devorder ON 1=1", ["btl", "devorder"]),
         ("SELECT * FROM el_planning e LEFT JOIN btl b ON 1=1", ["el_planning", "btl"]),
         ("SELECT * FROM unknown_table", []),
@@ -123,11 +124,103 @@ class TestSQLValidation:
         assert budget_db._extract_tables(sql) == expected
 
 
+class TestBTLSync:
+
+    @staticmethod
+    def _payload():
+        return [
+            {
+                "concept": "K1",
+                "eaTitel": "EA Eins",
+                "title": "Titel Eins",
+                "workFlowStatus": "WF_Created",
+                "plannedValue": 100,
+                "orgUnitName": "EKEK/1",
+                "company": "Firma A",
+                "creatorName": "Bachmann Armin",
+                "bmNumber": "1",
+                "azNumber": "1",
+                "projektfamilie": "PF1",
+                "devOrder": "EA1",
+                "pbmText": "Text",
+            },
+            {
+                "concept": "K2",
+                "eaTitel": "EA Zwei",
+                "title": "Titel Zwei",
+                "workFlowStatus": "WF_In_Planen_BM",
+                "status": "Bestellt",
+                "plannedValue": 200,
+                "orgUnitName": "EKEK/2",
+                "company": "Firma B",
+                "creatorName": "Andere Person",
+                "bmNumber": "2",
+                "azNumber": "2",
+                "projektfamilie": "PF2",
+                "devOrder": "EA2",
+                "pbmText": "Text",
+            },
+            {
+                "concept": "K3",
+                "eaTitel": "EA Drei",
+                "title": "Titel Drei",
+                "workFlowStatus": "WF_Archived",
+                "plannedValue": 300,
+                "orgUnitName": "EKEK/3",
+                "company": "Firma C",
+                "creatorName": "Archiviert",
+                "bmNumber": "3",
+                "azNumber": "3",
+                "projektfamilie": "PF3",
+                "devOrder": "EA3",
+                "pbmText": "Text",
+            },
+        ]
+
+    def test_sync_btl_keeps_default_ekek1_scope(self, budget_db, monkeypatch):
+        monkeypatch.setattr(budget_db, "ps_json", lambda url: self._payload())
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        budget_db.init_db(conn)
+
+        count = budget_db.sync_btl(conn, 2026, force=True)
+
+        assert count == 1
+        rows = conn.execute("SELECT concept, org_unit FROM btl").fetchall()
+        assert [tuple(row) for row in rows] == [("K1", "EKEK/1")]
+
+    def test_sync_btl_all_keeps_all_org_units_and_excludes_archived(self, budget_db, monkeypatch):
+        monkeypatch.setattr(budget_db, "ps_json", lambda url: self._payload())
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        budget_db.init_db(conn)
+
+        count = budget_db.sync_btl_all(conn, 2026, force=True)
+
+        assert count == 2
+        rows = conn.execute("SELECT concept, org_unit FROM btl_all ORDER BY concept").fetchall()
+        assert [tuple(row) for row in rows] == [("K1", "EKEK/1"), ("K2", "EKEK/2")]
+
+
 # ---------------------------------------------------------------
 # 4. BTL report sections (paths 4, 5, 6, 7)
 # ---------------------------------------------------------------
 
 class TestBTLReport:
+
+    def test_where_clause_defaults_to_ekek1(self, report_bplus, mock_args):
+        where_sql, params = report_bplus.where_clause(mock_args())
+        assert where_sql == " WHERE org_unit = ?"
+        assert params == ["EKEK/1"]
+
+    def test_where_clause_all_org_units_removes_default_scope(self, report_bplus, mock_args):
+        where_sql, params = report_bplus.where_clause(mock_args(all_org_units=True))
+        assert where_sql == ""
+        assert params == []
+
+    def test_source_table_uses_btl_all_for_full_export(self, report_bplus, mock_args):
+        assert report_bplus.source_table(mock_args()) == "btl"
+        assert report_bplus.source_table(mock_args(all_org_units=True)) == "btl_all"
 
     def test_section_items_total(self, report_bplus, btl_rows):
         """SUM of all planned_values = 4.276.436."""

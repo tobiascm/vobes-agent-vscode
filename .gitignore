@@ -17,3 +17,4 @@ specs/001-docs-spec-deep/checklists/requirements.md
 vobes_agent.egg-info/*
 tmp/*
 restore/*
+prompt*.md

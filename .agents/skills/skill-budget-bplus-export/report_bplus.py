@@ -16,11 +16,13 @@ from report_utils import note, report_path, section, sync_info, table_md, warnin
 
 DB_PATH = WORKSPACE / "userdata" / "budget.db"
 BUDGET_DB = WORKSPACE / "scripts" / "budget" / "budget_db.py"
+ORG_UNIT = "EKEK/1"
 
 
-def sync_btl(year: int, force: bool = False) -> bool:
+def sync_btl(year: int, force: bool = False, all_org_units: bool = False) -> bool:
     """Return True on success, False on failure (old data may still be usable)."""
-    cmd = [sys.executable, str(BUDGET_DB), "sync", "btl", "--year", str(year)]
+    table = "btl_all" if all_org_units else "btl"
+    cmd = [sys.executable, str(BUDGET_DB), "sync", table, "--year", str(year)]
     if force:
         cmd.append("--force")
     r = subprocess.run(cmd, capture_output=True)
@@ -33,6 +35,12 @@ def euro(value: int) -> str:
 
 def where_clause(args):
     parts, params = [], []
+    if args.oe:
+        parts.append("LOWER(org_unit) LIKE ?")
+        params.append(f"%{args.oe.lower()}%")
+    elif not args.all_org_units:
+        parts.append("org_unit = ?")
+        params.append(ORG_UNIT)
     if args.firma:
         parts.append("LOWER(company) LIKE ?")
         params.append(f"%{args.firma.lower()}%")
@@ -45,17 +53,18 @@ def where_clause(args):
     if args.projekt:
         parts.append("LOWER(projektfamilie) LIKE ?")
         params.append(f"%{args.projekt.lower()}%")
-    if args.oe:
-        parts.append("LOWER(org_unit) LIKE ?")
-        params.append(f"%{args.oe.lower()}%")
     return (" WHERE " + " AND ".join(parts)) if parts else "", params
+
+
+def source_table(args) -> str:
+    return "btl_all" if args.all_org_units else "btl"
 
 
 def fetch_rows(args):
     where_sql, params = where_clause(args)
     sql = f"""
         SELECT concept, dev_order, ea, title, planned_value, company, status
-        FROM btl
+        FROM {source_table(args)}
         {where_sql}
         ORDER BY planned_value DESC, concept
     """
@@ -118,10 +127,11 @@ def main() -> int:
     parser.add_argument("--top", type=int)
     parser.add_argument("--year", type=int, default=datetime.now().year)
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--all-org-units", action="store_true")
     parser.add_argument("--output")
     args = parser.parse_args()
 
-    sync_ok = sync_btl(args.year, force=args.force)
+    sync_ok = sync_btl(args.year, force=args.force, all_org_units=args.all_org_units)
     rows = fetch_rows(args)
     label = args.firma or args.status or args.ea or args.projekt or args.oe or "gesamt"
     path = report_path("bplus", label=label, output=args.output)
@@ -142,7 +152,7 @@ def main() -> int:
         if len({r["dev_order"] for r in rows if r["dev_order"]}) > 1:
             sections.append(section_ea(rows))
 
-    write_report(path, "BPLUS-NG Auswertung", sections, meta_lines=[sync_info(DB_PATH, "btl")])
+    write_report(path, "BPLUS-NG Auswertung", sections, meta_lines=[sync_info(DB_PATH, source_table(args))])
     print(path)
     return 0
 
