@@ -7,6 +7,7 @@ stores the answer as Markdown.
 Usage:
     python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py doctor
     python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run --question "..."
+    python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py read-chat --chat-url "https://chatgpt.com/c/..."
     python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py close
     python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py convert INPUT_HTML --question "..."
 
@@ -92,7 +93,8 @@ MCP_INIT_TIMEOUT_SECONDS = 15
 RUN_STATUS_INTERVAL_SECONDS = 30
 RUN_OPENING_MESSAGE = "ChatGPT wird geöffnet..."
 RUN_FOLLOWUP_OPENING_MESSAGE = "Gespeicherter Chat wird geöffnet..."
-RUN_PROMPT_SENT_MESSAGE = "Prompt abgeschickt, warte auf Antwort (max {timeout} Min.)..."
+RUN_READ_CHAT_OPENING_MESSAGE = "ChatGPT-Chat wird read-only geöffnet..."
+RUN_PROMPT_SENT_TEMPLATE = "Prompt abgeschickt, warte auf Antwort (max {timeout} Min.)..."
 
 REQUIRED_TOOLS = {
     "browser_navigate",
@@ -205,6 +207,44 @@ async () => {
   const last = articles[articles.length - 1];
   const content = last.querySelector('.markdown,.prose,[class*="markdown"],[class*="prose"]');
   return (content || last).innerHTML;
+}
+""".strip()
+
+CHAT_TRANSCRIPT_EXPORT_JS = r"""
+() => {
+  const normalize = (text) => (text || '').replace(/\s+/g, ' ').trim();
+  const titleCandidates = [
+    'nav a[aria-current="page"]',
+    'nav a[href*="/c/"][aria-current="page"]',
+    'nav a[href*="/c/"].bg-token-sidebar-surface-primary',
+    'h1',
+  ];
+  let chatTitle = '';
+  for (const selector of titleCandidates) {
+    const el = document.querySelector(selector);
+    const text = normalize(el ? (el.innerText || el.textContent || '') : '');
+    if (text) {
+      chatTitle = text;
+      break;
+    }
+  }
+  if (!chatTitle) {
+    chatTitle = normalize((document.title || '').replace(/\s*[-|]\s*ChatGPT\s*$/i, ''));
+  }
+  const messages = [...document.querySelectorAll('[data-message-author-role]')]
+    .map((node) => {
+      const role = normalize(node.getAttribute('data-message-author-role') || '');
+      const content = node.querySelector('.markdown,.prose,[class*="markdown"],[class*="prose"]') || node;
+      const html = (content.innerHTML || '').trim();
+      const text = normalize(content.innerText || '');
+      return { role, html, text };
+    })
+    .filter((message) => message.role && message.text);
+  return JSON.stringify({
+    url: location.href,
+    title: chatTitle,
+    messages,
+  });
 }
 """.strip()
 
@@ -470,6 +510,60 @@ def _build_markdown_document(question: str, html: str, thinking: bool) -> str:
     return header + markdown
 
 
+def _chat_title_fallback(url: str) -> str:
+    normalized = _normalize_url(url)
+    parsed = urlsplit(normalized)
+    chat_id = parsed.path.rstrip("/").split("/")[-1] if parsed.path else ""
+    if chat_id and chat_id != "c":
+        return f"ChatGPT Chat {chat_id}"
+    return "ChatGPT Chat"
+
+
+def _resolve_chat_title(raw_title: str, url: str) -> str:
+    title = re.sub(r"\s+", " ", (raw_title or "")).strip()
+    return title or _chat_title_fallback(url)
+
+
+def _render_chat_messages_markdown(messages: list[dict[str, str]]) -> str:
+    blocks: list[str] = []
+    role_map = {
+        "assistant": "ChatGPT",
+        "user": "User",
+        "system": "System",
+        "tool": "Tool",
+    }
+    for message in messages:
+        role_key = str(message.get("role", "")).strip().lower()
+        html = str(message.get("html", "")).strip()
+        if not role_key or not html:
+            continue
+        heading = role_map.get(role_key, role_key.capitalize() or "Nachricht")
+        markdown = _html_to_markdown(html)
+        if role_key == "assistant":
+            markdown = _strip_completion_sentinel(markdown)
+        markdown = markdown.strip()
+        if not markdown:
+            continue
+        blocks.append(f"## {heading}\n\n{markdown}")
+    if not blocks:
+        raise RuntimeError("Im Chat wurden keine lesbaren Nachrichten gefunden.")
+    return "\n\n".join(blocks)
+
+
+def _build_chat_markdown_document(
+    *,
+    title: str,
+    url: str,
+    messages: list[dict[str, str]],
+) -> str:
+    date_display = datetime.now().strftime("%Y-%m-%d")
+    header = (
+        f"# {title}\n\n"
+        f"> Quelle: ChatGPT-Chat, URL: {url}, abgerufen am {date_display}\n\n"
+    )
+    return header + _render_chat_messages_markdown(messages)
+
+
 def _default_output_path(question: str) -> Path:
     slug = _slugify(question)
     date_str = datetime.now().strftime("%Y%m%d")
@@ -492,6 +586,58 @@ def _write_markdown_from_html(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(content, encoding="utf-8")
     return out_path, content
+
+
+def _write_markdown_from_chat_export(
+    export_data: dict[str, Any],
+    output: str | Path | None,
+    *,
+    last_output: bool,
+) -> tuple[Path, str]:
+    url = str(export_data.get("url", "") or "").strip()
+    title = _resolve_chat_title(str(export_data.get("title", "") or ""), url)
+    raw_messages = export_data.get("messages", [])
+    if not isinstance(raw_messages, list):
+        raise RuntimeError("Chat-Export ist ungueltig: messages fehlt.")
+    messages = [
+        {
+            "role": str(item.get("role", "") or ""),
+            "html": str(item.get("html", "") or ""),
+            "text": str(item.get("text", "") or ""),
+        }
+        for item in raw_messages
+        if isinstance(item, dict)
+    ]
+    if last_output:
+        messages = [message for message in messages if message["role"].strip().lower() == "assistant"]
+        if messages:
+            messages = [messages[-1]]
+    if not messages:
+        raise RuntimeError("Im Chat wurde keine passende ChatGPT-Ausgabe gefunden.")
+
+    content = _build_chat_markdown_document(title=title, url=url, messages=messages)
+    out_path = _ensure_path(output) if output else _default_output_path(title)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(content, encoding="utf-8")
+    return out_path, content
+
+
+def _write_chat_export_html(export_data: dict[str, Any], output: str | Path) -> Path:
+    out_path = _html_output_path(output)
+    raw_messages = export_data.get("messages", [])
+    fragments: list[str] = []
+    if isinstance(raw_messages, list):
+        for item in raw_messages:
+            if not isinstance(item, dict):
+                continue
+            role = html_mod.escape(str(item.get("role", "") or "message"))
+            html = str(item.get("html", "") or "").strip()
+            if not html:
+                continue
+            fragments.append(f'<section data-message-author-role="{role}">{html}</section>')
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(fragments), encoding="utf-8")
+    return out_path
 
 
 def _rel_for_display(path: Path) -> str:
@@ -767,7 +913,11 @@ def _print_run_followup_opening_message() -> None:
 
 def _print_run_prompt_sent_message(timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS) -> None:
     total_m = timeout_seconds // 60
-    print(RUN_PROMPT_SENT_MESSAGE.format(timeout=total_m))
+    print(RUN_PROMPT_SENT_TEMPLATE.format(timeout=total_m))
+
+
+def _print_read_chat_opening_message() -> None:
+    print(RUN_READ_CHAT_OPENING_MESSAGE)
 
 
 def _close_chat_tab_safely(client: McpStdioClient) -> None:
@@ -831,6 +981,13 @@ class RunOptions:
     completion_min_chars: int
     no_generation_grace_seconds: int
     follow_up: bool
+
+
+@dataclass
+class ReadChatOptions:
+    chat_url: str
+    output: Path | None
+    last_output: bool
 
 
 class McpError(RuntimeError):
@@ -1469,6 +1626,16 @@ def _extract_last_assistant_html(client: McpStdioClient, raw_html_out: Path) -> 
         },
     )
     return raw_html_out
+
+
+def _extract_chat_export(client: McpStdioClient) -> dict[str, Any]:
+    raw = _tool_text_with_retry(client, "browser_evaluate", {"function": CHAT_TRANSCRIPT_EXPORT_JS})
+    data = _parse_json_text(raw, "chat transcript export")
+    if not isinstance(data.get("messages"), list):
+        raise RuntimeError("Chat-Export enthaelt keine Nachrichtenliste.")
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -1538,6 +1705,50 @@ def cmd_close(chat_url: str) -> None:
         sys.exit(EXIT_GENERAL_ERROR)
     finally:
         if client:
+            client.close()
+
+
+def cmd_read_chat(options: ReadChatOptions) -> None:
+    config = _load_playwright_server_config()
+    client: McpStdioClient | None = None
+    output = _ensure_path(options.output) if options.output else None
+
+    try:
+        _print_read_chat_opening_message()
+        client, _, state, _ = _start_client_and_fetch_state(config, options.chat_url)
+        export_data = _extract_chat_export(client)
+        messages = export_data.get("messages", [])
+        if not messages and not state.get("hasTextbox"):
+            raise PermissionError("ChatGPT ist nicht eingeloggt oder der Chat ist nicht lesbar.")
+        out_path, content = _write_markdown_from_chat_export(
+            export_data,
+            output,
+            last_output=options.last_output,
+        )
+        _write_chat_export_html(export_data, out_path)
+        final_url = str(export_data.get("url", "") or "").strip()
+        if _is_followup_chat_url(final_url):
+            _save_followup_state(final_url, out_path)
+        print(_format_run_success(out_path, content))
+    except PermissionError as exc:
+        target = output or _default_output_path(_chat_title_fallback(options.chat_url))
+        print(_format_run_error(target, exc), file=sys.stderr)
+        sys.exit(EXIT_LOGIN_REQUIRED)
+    except McpError as exc:
+        target = output or _default_output_path(_chat_title_fallback(options.chat_url))
+        print(_format_run_error(target, exc), file=sys.stderr)
+        sys.exit(EXIT_MCP_UNAVAILABLE)
+    except RuntimeError as exc:
+        target = output or _default_output_path(_chat_title_fallback(options.chat_url))
+        print(_format_run_error(target, exc), file=sys.stderr)
+        sys.exit(EXIT_INVALID_HTML)
+    except Exception as exc:
+        target = output or _default_output_path(_chat_title_fallback(options.chat_url))
+        print(_format_run_error(target, exc), file=sys.stderr)
+        sys.exit(EXIT_GENERAL_ERROR)
+    finally:
+        if client:
+            _close_chat_tab_safely(client)
             client.close()
 
 
@@ -1673,6 +1884,19 @@ def main() -> None:
     doctor.add_argument("--chat-url", default=DEFAULT_CHAT_URL, help="ChatGPT URL")
     close = subparsers.add_parser("close", help="Aktuellen ChatGPT-Tab schliessen")
     close.add_argument("--chat-url", default=DEFAULT_CHAT_URL, help="ChatGPT URL")
+    read_chat = subparsers.add_parser("read-chat", help="Bestehenden ChatGPT-Chat read-only exportieren")
+    read_chat.add_argument("--chat-url", required=True, help="Konkrete ChatGPT-Chat-URL")
+    read_chat.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        help="Ausgabepfad (Default: tmp/YYYYMMDD_chatgpt_SLUG.md)",
+    )
+    read_chat.add_argument(
+        "--last-output",
+        action="store_true",
+        help="Nur die letzte ChatGPT-Ausgabe exportieren statt des kompletten Chats",
+    )
 
     run = subparsers.add_parser("run", help="Bridge-basierten ChatGPT-Workflow ausfuehren")
     run.add_argument("--question", "-q", required=True, help="Die urspruengliche Frage")
@@ -1747,6 +1971,14 @@ def main() -> None:
         cmd_doctor(args.chat_url)
     elif args.command == "close":
         cmd_close(args.chat_url)
+    elif args.command == "read-chat":
+        cmd_read_chat(
+            ReadChatOptions(
+                chat_url=args.chat_url,
+                output=Path(args.output) if args.output else None,
+                last_output=args.last_output,
+            )
+        )
     elif args.command == "run":
         cmd_run(
             RunOptions(

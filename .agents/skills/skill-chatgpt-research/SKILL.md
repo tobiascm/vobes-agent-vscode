@@ -13,6 +13,21 @@ Der Standardweg ist **ein einziger Python-Aufruf**:
 python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run --question "FRAGE"
 ```
 
+Fuer einen bestehenden Chat, der **nur gelesen** und als Markdown gespeichert werden soll:
+
+```bash
+python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py read-chat \
+  --chat-url "https://chatgpt.com/c/CHAT-ID"
+```
+
+Nur die **letzte ChatGPT-Ausgabe** statt des kompletten Chats:
+
+```bash
+python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py read-chat \
+  --chat-url "https://chatgpt.com/c/CHAT-ID" \
+  --last-output
+```
+
 Fuer eine echte Folgefrage im zuletzt erfolgreichen Chat:
 
 ```bash
@@ -40,6 +55,7 @@ Das Script uebernimmt:
 - Readiness-Loop bis die Texteingabe wirklich wieder verfuegbar ist
 - Prompt senden
 - Antwort pollend auf Vollstaendigkeit pruefen
+- bestehende Chats read-only oeffnen und den sichtbaren Verlauf exportieren
 - Abschluss nur nach echtem Ruhefenster und Mindestinhalt erkennen
 - bei Research-Laeufen bis zu **30 Minuten** auf die Antwort warten
 - genau **einen** Prompt pro Lauf, ohne automatischen Follow-up
@@ -59,6 +75,7 @@ Globaler Schutz:
 
 - User moechte eine **Frage an ChatGPT** stellen
 - User moechte eine **ChatGPT-Antwort als Markdown** speichern
+- User gibt eine **ChatGPT-Chat-URL** vor und moechte den bestehenden Chat nur lesen
 - Keywords: `frage ChatGPT`, `ChatGPT Research`, `was sagt ChatGPT`, `ChatGPT antworten lassen`
 
 ## Wann NICHT verwenden?
@@ -105,6 +122,31 @@ python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run \
   --question "FRAGE" \
   --output tmp/DATEINAME.md
 ```
+
+### 1b. Bestehenden Chat read-only exportieren
+
+Standard: **kompletter sichtbarer Chat** in chronologischer Reihenfolge.
+
+```bash
+python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py read-chat \
+  --chat-url "https://chatgpt.com/c/CHAT-ID" \
+  --output tmp/DATEINAME.md
+```
+
+Nur die letzte ChatGPT-Antwort:
+
+```bash
+python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py read-chat \
+  --chat-url "https://chatgpt.com/c/CHAT-ID" \
+  --last-output \
+  --output tmp/DATEINAME.md
+```
+
+Wichtig:
+- Ohne `--last-output` wird der **komplette sichtbare Chat** exportiert.
+- Mit `--last-output` wird **nur die letzte ChatGPT-Ausgabe** exportiert.
+- Es wird **kein Prompt** abgeschickt.
+- Der Markdown-Titel nutzt die bestehende Chat-Bezeichnung aus ChatGPT; falls diese nicht lesbar ist, wird auf die Chat-ID aus der URL zurueckgefallen.
 
 Wichtige Optionen:
 

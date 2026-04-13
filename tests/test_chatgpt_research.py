@@ -77,7 +77,7 @@ def test_load_playwright_server_config_reads_workspace_and_env(tmp_path: Path, m
     cfg = mod._load_playwright_server_config()
 
     assert cfg.command.lower().endswith("npx.cmd")
-    assert cfg.args == ["@playwright/mcp@latest", "--extension"]
+    assert cfg.args == ["-y", "@playwright/mcp@latest", "--extension"]
     assert cfg.env["PLAYWRIGHT_MCP_EXTENSION_TOKEN"] == "token-123"
     assert cfg.env["ROOT"] == str(mod.PROJECT_ROOT)
 
@@ -104,6 +104,71 @@ def test_write_markdown_from_html_handles_wrapped_evaluate_output(tmp_path: Path
     assert "- One" in content
     assert "- Two" in content
     assert output_file.read_text(encoding="utf-8") == content
+
+
+def test_write_markdown_from_chat_export_writes_full_conversation(tmp_path: Path):
+    output_file = tmp_path / "chat.md"
+
+    out_path, content = mod._write_markdown_from_chat_export(
+        {
+            "url": "https://chatgpt.com/c/abc123",
+            "title": "Bestehender Chat",
+            "messages": [
+                {"role": "user", "html": "<p>Bitte prüfe XYZ</p>", "text": "Bitte prüfe XYZ"},
+                {"role": "assistant", "html": "<p>Analyse abgeschlossen</p>", "text": "Analyse abgeschlossen"},
+            ],
+        },
+        output_file,
+        last_output=False,
+    )
+
+    assert out_path == output_file
+    assert content.startswith("# Bestehender Chat")
+    assert "## User" in content
+    assert "## ChatGPT" in content
+    assert "Bitte prüfe XYZ" in content
+    assert "Analyse abgeschlossen" in content
+
+
+def test_write_markdown_from_chat_export_last_output_only_keeps_last_assistant(tmp_path: Path):
+    output_file = tmp_path / "chat.md"
+
+    _, content = mod._write_markdown_from_chat_export(
+        {
+            "url": "https://chatgpt.com/c/abc123",
+            "title": "Bestehender Chat",
+            "messages": [
+                {"role": "user", "html": "<p>Frage 1</p>", "text": "Frage 1"},
+                {"role": "assistant", "html": "<p>Antwort 1</p>", "text": "Antwort 1"},
+                {"role": "user", "html": "<p>Frage 2</p>", "text": "Frage 2"},
+                {"role": "assistant", "html": "<p>Antwort 2</p>", "text": "Antwort 2"},
+            ],
+        },
+        output_file,
+        last_output=True,
+    )
+
+    assert "## User" not in content
+    assert "Antwort 1" not in content
+    assert "Antwort 2" in content
+
+
+def test_write_markdown_from_chat_export_uses_chat_id_fallback_title(tmp_path: Path):
+    output_file = tmp_path / "chat.md"
+
+    _, content = mod._write_markdown_from_chat_export(
+        {
+            "url": "https://chatgpt.com/c/69dd2bd0-5dfc-8385-9ae3-63e503e2248b",
+            "title": "",
+            "messages": [
+                {"role": "assistant", "html": "<p>Antwort</p>", "text": "Antwort"},
+            ],
+        },
+        output_file,
+        last_output=True,
+    )
+
+    assert content.startswith("# ChatGPT Chat 69dd2bd0-5dfc-8385-9ae3-63e503e2248b")
 
 
 @pytest.mark.parametrize(
@@ -401,7 +466,10 @@ def test_poll_for_completed_message_prints_wait_message_to_stdout(monkeypatch, c
     )
 
     captured = capsys.readouterr()
-    assert captured.out.strip() == mod.RUN_WAIT_MESSAGE
+    assert captured.out.splitlines() == [
+        "ChatGPT recherchiert noch (1:01 / max 3 Min.), bitte warten...",
+        "ChatGPT recherchiert noch (1:02 / max 3 Min.), bitte warten...",
+    ]
     assert captured.err == ""
     assert state["assistantCount"] == 1
 
@@ -545,8 +613,8 @@ def test_cmd_run_success_prints_wait_message_and_final_ok(monkeypatch, tmp_path,
     captured = capsys.readouterr()
     assert captured.out.splitlines() == [
         mod.RUN_OPENING_MESSAGE,
-        mod.RUN_PROMPT_SENT_MESSAGE,
-        mod.RUN_WAIT_MESSAGE,
+        "Prompt abgeschickt, warte auf Antwort (max 3 Min.)...",
+        "ChatGPT recherchiert noch (0:00 / max 3 Min.), bitte warten...",
         f"OK: {output} (4 Zeichen)",
     ]
     assert captured.err == ""
@@ -656,6 +724,99 @@ def test_cmd_run_follow_up_uses_saved_url(monkeypatch, tmp_path, capsys):
     assert ("browser_tabs", {"action": "close", "index": 0}) in dummy_client.calls
 
 
+def test_cmd_read_chat_exports_full_chat_without_prompt_submission(monkeypatch, tmp_path, capsys):
+    output = tmp_path / "chat.md"
+    dummy_client = _make_dummy_client()
+    saved: list[tuple[str, Path]] = []
+
+    monkeypatch.setattr(mod, "_load_playwright_server_config", lambda: object())
+    monkeypatch.setattr(
+        mod,
+        "_start_client_and_fetch_state",
+        lambda config, chat_url: (
+            dummy_client,
+            [],
+            {"hasTextbox": True, "assistantCount": 2},
+            0,
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_extract_chat_export",
+        lambda client: {
+            "url": "https://chatgpt.com/c/existing-chat",
+            "title": "Bestehender Chat",
+            "messages": [
+                {"role": "user", "html": "<p>Frage</p>", "text": "Frage"},
+                {"role": "assistant", "html": "<p>Antwort</p>", "text": "Antwort"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        mod,
+        "_save_followup_state",
+        lambda url, out_path: saved.append((url, out_path)),
+    )
+
+    mod.cmd_read_chat(
+        mod.ReadChatOptions(
+            chat_url="https://chatgpt.com/c/existing-chat",
+            output=output,
+            last_output=False,
+        )
+    )
+
+    captured = capsys.readouterr()
+    assert captured.out.splitlines() == [
+        mod.RUN_READ_CHAT_OPENING_MESSAGE,
+        f"OK: {output} ({len(output.read_text(encoding='utf-8'))} Zeichen)",
+    ]
+    assert saved == [("https://chatgpt.com/c/existing-chat", output)]
+    assert "## User" in output.read_text(encoding="utf-8")
+    assert "## ChatGPT" in output.read_text(encoding="utf-8")
+    assert ("browser_tabs", {"action": "list"}) in dummy_client.calls
+    assert ("browser_tabs", {"action": "close", "index": 0}) in dummy_client.calls
+
+
+def test_cmd_read_chat_last_output_omits_previous_messages(monkeypatch, tmp_path):
+    output = tmp_path / "chat.md"
+
+    monkeypatch.setattr(mod, "_load_playwright_server_config", lambda: object())
+    monkeypatch.setattr(
+        mod,
+        "_start_client_and_fetch_state",
+        lambda config, chat_url: (type("Dummy", (), {"close": lambda self: None})(), [], {"hasTextbox": True}, 0),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_extract_chat_export",
+        lambda client: {
+            "url": "https://chatgpt.com/c/existing-chat",
+            "title": "Bestehender Chat",
+            "messages": [
+                {"role": "user", "html": "<p>Frage 1</p>", "text": "Frage 1"},
+                {"role": "assistant", "html": "<p>Antwort 1</p>", "text": "Antwort 1"},
+                {"role": "user", "html": "<p>Frage 2</p>", "text": "Frage 2"},
+                {"role": "assistant", "html": "<p>Antwort 2</p>", "text": "Antwort 2"},
+            ],
+        },
+    )
+    monkeypatch.setattr(mod, "_close_chat_tab_safely", lambda client: None)
+
+    mod.cmd_read_chat(
+        mod.ReadChatOptions(
+            chat_url="https://chatgpt.com/c/existing-chat",
+            output=output,
+            last_output=True,
+        )
+    )
+
+    content = output.read_text(encoding="utf-8")
+    assert "## User" not in content
+    assert "Antwort 1" not in content
+    assert "Antwort 2" in content
+
+
 def test_main_run_defaults_to_thinking(monkeypatch, tmp_path):
     captured: dict[str, object] = {}
 
@@ -679,6 +840,32 @@ def test_main_run_defaults_to_thinking(monkeypatch, tmp_path):
     assert isinstance(options, mod.RunOptions)
     assert options.thinking is True
     assert options.follow_up is False
+
+
+def test_main_read_chat_sets_last_output(monkeypatch, tmp_path):
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        mod.sys,
+        "argv",
+        [
+            "chatgpt_research.py",
+            "read-chat",
+            "--chat-url",
+            "https://chatgpt.com/c/existing-chat",
+            "--last-output",
+            "--output",
+            str(tmp_path / "chat.md"),
+        ],
+    )
+    monkeypatch.setattr(mod, "cmd_read_chat", lambda options: captured.setdefault("options", options))
+
+    mod.main()
+
+    options = captured["options"]
+    assert isinstance(options, mod.ReadChatOptions)
+    assert options.last_output is True
+    assert options.chat_url == "https://chatgpt.com/c/existing-chat"
 
 
 def test_main_run_sets_follow_up(monkeypatch, tmp_path):
