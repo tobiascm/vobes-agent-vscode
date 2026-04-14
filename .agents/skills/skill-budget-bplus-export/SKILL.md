@@ -147,9 +147,45 @@ Kurzregel:
 
 ### Tabellen-Uebersicht
 
+> **Wichtig — Verwechslungsgefahr `btl`-Spalten:**
+> - `bm_number` = BM-Nr (beginnt mit 66..., z.B. 66449731) — Bestellnummer
+> - `dev_order` = EA-Nummer (z.B. 0043932) — Entwicklungsauftrag
+> - Wenn der User nach "BM-Nr" fragt, ist IMMER `bm_number` gemeint, NICHT `dev_order`.
+
+#### `btl` / `btl_all` — Beschaffungsvorgaenge (BMs)
+
+`btl` = nur EKEK/1, `btl_all` = alle OEs. Beide haben identische Spalten.
+
+| Spalte | Typ | Beschreibung | Beispiel |
+|---|---|---|---|
+| `concept` | TEXT | Konzeptnummer (interner Vorgang) | 830076 |
+| `ea` | TEXT | EA-Titel / Projektbezeichnung | SSP31F (ohne Module) |
+| `title` | TEXT | BM-Titel | VOBES TE-PMT Mechanikentw.: 26-011 Q1/2026 |
+| `status` | TEXT | Workflow-Status | 07_In Planen-BM: Bestellt |
+| `planned_value` | INTEGER | Planwert in EUR | 130579 |
+| `org_unit` | TEXT | Organisationseinheit | EKEK/1 |
+| `company` | TEXT | Lieferant / Firma | 4SOFT GMBH MUENCHEN |
+| `creator` | TEXT | Ersteller | Bartels Timo |
+| `bm_number` | TEXT | **BM-Nr** (Bestellnummer, 66...) | 66449731 |
+| `az_number` | TEXT | AZ-Nummer (Aktenzeichen, 85...) | 85063936 |
+| `projektfamilie` | TEXT | Projektfamilie | SSP, MEB, SDV |
+| `dev_order` | TEXT | **EA-Nummer** (Entwicklungsauftrag) | 0043932 |
+| `bm_text` | TEXT | BM-Freitext / Begruendung | Bordnetz Freigabepruefung... |
+| `last_updated` | TEXT | Letztes Update | 2026-04-13 |
+| `category` | TEXT | Kategorie | K1 |
+| `cost_type` | TEXT | Kostenart | FL/KnowHow |
+| `quantity` | TEXT | Menge | 1 |
+| `unit` | TEXT | Einheit | Stueck |
+| `supplier_number` | TEXT | Lieferantennummer | 00006302/00 |
+| `first_signature` | TEXT | Erste Unterschrift | Kuehne Rainer |
+| `second_signature` | TEXT | Zweite Unterschrift | Specht Bodo |
+| `target_date` | TEXT | Zieldatum | 2026-06-30 |
+| `invoices` | REAL | Rechnungsbetrag in EUR | 9979.52 |
+
+#### Weitere Tabellen
+
 | Tabelle | Inhalt | Wichtige Spalten |
 |---|---|---|
-| `btl` | Beschaffungsvorgaenge (BMs) | concept, dev_order, ea, title, planned_value, company, status, creator |
 | `devorder` | Entwicklungsauftraege (EAs) | ea_number, title, project_family, date_from, date_until, controller |
 | `el_planning` | Eigenleistungsplanung | user_name, ea_number, pct_jan..pct_dec, year_work_hours, hourly_rate |
 | `stundensaetze` | Stundensaetze pro KST/OE | jahr, kst, oe, stundensatz |

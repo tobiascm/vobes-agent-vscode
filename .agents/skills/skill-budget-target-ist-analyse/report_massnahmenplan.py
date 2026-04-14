@@ -14,8 +14,10 @@ import os
 import re
 import subprocess
 import sys
+from collections import defaultdict
 from copy import copy
 from dataclasses import dataclass, field
+from typing import Any
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XLImage
@@ -31,6 +33,18 @@ TARGET_CSV = os.path.join(VORGABEN_DIR, "target.csv")
 STATUS_CSV = os.path.join(SCRIPT_DIR, "status_mapping.csv")
 PRAEMISSEN_MD = os.path.join(VORGABEN_DIR, "praemissen.md")
 TARGET_IMAGE = os.path.join(VORGABEN_DIR, "target.png")
+SPECIAL_RULES_XLSX = os.path.join(REPO_ROOT, "userdata", "planning", "budget_sondervereinbarungen_ekek1.xlsx")
+PLANNING_SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts", "budget")
+if PLANNING_SCRIPTS_DIR not in sys.path:
+    sys.path.insert(0, PLANNING_SCRIPTS_DIR)
+
+from beauftragungsplanung_core import (  # noqa: E402
+    COMPANY_ALIAS_FALLBACKS,
+    _detect_special_cadence,
+    _extract_allowed_company_tokens,
+    _extract_priority_tokens,
+    _resolve_company_tokens,
+)
 
 PDF_CSS = """
 body {
@@ -109,6 +123,564 @@ def load_praemissen() -> str:
     """Liest praemissen.md als String."""
     with open(PRAEMISSEN_MD, encoding="utf-8") as f:
         return f.read().strip()
+
+
+MONTH_COLUMNS = (
+    "pct_jan",
+    "pct_feb",
+    "pct_mar",
+    "pct_apr",
+    "pct_may",
+    "pct_jun",
+    "pct_jul",
+    "pct_aug",
+    "pct_sep",
+    "pct_oct",
+    "pct_nov",
+    "pct_dec",
+)
+SPECIAL_STATUS_HEADERS = {"EL DIFF", "IO/nIO"}
+
+
+def _normalize_ea_key(value: Any) -> str:
+    digits = re.sub(r"[^0-9]", "", str(value or ""))
+    if not digits:
+        return ""
+    return digits.lstrip("0") or "0"
+
+
+def _parse_number_text(text: str) -> float | None:
+    cleaned = text.strip()
+    if not cleaned:
+        return None
+    if re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+(?:,\d+)?", cleaned):
+        return float(cleaned.replace(".", "").replace(",", "."))
+    if re.fullmatch(r"-?\d+(?:,\d+)?", cleaned):
+        return float(cleaned.replace(",", "."))
+    if re.fullmatch(r"-?\d+\.\d+", cleaned):
+        return float(cleaned)
+    return None
+
+
+def _parse_te_value(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    text = str(raw).strip()
+    if not text or text in {"-", "–"}:
+        return None
+    text = text.replace("T€", "").replace("€", "").replace(" ", "")
+    if text.startswith("="):
+        parts = [part for part in text[1:].split("+") if part]
+        if parts:
+            values = [_parse_te_value(part) for part in parts]
+            if any(value is None for value in values):
+                return None
+            return sum(value for value in values if value is not None)
+    return _parse_number_text(text)
+
+
+def _parse_hour_value(raw: Any) -> float | None:
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if not text or text in {"-", "–"}:
+        return None
+    text = text.removesuffix("h").replace(" ", "")
+    if re.fullmatch(r"\d{1,3}(?:\.\d{3})+", text):
+        return float(text.replace(".", ""))
+    return _parse_number_text(text)
+
+
+def _parse_el_target(raw: Any) -> dict[str, Any]:
+    text = str(raw or "").strip()
+    if not text or text in {"-", "–"}:
+        return {"mode": "none", "value": None, "display": "-"}
+    if text.lower().endswith("h"):
+        hours = _parse_hour_value(text)
+        if hours is None:
+            return {"mode": "manual", "value": None, "display": text}
+        return {"mode": "hours", "value": hours, "display": text}
+    te_value = _parse_te_value(raw)
+    if te_value is None:
+        return {"mode": "manual", "value": None, "display": text}
+    if te_value >= 1000 and "€" not in text.upper():
+        return {"mode": "manual", "value": None, "display": text}
+    return {"mode": "te", "value": te_value, "display": text}
+
+
+def load_special_rule_rows(path: str, known_companies: list[str]) -> list[dict[str, Any]]:
+    if not os.path.isfile(path):
+        return []
+
+    workbook = load_workbook(path, data_only=True)
+    ws = workbook.active
+    required = {"Thema", "EA", "EL", "FL", "Bemerkung", "Hinweise für autom. Auslegung"}
+    header_row = None
+    header_map: dict[str, int] = {}
+
+    for row_idx in range(1, ws.max_row + 1):
+        values = {
+            str(ws.cell(row_idx, col_idx).value).strip(): col_idx
+            for col_idx in range(1, ws.max_column + 1)
+            if ws.cell(row_idx, col_idx).value is not None
+        }
+        if required.issubset(values):
+            header_row = row_idx
+            header_map = values
+            break
+
+    if header_row is None:
+        return []
+
+    rules: list[dict[str, Any]] = []
+    for row_idx in range(header_row + 1, ws.max_row + 1):
+        topic = str(ws.cell(row_idx, header_map["Thema"]).value or "").strip()
+        if not topic:
+            continue
+        raw_ea = ws.cell(row_idx, header_map["EA"]).value
+        raw_ea_text = str(raw_ea or "").strip()
+        ea_keys = [
+            key
+            for key in (_normalize_ea_key(part) for part in re.split(r"[\n,;]+", raw_ea_text))
+            if key
+        ]
+        remark = str(ws.cell(row_idx, header_map["Bemerkung"]).value or "").strip()
+        notes = str(ws.cell(row_idx, header_map["Hinweise für autom. Auslegung"]).value or "").strip()
+        cadence_type = _detect_special_cadence(topic, remark, notes)
+        allowed_companies, _ = _resolve_company_tokens(_extract_allowed_company_tokens(notes), known_companies)
+        priority_companies, _ = _resolve_company_tokens(_extract_priority_tokens(notes), known_companies)
+        rules.append(
+            {
+                "topic": topic,
+                "ea_display": ", ".join(
+                    part.strip() for part in re.split(r"[\n,;]+", raw_ea_text) if part.strip()
+                ) or raw_ea_text,
+                "ea_keys": ea_keys,
+                "fl_target_te": _parse_te_value(ws.cell(row_idx, header_map["FL"]).value),
+                "el_target": _parse_el_target(ws.cell(row_idx, header_map["EL"]).value),
+                "remark": remark,
+                "notes": notes,
+                "cadence_type": cadence_type,
+                "allowed_companies": allowed_companies,
+                "priority_companies": priority_companies,
+            }
+        )
+    return rules
+
+
+def _annual_target_for_cadence(base_target: float | None, cadence_type: str) -> float | None:
+    if base_target is None:
+        return None
+    if cadence_type == "quarterly_tranche_exact":
+        return base_target * 4
+    if cadence_type == "semiannual_tranche_exact":
+        return base_target * 2
+    return base_target
+
+
+def _period_target_for_cadence(base_target: float | None, cadence_type: str, num_q: int) -> float | None:
+    annual_target = _annual_target_for_cadence(base_target, cadence_type)
+    if annual_target is None:
+        return None
+    if cadence_type == "quarterly_tranche_exact":
+        return base_target * num_q if base_target is not None else None
+    if cadence_type == "semiannual_tranche_exact":
+        if num_q < 2:
+            return 0.0
+        if num_q < 4:
+            return base_target
+        return (base_target or 0.0) * 2
+    return annual_target * num_q / 4
+
+
+def _values_match(actual: float, target: float, *, tolerance: float = 0.1) -> bool:
+    return abs(actual - target) <= tolerance
+
+
+def _status_text(value: bool | None) -> str:
+    if value is None:
+        return "-"
+    return "OK" if value else "X"
+
+
+def _io_text(value: bool | None) -> str:
+    if value is None:
+        return "-"
+    return "IO" if value else "nIO"
+
+
+def _diff_band_status(actual: float, target: float | None, *, warn_ratio: float = 0.10, ok_ratio: float = 0.01) -> str:
+    if target is None:
+        return "-"
+    if abs(target) <= 0.1:
+        return "OK" if abs(actual - target) <= 0.1 else "X"
+    ratio = abs(actual - target) / abs(target)
+    if ratio < ok_ratio:
+        return "OK"
+    if ratio <= warn_ratio:
+        return "WARN"
+    return "X"
+
+
+_BAND_SEVERITY = {"-": 0, "OK": 1, "WARN": 2, "X": 3}
+
+
+def _worst_band(*bands: str) -> str:
+    applicable = [b for b in bands if b != "-"]
+    if not applicable:
+        return "-"
+    return max(applicable, key=lambda b: _BAND_SEVERITY.get(b, 0))
+
+
+def _band_to_io(band: str) -> str:
+    if band == "-":
+        return "-"
+    return "IO" if band == "OK" else "nIO"
+
+
+def _evaluate_hint_status(hint: str, ctx: dict) -> str:
+    h = hint.lower()
+
+    # Rule 1: "EL und FL müssen exakt passen!"
+    if "el und fl müssen exakt passen" in h or "el und fl müssen exakt passen" in h.replace("ü", "ue"):
+        return _band_to_io(ctx["year_band"])
+
+    # Rule 2: "FL muss exakt passen!" (without "el und fl")
+    if "fl muss exakt passen" in h or "fl muss exakt passen" in h.replace("ü", "ue"):
+        return _band_to_io(ctx["year_band"])
+
+    # Rule 3: "EL und FL dürfen nur Quartalsweise beauftragen..."
+    if "quartalsweise" in h and "beauftrag" in h:
+        worst = _worst_band(ctx["quarter_band"], ctx["el_period_band"])
+        return _band_to_io(worst)
+
+    # Rule 4a: "Werte für 1. HJ müssen auch wirklich im 1.HJ beauftragt werden"
+    # Entire annual budget must be ordered in Q1-2 → compare period actual vs annual target
+    if "1. hj" in h and "beauftragt" in h:
+        band = _diff_band_status(ctx["fl_period_te"], ctx.get("fl_target_annual"))
+        return _band_to_io(band)
+
+    # Rule 4b: "EL und FL müssen hier pro Halbjahr beauftragt werden"
+    if "halbjahr" in h and "beauftragt" in h:
+        return _band_to_io(ctx["quarter_band"])
+
+    # Rule 5: "EL kann niedriger sein, darf aber auf keinen Fall höher sein."
+    if "kann niedriger" in h:
+        el_target = ctx.get("el_annual_target")
+        el_actual = ctx.get("el_actual_annual", 0.0)
+        if el_target is None or el_target == 0:
+            return "-"
+        if el_actual <= el_target:
+            return "IO"
+        ratio = (el_actual - el_target) / abs(el_target)
+        if ratio <= 0.01:
+            return "IO"
+        if ratio <= 0.10:
+            return "WARN"
+        return "nIO"
+
+    # Rule 6: "Folgende Firmen können auf ... buchen: ... in genau dieser Priorität."
+    if "folgende firmen" in h and ("priorität" in h or "priorit" in h):
+        checks = [ctx.get("allowed_company_ok"), ctx.get("priority_order_ok")]
+        applicable = [c for c in checks if c is not None]
+        if not applicable:
+            return "-"
+        return "IO" if all(applicable) else "nIO"
+
+    # Rule 7: "Nur für ..."
+    if h.startswith("nur für ") or h.startswith("nur f\u00fcr ") or h.startswith("nur fuer "):
+        val = ctx.get("allowed_company_ok")
+        return _io_text(val)
+
+    # Rule 8: "Achtung: 4soft kann nur auf PMT und Digi-budget gebucht werden!"
+    if "4soft kann nur" in h:
+        val = ctx.get("four_soft_ok")
+        return _io_text(val)
+
+    # Rule 9: "Hier nur FL buchen."
+    if "hier nur fl buchen" in h:
+        el_actual = ctx.get("el_actual_annual", 0.0)
+        return "IO" if abs(el_actual) <= 0.1 else "nIO"
+
+    # Rule 10: "Nur EL. Keine FL."
+    if "nur el" in h and "keine fl" in h:
+        fl_actual = ctx.get("fl_actual_sum", 0.0)
+        return "IO" if abs(fl_actual) <= 0.1 else "nIO"
+
+    # Rule 11: "FL kann am Stück beauftragt werden..." (explicit exemption)
+    if "am stück beauftragt" in h or "am stueck beauftragt" in h or "am st\u00fcck" in h:
+        return "IO"
+
+    # Rule 3b: "pro Quartal beauftragt werden" / "pro por Quartal" (typo variant)
+    if ("pro quartal" in h or "pro por quartal" in h) and "beauftragt" in h:
+        worst = _worst_band(ctx["quarter_band"], ctx["el_period_band"])
+        return _band_to_io(worst)
+
+    # Fallback: unmatched hint
+    return "-"
+
+
+def _load_el_aggregates(year: int, num_q: int) -> dict[str, dict[str, float]]:
+    period_columns = MONTH_COLUMNS[: num_q * 3]
+    year_expr = " + ".join(f"COALESCE({column}, 0)" for column in MONTH_COLUMNS)
+    period_expr = " + ".join(f"COALESCE({column}, 0)" for column in period_columns) or "0"
+    sql = f"""
+        SELECT
+            ea_number,
+            ROUND(SUM((({year_expr}) / 1200.0) * year_work_hours), 2) AS year_hours,
+            ROUND(SUM((({period_expr}) / 1200.0) * year_work_hours), 2) AS period_hours,
+            ROUND(SUM((({year_expr}) / 1200.0) * year_work_hours * hourly_rate) / 1000.0, 2) AS year_te,
+            ROUND(SUM((({period_expr}) / 1200.0) * year_work_hours * hourly_rate) / 1000.0, 2) AS period_te
+        FROM el_planning
+        GROUP BY ea_number
+    """
+    try:
+        rows = run_sql(sql, year)
+    except BaseException:
+        return {}
+    aggregates: dict[str, dict[str, float]] = {}
+    for row in rows:
+        key = _normalize_ea_key(row.get("ea_number"))
+        if not key:
+            continue
+        aggregates[key] = {
+            "year_hours": float(row.get("year_hours") or 0),
+            "period_hours": float(row.get("period_hours") or 0),
+            "year_te": float(row.get("year_te") or 0),
+            "period_te": float(row.get("period_te") or 0),
+        }
+    return aggregates
+
+
+def build_special_rule_section(
+    *,
+    year: int,
+    num_q: int,
+    q_label: str,
+    rows: list[dict],
+    status_map: dict[str, str],
+) -> Any:
+    ea_budget: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {
+            "count": 0,
+            "sum_eur": 0,
+            "bestellt_eur": 0,
+            "durchlauf_eur": 0,
+            "konzept_eur": 0,
+            "storniert_eur": 0,
+            "companies": defaultdict(int),
+        }
+    )
+    known_companies: set[str] = set()
+    for row in rows:
+        ea_key = _normalize_ea_key(row.get("dev_order") or row.get("ea_number") or row.get("ea"))
+        if not ea_key:
+            continue
+        pv = int(float(row.get("planned_value", "0") or 0))
+        company = row.get("company", "")
+        title = row.get("title", "")
+        bm_text = row.get("bm_text", "")
+        status_label = status_map.get(row.get("status", ""), "")
+        reporting_company = _reporting_company(classify_bm(company, title, bm_text), company)
+        summary = ea_budget[ea_key]
+        summary["count"] += 1
+        summary["sum_eur"] += pv
+        summary["companies"][reporting_company] += pv
+        known_companies.add(reporting_company)
+        if status_label == "bestellt":
+            summary["bestellt_eur"] += pv
+        elif status_label == "im Durchlauf":
+            summary["durchlauf_eur"] += pv
+        elif status_label == "Konzept":
+            summary["konzept_eur"] += pv
+        elif status_label == "storniert":
+            summary["storniert_eur"] += pv
+
+    special_rules = load_special_rule_rows(SPECIAL_RULES_XLSX, sorted(known_companies))
+    if not special_rules:
+        return None
+
+    el_aggregates = _load_el_aggregates(year, num_q)
+    pmt_or_digi_eas = {
+        ea_key
+        for rule in special_rules
+        if "PMT" in rule["topic"].upper() or "DIGI-BUDGET" in rule["topic"].upper()
+        for ea_key in rule["ea_keys"]
+    }
+    rows_out: list[TableRow] = []
+
+    for rule in special_rules:
+        totals = {
+            "count": 0,
+            "sum_te": 0.0,
+            "bestellt_te": 0.0,
+            "durchlauf_te": 0.0,
+            "konzept_te": 0.0,
+            "storniert_te": 0.0,
+            "period_te": 0.0,
+            "el_year_hours": 0.0,
+            "el_period_hours": 0.0,
+            "el_year_te": 0.0,
+            "el_period_te": 0.0,
+        }
+        company_totals: dict[str, int] = defaultdict(int)
+        for ea_key in rule["ea_keys"]:
+            budget_row = ea_budget.get(ea_key)
+            if budget_row:
+                totals["count"] += int(budget_row["count"])
+                totals["sum_te"] += budget_row["sum_eur"] / 1000
+                totals["bestellt_te"] += budget_row["bestellt_eur"] / 1000
+                totals["durchlauf_te"] += budget_row["durchlauf_eur"] / 1000
+                totals["konzept_te"] += budget_row["konzept_eur"] / 1000
+                totals["storniert_te"] += budget_row["storniert_eur"] / 1000
+                for company, value in budget_row["companies"].items():
+                    company_totals[company] += value
+            el_row = el_aggregates.get(ea_key)
+            if el_row:
+                totals["el_year_hours"] += el_row["year_hours"]
+                totals["el_period_hours"] += el_row["period_hours"]
+                totals["el_year_te"] += el_row["year_te"]
+                totals["el_period_te"] += el_row["period_te"]
+        totals["period_te"] = totals["bestellt_te"] + totals["durchlauf_te"]
+
+        fl_target_annual = _annual_target_for_cadence(rule["fl_target_te"], rule["cadence_type"])
+        fl_target_period = _period_target_for_cadence(rule["fl_target_te"], rule["cadence_type"], num_q)
+        year_band = _diff_band_status(totals["sum_te"], fl_target_annual)
+        quarter_band = _diff_band_status(totals["period_te"], fl_target_period)
+        year_ok = None if fl_target_annual is None else year_band == "OK"
+        quarter_ok = None if fl_target_period is None else quarter_band == "OK"
+
+        el_diff_display = "-"
+        el_diff_band = "-"
+        el_period_band = "-"
+        el_annual_target: float | None = None
+        el_actual_annual: float = 0.0
+        el_mode = rule["el_target"]["mode"]
+        if el_mode in {"hours", "te"}:
+            el_actual_annual = totals["el_year_hours"] if el_mode == "hours" else totals["el_year_te"]
+            actual_period = totals["el_period_hours"] if el_mode == "hours" else totals["el_period_te"]
+            el_base_target = rule["el_target"]["value"]
+            if el_base_target is not None:
+                el_annual_target = _annual_target_for_cadence(el_base_target, rule["cadence_type"])
+                el_period_target = _period_target_for_cadence(el_base_target, rule["cadence_type"], num_q)
+                if el_annual_target is not None:
+                    if el_mode == "hours":
+                        el_diff_display = delta_hours_fmt(el_actual_annual - el_annual_target)
+                    else:
+                        el_diff_display = delta_fmt(el_actual_annual - el_annual_target)
+                if el_annual_target is not None:
+                    el_diff_band = _diff_band_status(el_actual_annual, el_annual_target)
+                el_period_band = _diff_band_status(actual_period, el_period_target)
+
+        active_companies = {
+            company
+            for company, value in company_totals.items()
+            if abs(value) > 0
+        }
+        allowed_company_ok: bool | None = None
+        if rule["allowed_companies"]:
+            allowed_company_ok = active_companies.issubset(set(rule["allowed_companies"]))
+        priority_order_ok: bool | None = None
+        if rule["priority_companies"]:
+            rank_map = {company: idx for idx, company in enumerate(rule["priority_companies"], start=1)}
+            active_ranks = sorted(rank_map[company] for company in active_companies if company in rank_map)
+            priority_order_ok = active_ranks == list(range(1, len(active_ranks) + 1))
+        four_soft_ok: bool | None = None
+        four_soft = COMPANY_ALIAS_FALLBACKS["4SOFT"]
+        if four_soft in active_companies:
+            four_soft_ok = set(rule["ea_keys"]).issubset(pmt_or_digi_eas)
+
+        ctx = {
+            "year_band": year_band,
+            "quarter_band": quarter_band,
+            "el_diff_band": el_diff_band,
+            "el_period_band": el_period_band,
+            "el_annual_target": el_annual_target,
+            "el_actual_annual": el_actual_annual,
+            "el_mode": el_mode,
+            "allowed_company_ok": allowed_company_ok,
+            "priority_order_ok": priority_order_ok,
+            "four_soft_ok": four_soft_ok,
+            "fl_actual_sum": totals["sum_te"],
+            "fl_target_annual": fl_target_annual,
+            "fl_period_te": totals["period_te"],
+        }
+
+        base_values = [
+            rule["topic"],
+            rule["ea_display"] or "-",
+            fmt(fl_target_annual) if fl_target_annual is not None else "-",
+            fmt(totals["sum_te"]),
+            delta_fmt(totals["sum_te"] - fl_target_annual) if fl_target_annual is not None else "-",
+            fmt(fl_target_period) if fl_target_period is not None else "-",
+            fmt(totals["bestellt_te"]),
+            fmt(totals["durchlauf_te"]),
+            fmt(totals["konzept_te"]),
+            el_diff_display,
+            delta_fmt(totals["period_te"] - fl_target_period) if fl_target_period is not None else "-",
+            rule["remark"],
+        ]
+
+        hints = [h.strip() for h in rule["notes"].split("\n") if h.strip()]
+        if not hints:
+            rows_out.append(
+                TableRow(
+                    base_values + ["-", "-"],
+                    cell_statuses={
+                        "DIFF Ges.": year_band,
+                        f"DIFF {q_label}": quarter_band,
+                        "EL DIFF": el_diff_band,
+                        "IO/nIO": "-",
+                    },
+                )
+            )
+        else:
+            for hint_idx, hint_text in enumerate(hints):
+                hint_status = _evaluate_hint_status(hint_text, ctx)
+                if hint_idx == 0:
+                    rows_out.append(
+                        TableRow(
+                            base_values + [hint_text, hint_status],
+                            cell_statuses={
+                                "DIFF Ges.": year_band,
+                                f"DIFF {q_label}": quarter_band,
+                                "EL DIFF": el_diff_band,
+                                "IO/nIO": hint_status,
+                            },
+                        )
+                    )
+                else:
+                    rows_out.append(
+                        TableRow(
+                            [""] * 12 + [hint_text, hint_status],
+                            cell_statuses={"IO/nIO": hint_status},
+                        )
+                    )
+
+    return TableSection(
+        title="Sondervereinbarungen",
+        headers=[
+            "Thema",
+            "EA",
+            "Soll",
+            "Ist",
+            "DIFF Ges.",
+            f"Soll {q_label}",
+            "bestellt",
+            "im Durchlauf",
+            "01 Erstellung",
+            "EL DIFF",
+            f"DIFF {q_label}",
+            "Bemerkung",
+            "Hinweise",
+            "IO/nIO",
+        ],
+        rows=rows_out,
+        align_right={1, 2, 3, 4, 5, 6, 7, 8, 10},
+        body_row_height=15,
+    )
 
 
 def write_pdf_beside_markdown(md_file: str) -> str | None:
@@ -198,14 +770,15 @@ def classify_bm(company: str, title: str, bm_text: str = "") -> str:
 
 def run_sql(sql: str, year: int) -> list[dict]:
     """Führt SQL über budget_db.py aus und parst die Markdown-Tabelle."""
+    # Multiline SQL auf eine Zeile normalisieren (Windows subprocess-Kompatibilität)
+    sql_oneline = " ".join(sql.split())
     cmd = [
-        sys.executable, BUDGET_DB, "query", sql,
+        sys.executable, BUDGET_DB, "query", sql_oneline,
         "--stdout", "--no-file", "--sync", "--year", str(year),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
     if result.returncode != 0:
-        print(f"FEHLER bei SQL:\n{result.stderr}", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(f"budget_db.py query fehlgeschlagen:\n{result.stderr}")
 
     lines = result.stdout.strip().split("\n")
     # Find table header (starts with |)
@@ -222,19 +795,37 @@ def run_sql(sql: str, year: int) -> list[dict]:
     return rows
 
 
-def fmt(v: int) -> str:
-    return f"{v:,}".replace(",", ".") + " T€"
+def fmt(v: float | int) -> str:
+    number = float(v)
+    if number.is_integer():
+        return f"{int(number):,}".replace(",", ".") + " T€"
+    text = f"{number:,.1f}"
+    return text.replace(",", "X").replace(".", ",").replace("X", ".") + " T€"
 
 
-def delta_fmt(d: int) -> str:
+def delta_fmt(d: float | int) -> str:
     sign = "+" if d > 0 else ""
     return sign + fmt(d)
+
+
+def fmt_hours(v: float | int) -> str:
+    number = float(v)
+    if number.is_integer():
+        return f"{int(number):,}".replace(",", ".") + " h"
+    text = f"{number:,.1f}"
+    return text.replace(",", "X").replace(".", ",").replace("X", ".") + " h"
+
+
+def delta_hours_fmt(d: float | int) -> str:
+    sign = "+" if d > 0 else ""
+    return sign + fmt_hours(d)
 
 
 @dataclass
 class TableRow:
     values: list[str]
     style: str = "body"
+    cell_statuses: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -481,13 +1072,14 @@ def _markdown_table_cell(value: str, style: str) -> str:
     return value
 
 
-def _parse_te_number(value: str) -> int | None:
+def _parse_te_number(value: str) -> float | int | None:
     text = _strip_markdown(str(value))
-    match = re.fullmatch(r"([+-]?)(\d{1,3}(?:\.\d{3})*|\d+)\s*T€", text)
+    match = re.fullmatch(r"([+-]?)(\d{1,3}(?:\.\d{3})*|\d+)(?:,(\d+))?\s*T€", text)
     if not match:
         return None
-    sign, digits = match.groups()
-    number = int(digits.replace(".", ""))
+    sign, digits, decimals = match.groups()
+    normalized = digits.replace(".", "")
+    number = float(f"{normalized}.{decimals}") if decimals else int(normalized)
     return -number if sign == "-" else number
 
 
@@ -615,9 +1207,14 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
     status_fill_abgelehnt = PatternFill("solid", fgColor="FFC7CE")
     status_fill_erstellung = PatternFill("solid", fgColor="8EA9DB")
     status_fill_durchlauf = PatternFill("solid", fgColor="FFC000")
+    status_fill_ok = PatternFill("solid", fgColor="FFC6EFCE")
+    status_fill_warn = PatternFill("solid", fgColor="FFFFEB9C")
+    status_fill_x = PatternFill("solid", fgColor="FFFFC7CE")
+    status_fill_na = PatternFill("solid", fgColor="FFD9D9D9")
     wrap = Alignment(vertical="top", wrap_text=True)
     left = Alignment(horizontal="left", vertical="top", wrap_text=True)
     right = Alignment(horizontal="right", vertical="top", wrap_text=True)
+    center = Alignment(horizontal="center", vertical="top", wrap_text=True)
 
     def render_sheet(
         ws,
@@ -714,6 +1311,18 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
         def header_fill_for(value: str) -> PatternFill | None:
             return status_fill_for(value)
 
+        def special_status_fill(value: str) -> PatternFill | None:
+            text = _strip_markdown(str(value)).upper()
+            if text in {"OK", "IO"}:
+                return status_fill_ok
+            if text == "WARN":
+                return status_fill_warn
+            if text in {"X", "NIO"}:
+                return status_fill_x
+            if text == "-":
+                return status_fill_na
+            return None
+
         if include_title:
             merge_row(report.title, font=Font(size=16, bold=True), min_height=30, line_height=18)
         if include_meta:
@@ -772,7 +1381,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
                 custom_header_fill = header_fill_for(header) if ws.title == "Übersicht" else None
                 cell.fill = custom_header_fill or header_fill
                 cell.border = border
-                cell.alignment = left
+                cell.alignment = center if header in SPECIAL_STATUS_HEADERS else left
                 update_width(col_idx, header)
             set_row_height(
                 current_row,
@@ -783,26 +1392,60 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
             )
             current_row += 1
 
-            for row in section.rows:
+            is_sonder = section.title == "Sondervereinbarungen"
+
+            for ridx, row in enumerate(section.rows):
                 row_idx = current_row
+                if is_sonder:
+                    is_first_of_block = not (row.values and row.values[0] == "")
+                    next_is_cont = (
+                        ridx + 1 < len(section.rows)
+                        and section.rows[ridx + 1].values
+                        and section.rows[ridx + 1].values[0] == ""
+                    )
+                    row_border = Border(
+                        left=thin,
+                        right=thin,
+                        top=thin if is_first_of_block else None,
+                        bottom=thin if not next_is_cont else None,
+                    )
+                else:
+                    row_border = border
+
                 for col_idx, value in enumerate(row.values, start=1):
                     te_number = _parse_te_number(value)
                     cell_value = te_number if te_number is not None else _strip_markdown(value)
                     cell = ws.cell(current_row, col_idx, cell_value)
-                    cell.border = border
-                    cell.alignment = right if (col_idx - 1) in section.align_right else left
+                    cell.border = row_border
+                    header = section.headers[col_idx - 1] if col_idx - 1 < len(section.headers) else ""
+                    cell_status = row.cell_statuses.get(header)
+                    if header in SPECIAL_STATUS_HEADERS:
+                        cell.alignment = center
+                    else:
+                        cell.alignment = right if (col_idx - 1) in section.align_right else left
                     if ws.title == "Korrektur" and row.style == "body" and col_idx == 1:
                         url = _bplus_vorgang_url(str(value))
                         if url:
                             cell.hyperlink = url
                             cell.font = Font(color="0563C1", underline="single")
                     if te_number is not None:
-                        cell.number_format = '#,##0 "T€";[Red]-#,##0 "T€"'
+                        if isinstance(te_number, float) and not te_number.is_integer():
+                            cell.number_format = '#,##0.0 "T€";[Red]-#,##0.0 "T€"'
+                        else:
+                            cell.number_format = '#,##0 "T€";[Red]-#,##0 "T€"'
                     if row.style == "summary":
                         cell.font = Font(bold=True)
                         cell.fill = summary_fill
                     elif row.style == "note":
                         cell.font = Font(italic=True)
+                    elif cell_status is not None:
+                        fill = special_status_fill(cell_status)
+                        if fill is not None:
+                            cell.fill = fill
+                    elif header in SPECIAL_STATUS_HEADERS:
+                        fill = special_status_fill(str(cell_value))
+                        if fill is not None:
+                            cell.fill = fill
                     elif ws.title == "Korrektur" and col_idx == 5:
                         fill = status_fill_for(str(cell_value))
                         if fill is not None:
@@ -905,7 +1548,7 @@ def main():
     q_ratio = num_q / 4
 
     # ── BMs laden (inkl. Status) ───────────────────────────────────────
-    sql = "SELECT concept, ea, title, planned_value, company, status, bm_text FROM btl"
+    sql = "SELECT concept, dev_order, ea, title, planned_value, company, status, bm_text FROM btl"
     rows = run_sql(sql, year)
 
     # ── Status-Mapping aus CSV laden ───────────────────────────────────
@@ -1217,6 +1860,16 @@ def main():
             body_row_height=15,
         )
     )
+
+    special_section = build_special_rule_section(
+        year=year,
+        num_q=num_q,
+        q_label=q_label,
+        rows=rows,
+        status_map=status_map,
+    )
+    if special_section is not None:
+        sections.append(special_section)
 
     # ── Tabelle 3: Korrektur Überplanung ──────────────────────────────
     korrektur_firmen: list[dict] = []

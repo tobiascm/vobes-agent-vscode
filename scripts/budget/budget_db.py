@@ -34,7 +34,8 @@ BTL_COLUMNS_SQL = """
         org_unit TEXT, company TEXT, creator TEXT, bm_number TEXT, az_number TEXT,
         projektfamilie TEXT, dev_order TEXT, bm_text TEXT, last_updated TEXT,
         category TEXT, cost_type TEXT, quantity TEXT, unit TEXT, supplier_number TEXT,
-        first_signature TEXT, second_signature TEXT, target_date TEXT
+        first_signature TEXT, second_signature TEXT, target_date TEXT,
+        invoices REAL
 """
 
 SCHEMA = [
@@ -234,6 +235,7 @@ def _sync_btl(conn: sqlite3.Connection, year: int, table: str, org_unit: str | N
             trim(item.get("firstSignature")),
             trim(item.get("secondSignature")),
             iso_date(item.get("targetDate")),
+            item.get("invoices") or 0.0,
         ))
     count = replace_table(
         conn,
@@ -243,7 +245,7 @@ def _sync_btl(conn: sqlite3.Connection, year: int, table: str, org_unit: str | N
             "company", "creator", "bm_number", "az_number", "projektfamilie",
             "dev_order", "bm_text", "last_updated", "category", "cost_type",
             "quantity", "unit", "supplier_number", "first_signature",
-            "second_signature", "target_date",
+            "second_signature", "target_date", "invoices",
         ],
         rows,
         year,
