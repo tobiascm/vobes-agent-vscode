@@ -85,6 +85,7 @@ Optionale Flags:
 - `--no-llm` — Lokale Extraktion ohne LLM (PPTX, DOCX, XLSX, PDF, CSV, ...)
 - `--no-llm-pdf` — Nur PDF ohne LLM extrahieren (pymupdf4llm statt Claude)
 - `--all-sheets` — Excel: alle Worksheets einzeln konvertieren
+- `--prompt "..."` — Custom-Prompt fuer Bild-Konvertierung (ersetzt den Standard-Prompt)
 
 Ohne OUTPUT wird die Markdown-Datei neben die Eingabedatei gelegt (`<stem>.md`).
 
@@ -111,4 +112,7 @@ python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown
 
 # PDF → Markdown ohne LLM
 python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown bericht.pdf --no-llm-pdf
+
+# Bild → Markdown mit Custom-Prompt (z.B. ONG-Screenshot)
+python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown screenshot.png --prompt "Extrahiere alle Tabellenwerte und Bauteilnummern aus dem Screenshot"
 ```

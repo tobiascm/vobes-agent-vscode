@@ -46,7 +46,8 @@ _NON_LLM_EXTS = {".pptx", ".xlsx", ".xls", ".docx", ".pdf", ".csv",
 
 
 def _to_markdown(input_path: Path, output_path: Path, *, no_llm_pdf: bool = False,
-                 no_llm: bool = False, all_sheets: bool = False, debug: bool = False) -> int:
+                 no_llm: bool = False, all_sheets: bool = False, debug: bool = False,
+                 prompt: str | None = None) -> int:
     """Konvertiert eine Datei nach Markdown.
 
     Wenn no_llm=True und das Format von file_parsers unterstuetzt wird,
@@ -74,7 +75,7 @@ def _to_markdown(input_path: Path, output_path: Path, *, no_llm_pdf: bool = Fals
 
     # --- LLM path: file_llm_converter ---
     from file_llm_converter import _to_markdown as _llm_to_markdown
-    return _llm_to_markdown(input_path, output_path, no_llm_pdf=no_llm_pdf, all_sheets=all_sheets, debug=debug)
+    return _llm_to_markdown(input_path, output_path, no_llm_pdf=no_llm_pdf, all_sheets=all_sheets, debug=debug, prompt=prompt)
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +110,8 @@ def main() -> int:
     md.add_argument("--no-llm-pdf", action="store_true",
                     help="Nur PDF ohne LLM extrahieren (pymupdf4llm)")
     md.add_argument("--all-sheets", action="store_true", help="Excel: alle Worksheets")
+    md.add_argument("--prompt", type=str, default=None,
+                    help="Custom prompt fuer Bild-Konvertierung (LLM)")
 
     # to-pdf
     pdf = sub.add_parser("to-pdf", help="Datei nach PDF konvertieren (Office COM)")
@@ -125,6 +128,7 @@ def main() -> int:
             no_llm=args.no_llm,
             no_llm_pdf=args.no_llm_pdf,
             all_sheets=args.all_sheets,
+            prompt=args.prompt,
         )
 
     elif args.command == "to-pdf":
