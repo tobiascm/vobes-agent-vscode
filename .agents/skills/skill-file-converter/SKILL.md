@@ -44,6 +44,8 @@ Konvertiert **lokale Dateien** nach **PDF** oder **Markdown**.
 
 PDF, DOCX, XLSX, PPTX, ODT, ODP, TXT, XML, PNG, JPG, TIFF, BMP, WEBP, HTML und mehr.
 
+> **Hinweis:** LLM-basierte Konvertierung (insbesondere Bilder) kann bis zu **3 Minuten** dauern.
+
 ### → Markdown (non-LLM via file_parsers)
 
 | Eingabe | Methode |

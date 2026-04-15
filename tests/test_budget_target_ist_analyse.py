@@ -166,7 +166,7 @@ def test_reporting_company_maps_voitas_rulechecker_to_4soft():
 def test_load_targets_reads_company_target_overrides():
     mod = load_module()
 
-    _, _, _, _, overrides = mod.load_targets()
+    _, _, _, _, overrides, _quarter_split = mod.load_targets()
 
     assert "BERTRANDT" in overrides
     assert overrides["BERTRANDT"]["area"] == "Systemschaltpläne und Bibl. (EDAG, Bertrandt)"
@@ -638,6 +638,89 @@ def test_build_special_rule_section_digi_budget_el_kann_niedriger(tmp_path, monk
 
     assert section is not None
     assert len(section.rows) == 3
+
+
+def test_build_special_rule_section_digi_budget_filters_budget_rows_by_title_and_bm_text(tmp_path, monkeypatch):
+    mod = load_module()
+    workbook = Workbook()
+    ws = workbook.active
+    ws.append(["Sondervereinbarungen"])
+    ws.append([])
+    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
+    ws.append([
+        "Digi-budget",
+        "48040",
+        "-",
+        290,
+        "1. HJ DMU (170T€) + RuleChecker (120T€), aber mind. je 10T€ EL, 2. HJ noch kein Budget",
+        "",
+        "FL muss exakt passen!\nEL kann niedriger sein, darf aber auf keinen Fall höher sein.\nWerte für 1. HJ müssen auch wirklich im 1.HJ beauftragt werden.",
+    ])
+    special_path = tmp_path / "sondervereinbarungen_digi_filter.xlsx"
+    workbook.save(special_path)
+    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(
+        mod,
+        "_load_el_aggregates",
+        lambda year, num_q: {
+            "48040": {
+                "year_hours": 0.0,
+                "period_hours": 0.0,
+                "year_te": 0.0,
+                "period_te": 0.0,
+            }
+        },
+    )
+
+    section = mod.build_special_rule_section(
+        year=2026,
+        num_q=2,
+        q_label="Q1-2",
+        rows=[
+            {
+                "ea": "48040",
+                "planned_value": "170000",
+                "company": "4SOFT GMBH MUENCHEN",
+                "title": "Entwicklungsleistung VW-EK-26-0001",
+                "bm_text": "Projekt Digitalisierung DMU",
+                "status": "best",
+            },
+            {
+                "ea": "48040",
+                "planned_value": "120000",
+                "company": "4SOFT GMBH MUENCHEN",
+                "title": "Entwicklungsleistung VW-EK-26-0002",
+                "bm_text": "Digitalisierung RuleChecker",
+                "status": "flow",
+            },
+            {
+                "ea": "48040",
+                "planned_value": "999000",
+                "company": "4SOFT GMBH MUENCHEN",
+                "title": "Falscher Abruf ohne Kennung",
+                "bm_text": "Digitalisierung RuleChecker",
+                "status": "flow",
+            },
+            {
+                "ea": "48040",
+                "planned_value": "888000",
+                "company": "4SOFT GMBH MUENCHEN",
+                "title": "Entwicklungsleistung VW-EK-26-0003",
+                "bm_text": "Andere Maßnahme ohne Schlüsselwort",
+                "status": "flow",
+            },
+        ],
+        status_map={"best": "bestellt", "flow": "im Durchlauf"},
+    )
+
+    assert section is not None
+    first_row = section.rows[0]
+    assert first_row.values[0] == "Digi-budget"
+    assert first_row.values[3] == "290 T€"
+    assert first_row.values[6] == "170 T€"
+    assert first_row.values[7] == "120 T€"
+    assert first_row.values[4] == "0 T€"
+    assert first_row.values[10] == "+145 T€"
     # Hint 0: "FL muss exakt passen!" -> year_band OK -> IO
     assert section.rows[0].values[13] == "IO"
     # Hint 1: "EL kann niedriger sein..." -> EL mode=manual, no target -> "-"

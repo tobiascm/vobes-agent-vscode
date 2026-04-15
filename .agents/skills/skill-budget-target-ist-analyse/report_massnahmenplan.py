@@ -12,6 +12,7 @@ import csv
 import datetime
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 from collections import defaultdict
@@ -27,24 +28,102 @@ from openpyxl.utils import get_column_letter
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", ".."))
 BUDGET_DB = os.path.join(REPO_ROOT, "scripts", "budget", "budget_db.py")
+DB_PATH = os.path.join(REPO_ROOT, "userdata", "budget.db")
 OUT_DIR = os.path.join(REPO_ROOT, "userdata", "budget")
 VORGABEN_DIR = os.path.join(OUT_DIR, "vorgaben")
 TARGET_CSV = os.path.join(VORGABEN_DIR, "target.csv")
 STATUS_CSV = os.path.join(SCRIPT_DIR, "status_mapping.csv")
 PRAEMISSEN_MD = os.path.join(VORGABEN_DIR, "praemissen.md")
 TARGET_IMAGE = os.path.join(VORGABEN_DIR, "target.png")
-SPECIAL_RULES_XLSX = os.path.join(REPO_ROOT, "userdata", "planning", "budget_sondervereinbarungen_ekek1.xlsx")
+SPECIAL_RULES_XLSX = os.path.join(REPO_ROOT, "userdata", "budget", "planning", "budget_sondervereinbarungen_ekek1.xlsx")
 PLANNING_SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts", "budget")
 if PLANNING_SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, PLANNING_SCRIPTS_DIR)
 
-from beauftragungsplanung_core import (  # noqa: E402
-    COMPANY_ALIAS_FALLBACKS,
-    _detect_special_cadence,
-    _extract_allowed_company_tokens,
-    _extract_priority_tokens,
-    _resolve_company_tokens,
-)
+try:
+    from beauftragungsplanung_core import (  # noqa: E402
+        COMPANY_ALIAS_FALLBACKS,
+        _detect_special_cadence,
+        _extract_allowed_company_tokens,
+        _extract_priority_tokens,
+        _quarter_for_date,
+        _resolve_company_tokens,
+    )
+except ImportError:  # pragma: no cover - fallback for missing planning core in local workspace
+    COMPANY_ALIAS_FALLBACKS = {
+        "4SOFT": "4SOFT GMBH MUENCHEN",
+        "THIESEN": "THIESEN HARDWARE SOFTW. GMBH WARTENBERG",
+        "FES": "FES GMBH ZWICKAU/00",
+        "SUMITOMO": "SUMITOMO ELECTRIC BORDNETZE SE WOLFSBURG",
+        "BERTRANDT": "BERTRANDT INGENIEURBUERO GMBH TAPPENBECK",
+        "EDAG": "EDAG ENGINEERING GMBH WOLFSBURG",
+        "VOLKSWAGEN": "VOLKSWAGEN GROUP SERVICES GMBH WOLFSBURG",
+    }
+
+    def _detect_special_cadence(display_name: str, remark: str, notes: str) -> str:
+        blob = " ".join(part for part in [display_name, remark, notes] if part).lower()
+        if "nur el" in blob or "keine fl" in blob:
+            return "fl_forbidden"
+        if "pro halbjahr" in blob:
+            return "semiannual_tranche_exact"
+        if "pro quartal" in blob:
+            return "quarterly_tranche_exact"
+        if "quartalsweise" in blob:
+            return "quarterly_split_annual"
+        return "annual_exact"
+
+    def _extract_allowed_company_tokens(notes: str) -> list[str]:
+        def _clean(value: str) -> str:
+            return re.sub(r"\s+in genau dieser priorität\.?$", "", value.strip(), flags=re.IGNORECASE)
+        match = re.search(r"nur für\s+([^\n.!]+)", notes, re.IGNORECASE)
+        if match:
+            return [_clean(token) for token in re.split(r"[,/]| und ", match.group(1)) if _clean(token)]
+        match = re.search(r"folgende firmen .*?buchen:\s*([^\n.!]+)", notes, re.IGNORECASE)
+        if match:
+            return [_clean(token) for token in re.split(r",| und ", match.group(1)) if _clean(token)]
+        return []
+
+    def _extract_priority_tokens(notes: str) -> list[str]:
+        match = re.search(r"folgende firmen .*?buchen:\s*([^\n.!]+)", notes, re.IGNORECASE)
+        if not match:
+            return []
+        return [re.sub(r"\s+in genau dieser priorität\.?$", "", token.strip(), flags=re.IGNORECASE) for token in re.split(r",| und ", match.group(1)) if re.sub(r"\s+in genau dieser priorität\.?$", "", token.strip(), flags=re.IGNORECASE)]
+
+    def _resolve_company_tokens(tokens: list[str], known_companies: list[str]) -> tuple[list[str], list[str]]:
+        resolved: list[str] = []
+        unresolved: list[str] = []
+        for token in tokens:
+            upper = token.upper()
+            chosen = None
+            if upper in COMPANY_ALIAS_FALLBACKS:
+                fallback = COMPANY_ALIAS_FALLBACKS[upper]
+                if fallback in known_companies:
+                    chosen = fallback
+            if chosen is None:
+                for company in known_companies:
+                    if upper in company.upper():
+                        chosen = company
+                        break
+            if chosen is None:
+                unresolved.append(token)
+                continue
+            if chosen not in resolved:
+                resolved.append(chosen)
+        return resolved, unresolved
+
+    def _quarter_for_date(target_date: str | None, *, title: str = "", bm_text: str = "") -> str | None:
+        text = str(target_date or "").strip()
+        match = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
+        if not match:
+            return None
+        month = int(match.group(2))
+        if month <= 3:
+            return "Q1"
+        if month <= 6:
+            return "Q2"
+        if month <= 9:
+            return "Q3"
+        return "Q4"
 
 PDF_CSS = """
 body {
@@ -86,36 +165,84 @@ def load_status_mapping() -> dict[str, str]:
     return mapping
 
 
-def load_targets() -> tuple[dict[str, int], dict[str, int], list[str], dict[str, int], dict[str, dict[str, int | str]]]:
-    """Liest target.csv → (ref_2025, target_2026, area_order, start_q, company_target_overrides)."""
+def load_targets() -> tuple[
+    dict[str, int],
+    dict[str, int],
+    list[str],
+    dict[str, int],
+    dict[str, dict[str, int | str]],
+    dict[str, Any] | None,
+]:
+    """Liest target.csv inkl. optionaler Quartalsaufteilung."""
     ref_2025: dict[str, int] = {}
     target_2026: dict[str, int] = {}
     start_q: dict[str, int] = {}
     area_order: list[str] = []
     company_target_overrides: dict[str, dict[str, int | str]] = {}
+    quarter_split: dict[str, Any] | None = None
     with open(TARGET_CSV, encoding="utf-8") as f:
-        reader = csv.DictReader(f, delimiter=";")
-        for row in reader:
-            area = row["Aufgabenbereich"].strip()
-            ref_2025[area] = int(row["2025"].strip())
-            target_2026[area] = int(row["Target_2026"].strip())
-            start_q[area] = int(row.get("Start_Q", "1").strip() or "1")
-            area_order.append(area)
-            for col_name, raw_value in row.items():
-                if col_name in {"Aufgabenbereich", "2025", "Target_2026", "Start_Q"}:
-                    continue
-                if not col_name or not col_name.endswith("_Target_2026"):
-                    continue
-                value = (raw_value or "").strip()
-                if not value:
-                    continue
-                company_key = col_name.removesuffix("_Target_2026").upper()
-                company_target_overrides[company_key] = {
-                    "area": area,
-                    "target_te": int(value),
-                    "start_q": start_q[area],
+        reader = csv.reader(f, delimiter=";")
+        headers: list[str] = []
+        mode: str | None = None
+        for raw_row in reader:
+            row = [cell.strip() for cell in raw_row]
+            if not any(row):
+                continue
+            first = row[0]
+            if first == "Aufgabenbereich":
+                headers = row
+                mode = "areas"
+                continue
+            if first == "Jahr/Quartal":
+                headers = row
+                mode = "quarters"
+                continue
+            if not headers or mode is None:
+                continue
+
+            record = {
+                headers[idx]: row[idx].strip() if idx < len(row) else ""
+                for idx in range(len(headers))
+            }
+            if mode == "areas":
+                area = record["Aufgabenbereich"].strip()
+                ref_2025[area] = int(record["2025"].strip())
+                target_2026[area] = int(record["Target_2026"].strip())
+                start_q[area] = int(record.get("Start_Q", "1").strip() or "1")
+                area_order.append(area)
+                for col_name, raw_value in record.items():
+                    if col_name in {"Aufgabenbereich", "2025", "Target_2026", "Start_Q"}:
+                        continue
+                    if not col_name or not col_name.endswith("_Target_2026"):
+                        continue
+                    value = (raw_value or "").strip()
+                    if not value:
+                        continue
+                    company_key = col_name.removesuffix("_Target_2026").upper()
+                    company_target_overrides[company_key] = {
+                        "area": area,
+                        "target_te": int(value),
+                        "start_q": start_q[area],
+                    }
+                continue
+
+            if mode == "quarters" and first == "Summe":
+                year_header = next((header for header in headers if re.fullmatch(r"\d{4}", header)), None)
+                annual_te = _parse_te_value(record.get(year_header or ""))
+                quarter_values = {quarter: _parse_te_value(record.get(quarter, "")) for quarter in QUARTERS}
+                if year_header is None or annual_te is None or any(value is None for value in quarter_values.values()):
+                    raise ValueError(f"Ungültige Quartalsaufteilung in {TARGET_CSV}.")
+                quarter_sum_te = sum(float(quarter_values[quarter]) for quarter in QUARTERS)
+                if abs(float(annual_te) - quarter_sum_te) > 1e-6:
+                    raise ValueError(
+                        f"Quartalsaufteilung in {TARGET_CSV} ist inkonsistent: Jahr {annual_te} T€ != Summe Quartale {quarter_sum_te} T€."
+                    )
+                quarter_split = {
+                    "year": int(year_header),
+                    "annual_te": float(annual_te),
+                    "quarters_te": {quarter: float(quarter_values[quarter]) for quarter in QUARTERS},
                 }
-    return ref_2025, target_2026, area_order, start_q, company_target_overrides
+    return ref_2025, target_2026, area_order, start_q, company_target_overrides, quarter_split
 
 # ── Prämissen laden ───────────────────────────────────────────────────
 
@@ -139,6 +266,7 @@ MONTH_COLUMNS = (
     "pct_nov",
     "pct_dec",
 )
+QUARTERS = ("Q1", "Q2", "Q3", "Q4")
 SPECIAL_STATUS_HEADERS = {"EL DIFF", "IO/nIO"}
 
 
@@ -273,10 +401,6 @@ def load_special_rule_rows(path: str, known_companies: list[str]) -> list[dict[s
 def _annual_target_for_cadence(base_target: float | None, cadence_type: str) -> float | None:
     if base_target is None:
         return None
-    if cadence_type == "quarterly_tranche_exact":
-        return base_target * 4
-    if cadence_type == "semiannual_tranche_exact":
-        return base_target * 2
     return base_target
 
 
@@ -285,13 +409,11 @@ def _period_target_for_cadence(base_target: float | None, cadence_type: str, num
     if annual_target is None:
         return None
     if cadence_type == "quarterly_tranche_exact":
-        return base_target * num_q if base_target is not None else None
+        return base_target if base_target is not None and num_q >= 1 else 0.0
     if cadence_type == "semiannual_tranche_exact":
         if num_q < 2:
             return 0.0
-        if num_q < 4:
-            return base_target
-        return (base_target or 0.0) * 2
+        return base_target
     return annual_target * num_q / 4
 
 
@@ -422,6 +544,15 @@ def _evaluate_hint_status(hint: str, ctx: dict) -> str:
     return "-"
 
 
+def _special_rule_matches_budget_row(rule: dict[str, Any], row: dict[str, Any]) -> bool:
+    topic = str(rule.get("topic", "")).upper()
+    if "DIGI-BUDGET" in topic:
+        title = str(row.get("title", "")).upper()
+        bm_text = str(row.get("bm_text", "")).upper()
+        return "VW-EK" in title and "DIGITALISIERUNG" in bm_text
+    return True
+
+
 def _load_el_aggregates(year: int, num_q: int) -> dict[str, dict[str, float]]:
     period_columns = MONTH_COLUMNS[: num_q * 3]
     year_expr = " + ".join(f"COALESCE({column}, 0)" for column in MONTH_COLUMNS)
@@ -462,17 +593,7 @@ def build_special_rule_section(
     rows: list[dict],
     status_map: dict[str, str],
 ) -> Any:
-    ea_budget: dict[str, dict[str, Any]] = defaultdict(
-        lambda: {
-            "count": 0,
-            "sum_eur": 0,
-            "bestellt_eur": 0,
-            "durchlauf_eur": 0,
-            "konzept_eur": 0,
-            "storniert_eur": 0,
-            "companies": defaultdict(int),
-        }
-    )
+    ea_budget_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
     known_companies: set[str] = set()
     for row in rows:
         ea_key = _normalize_ea_key(row.get("dev_order") or row.get("ea_number") or row.get("ea"))
@@ -484,19 +605,16 @@ def build_special_rule_section(
         bm_text = row.get("bm_text", "")
         status_label = status_map.get(row.get("status", ""), "")
         reporting_company = _reporting_company(classify_bm(company, title, bm_text), company)
-        summary = ea_budget[ea_key]
-        summary["count"] += 1
-        summary["sum_eur"] += pv
-        summary["companies"][reporting_company] += pv
+        ea_budget_rows[ea_key].append(
+            {
+                "planned_value": pv,
+                "reporting_company": reporting_company,
+                "status_label": status_label,
+                "title": title,
+                "bm_text": bm_text,
+            }
+        )
         known_companies.add(reporting_company)
-        if status_label == "bestellt":
-            summary["bestellt_eur"] += pv
-        elif status_label == "im Durchlauf":
-            summary["durchlauf_eur"] += pv
-        elif status_label == "Konzept":
-            summary["konzept_eur"] += pv
-        elif status_label == "storniert":
-            summary["storniert_eur"] += pv
 
     special_rules = load_special_rule_rows(SPECIAL_RULES_XLSX, sorted(known_companies))
     if not special_rules:
@@ -527,16 +645,22 @@ def build_special_rule_section(
         }
         company_totals: dict[str, int] = defaultdict(int)
         for ea_key in rule["ea_keys"]:
-            budget_row = ea_budget.get(ea_key)
-            if budget_row:
-                totals["count"] += int(budget_row["count"])
-                totals["sum_te"] += budget_row["sum_eur"] / 1000
-                totals["bestellt_te"] += budget_row["bestellt_eur"] / 1000
-                totals["durchlauf_te"] += budget_row["durchlauf_eur"] / 1000
-                totals["konzept_te"] += budget_row["konzept_eur"] / 1000
-                totals["storniert_te"] += budget_row["storniert_eur"] / 1000
-                for company, value in budget_row["companies"].items():
-                    company_totals[company] += value
+            for budget_row in ea_budget_rows.get(ea_key, []):
+                if not _special_rule_matches_budget_row(rule, budget_row):
+                    continue
+                pv = int(budget_row["planned_value"])
+                totals["count"] += 1
+                totals["sum_te"] += pv / 1000
+                company_totals[str(budget_row["reporting_company"])] += pv
+                status_label = str(budget_row["status_label"])
+                if status_label == "bestellt":
+                    totals["bestellt_te"] += pv / 1000
+                elif status_label == "im Durchlauf":
+                    totals["durchlauf_te"] += pv / 1000
+                elif status_label == "Konzept":
+                    totals["konzept_te"] += pv / 1000
+                elif status_label == "storniert":
+                    totals["storniert_te"] += pv / 1000
             el_row = el_aggregates.get(ea_key)
             if el_row:
                 totals["el_year_hours"] += el_row["year_hours"]
@@ -769,30 +893,19 @@ def classify_bm(company: str, title: str, bm_text: str = "") -> str:
 
 
 def run_sql(sql: str, year: int) -> list[dict]:
-    """Führt SQL über budget_db.py aus und parst die Markdown-Tabelle."""
-    # Multiline SQL auf eine Zeile normalisieren (Windows subprocess-Kompatibilität)
+    """Führt SQL nach budget_db.py-Sync direkt auf SQLite aus."""
     sql_oneline = " ".join(sql.split())
     cmd = [
         sys.executable, BUDGET_DB, "query", sql_oneline,
-        "--stdout", "--no-file", "--sync", "--year", str(year),
+        "--no-file", "--sync", "--year", str(year),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT)
     if result.returncode != 0:
         raise RuntimeError(f"budget_db.py query fehlgeschlagen:\n{result.stderr}")
-
-    lines = result.stdout.strip().split("\n")
-    # Find table header (starts with |)
-    table_lines = [l for l in lines if l.startswith("|")]
-    if len(table_lines) < 3:
-        return []
-
-    # Parse header
-    headers = [h.strip() for h in table_lines[0].split("|")[1:-1]]
-    rows = []
-    for row_line in table_lines[2:]:  # skip separator
-        vals = [v.strip() for v in row_line.split("|")[1:-1]]
-        rows.append(dict(zip(headers, vals)))
-    return rows
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql_oneline).fetchall()
+    return [dict(row) for row in rows]
 
 
 def fmt(v: float | int) -> str:
@@ -856,6 +969,7 @@ class ReportDocument:
     meta_lines: list[str]
     sections: list[TextSection | TableSection]
     max_columns: int
+    overview_quarter_block: dict[str, Any] | None = None
 
 
 def _cell_has_text(value) -> bool:
@@ -895,6 +1009,44 @@ def _find_table_header_row(ws, first_header: str) -> int | None:
         if _strip_markdown(str(ws.cell(row_idx, 1).value or "")) == needle:
             return row_idx
     return None
+
+
+def _write_overview_quarter_block(ws, overview_quarter_block: dict[str, Any] | None) -> None:
+    if not overview_quarter_block:
+        return
+
+    row_labels = ("IST 2025 (Referenz)", "Ist (BPLUS)", "Target", "Delta Ist vs. Target")
+    row_map: dict[str, int] = {}
+    for row_idx in range(1, ws.max_row + 1):
+        label = _strip_markdown(str(ws.cell(row_idx, 1).value or ""))
+        if label in row_labels:
+            row_map[label] = row_idx
+    if len(row_map) != len(row_labels):
+        return
+
+    header_row = row_map["IST 2025 (Referenz)"] - 1
+    header_template = ws.cell(header_row, 2)
+    ws.cell(header_row, 2).value = "Jahr"
+
+    for col_idx, quarter in enumerate(overview_quarter_block.get("headers", QUARTERS), start=3):
+        cell = ws.cell(header_row, col_idx)
+        _copy_cell_display(header_template, cell, copy_value=False)
+        cell.value = quarter
+        ws.column_dimensions[get_column_letter(col_idx)].width = max(ws.column_dimensions[get_column_letter(col_idx)].width or 0, 12)
+
+    delta_year_cell = ws.cell(row_map["Delta Ist vs. Target"], 2)
+    if isinstance(delta_year_cell.value, (int, float)):
+        _apply_signed_delta_style(delta_year_cell, delta_year_cell.value)
+
+    for label in row_labels:
+        template_cell = ws.cell(row_map[label], 2)
+        for col_idx, value in enumerate(overview_quarter_block["rows"].get(label, []), start=3):
+            cell = ws.cell(row_map[label], col_idx)
+            _copy_cell_display(template_cell, cell, copy_value=False)
+            cell.value = value
+            cell.number_format = _te_number_format(value)
+            if label == "Delta Ist vs. Target":
+                _apply_signed_delta_style(cell, value)
 
 
 def _collect_table_key_rows(ws, first_header: str) -> tuple[int | None, dict[str, int]]:
@@ -1081,6 +1233,73 @@ def _parse_te_number(value: str) -> float | int | None:
     normalized = digits.replace(".", "")
     number = float(f"{normalized}.{decimals}") if decimals else int(normalized)
     return -number if sign == "-" else number
+
+
+def _te_number_format(value: float | int) -> str:
+    return '#,##0.0 "T€";[Red]-#,##0.0 "T€"' if float(value) % 1 else '#,##0 "T€";[Red]-#,##0 "T€"'
+
+
+def _round_te_display(value: float | int) -> int:
+    return int(round(float(value)))
+
+
+def _apply_signed_delta_style(cell, value: float | int) -> None:
+    cell.number_format = '#,##0 "T€";-#,##0 "T€"'
+    if value > 0:
+        cell.font = copy(cell.font)
+        cell.font = Font(
+            name=cell.font.name,
+            sz=cell.font.sz,
+            b=cell.font.b,
+            i=cell.font.i,
+            underline=cell.font.underline,
+            strike=cell.font.strike,
+            color="FFFF0000",
+        )
+        cell.fill = PatternFill("solid", fgColor="FFFFC7CE")
+    elif value < 0:
+        cell.font = copy(cell.font)
+        cell.font = Font(
+            name=cell.font.name,
+            sz=cell.font.sz,
+            b=cell.font.b,
+            i=cell.font.i,
+            underline=cell.font.underline,
+            strike=cell.font.strike,
+            color="FF000000",
+        )
+        cell.fill = PatternFill("solid", fgColor="FFC6EFCE")
+
+
+def _quarter_split_period_target_eur(quarter_split: dict[str, Any] | None, num_q: int) -> int | None:
+    if not quarter_split:
+        return None
+    total_te = sum(float(quarter_split["quarters_te"][quarter]) for quarter in QUARTERS[:num_q])
+    return round(total_te * 1000)
+
+
+def _scale_distribution_to_target(values: dict[str, int], target_total: int | None) -> dict[str, int]:
+    if target_total is None:
+        return dict(values)
+    positive = {key: value for key, value in values.items() if value > 0}
+    if target_total <= 0 or not positive:
+        return {key: 0 for key in values}
+
+    current_total = sum(positive.values())
+    scaled = {key: 0 for key in values}
+    remainders: list[tuple[float, str]] = []
+    assigned = 0
+    for key, value in positive.items():
+        raw_value = value * target_total / current_total
+        base_value = int(raw_value)
+        scaled[key] = base_value
+        assigned += base_value
+        remainders.append((raw_value - base_value, key))
+
+    remainders.sort(reverse=True)
+    for _, key in remainders[: max(target_total - assigned, 0)]:
+        scaled[key] += 1
+    return scaled
 
 
 def _bplus_vorgang_url(value: str) -> str | None:
@@ -1429,10 +1648,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
                             cell.hyperlink = url
                             cell.font = Font(color="0563C1", underline="single")
                     if te_number is not None:
-                        if isinstance(te_number, float) and not te_number.is_integer():
-                            cell.number_format = '#,##0.0 "T€";[Red]-#,##0.0 "T€"'
-                        else:
-                            cell.number_format = '#,##0 "T€";[Red]-#,##0 "T€"'
+                        cell.number_format = _te_number_format(te_number)
                     if row.style == "summary":
                         cell.font = Font(bold=True)
                         cell.fill = summary_fill
@@ -1516,6 +1732,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
                 note_cell.alignment = copy(template_cell.alignment)
 
     _inherit_notes_from_workbook(workbook, inherit_notes_from)
+    _write_overview_quarter_block(overview_ws, report.overview_quarter_block)
     workbook.save(xlsx_file)
     return xlsx_file
 
@@ -1529,9 +1746,10 @@ def main():
     year = args.year
 
     # ── Vorgaben + Prämissen laden ─────────────────────────────────────
-    REF_2025, TARGET_2026, AREA_ORDER, START_Q, COMPANY_TARGET_OVERRIDES = load_targets()
+    REF_2025, TARGET_2026, AREA_ORDER, START_Q, COMPANY_TARGET_OVERRIDES, QUARTER_SPLIT = load_targets()
     praemissen_text = load_praemissen()
     AUDI_FIXED = TARGET_2026.get(AUDI_KEY, 0)
+    quarter_split = QUARTER_SPLIT if QUARTER_SPLIT and int(QUARTER_SPLIT.get("year", 0)) == year else None
 
     # ── Quartal-Periode berechnen ──────────────────────────────────────
     # Ab 1 Monat nach Quartalsanfang → nächstes Quartal einbeziehen
@@ -1545,10 +1763,9 @@ def main():
     else:
         num_q = 1
     q_label = f"Q1-{num_q}" if num_q > 1 else "Q1"
-    q_ratio = num_q / 4
 
     # ── BMs laden (inkl. Status) ───────────────────────────────────────
-    sql = "SELECT concept, dev_order, ea, title, planned_value, company, status, bm_text FROM btl"
+    sql = "SELECT concept, dev_order, ea, title, planned_value, company, status, bm_text, target_date FROM btl"
     rows = run_sql(sql, year)
 
     # ── Status-Mapping aus CSV laden ───────────────────────────────────
@@ -1567,6 +1784,7 @@ def main():
     firm_bms: dict[str, list[dict]] = {}  # firm → [{concept, ea, title, value, status_label}, ...]
     # Für Soll-Berechnung: Firma→Area→Ist-Anteil
     firm_area_ist: dict[str, dict[str, int]] = {}
+    actual_quarter_eur = {quarter: 0 for quarter in QUARTERS}
 
     for row in rows:
         pv = int(float(row.get("planned_value", "0")))
@@ -1578,6 +1796,9 @@ def main():
         benennung = status_map.get(status, "")
         if _exclude_from_budget(benennung):
             continue
+        quarter = _quarter_for_date(row.get("target_date"), title=title, bm_text=bm_text)
+        if quarter in actual_quarter_eur:
+            actual_quarter_eur[quarter] += pv
         area = classify_bm(company, title, bm_text)
         reporting_company = _reporting_company(area, company)
         area_values[area] = area_values.get(area, 0) + pv
@@ -1680,6 +1901,7 @@ def main():
             soll_q += round(area_soll * a_q_ratio)
         firm_soll[firm] = soll
         firm_soll_q[firm] = soll_q
+    firm_soll_q = _scale_distribution_to_target(firm_soll_q, _quarter_split_period_target_eur(quarter_split, num_q))
 
     report_title = f"EKEK/1 Budget {year} — Target / Ist-Analyse"
     meta_lines = [
@@ -1708,6 +1930,28 @@ def main():
             separator_before=False,
         )
     )
+    overview_quarter_block = None
+    if quarter_split:
+        target_quarter_te = {quarter: float(quarter_split["quarters_te"][quarter]) for quarter in QUARTERS}
+        annual_target_te = float(quarter_split["annual_te"])
+        ref_quarter_te = {
+            quarter: (sum_25 * target_quarter_te[quarter] / annual_target_te) if annual_target_te else 0.0
+            for quarter in QUARTERS
+        }
+        actual_quarter_te = {quarter: actual_quarter_eur[quarter] / 1000 for quarter in QUARTERS}
+        delta_quarter_te = {
+            quarter: actual_quarter_te[quarter] - target_quarter_te[quarter]
+            for quarter in QUARTERS
+        }
+        overview_quarter_block = {
+            "headers": list(QUARTERS),
+            "rows": {
+                "IST 2025 (Referenz)": [_round_te_display(ref_quarter_te[quarter]) for quarter in QUARTERS],
+                "Ist (BPLUS)": [_round_te_display(actual_quarter_te[quarter]) for quarter in QUARTERS],
+                "Target": [_round_te_display(target_quarter_te[quarter]) for quarter in QUARTERS],
+                "Delta Ist vs. Target": [_round_te_display(delta_quarter_te[quarter]) for quarter in QUARTERS],
+            },
+        }
 
     # ── Tabelle 1: Target - Ist - Vergleich ───────────────────────────
     area_rows: list[TableRow] = []
@@ -2021,6 +2265,7 @@ def main():
         meta_lines=meta_lines,
         sections=sections,
         max_columns=max_columns,
+        overview_quarter_block=overview_quarter_block,
     )
 
     md_text = render_markdown(report)
