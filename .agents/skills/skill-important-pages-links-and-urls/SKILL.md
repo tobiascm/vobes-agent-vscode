@@ -12,6 +12,12 @@ Dieser Skill enthaelt die zentralen Links und die Bedeutung fuer:
 
 Nutze diesen Skill immer dann, wenn der User nach Agenda-Ergaenzungen, Regelterminen, Dashboard-Links oder den bekannten EKEK1-Standardlinks fragt.
 
+## Abgrenzung zu `skill-orga-ekek1`
+
+- `$skill-orga-ekek1` ist die **primaere** Referenz fuer `EKEK/1`-Orga, Namen, Rollen, Gremien, interne VOBES-Termine und kuratierte Seitenzuordnung.
+- Dieser Skill hier ist die **ergaenzende** Referenz fuer allgemeine Standardlinks, Dashboards, HowTos und Zusatzlinks.
+- Wenn eine Anfrage Personen, Rollen, organisatorische Zustaendigkeiten, Gremien oder die kanonische Einordnung eines internen `EKEK/1`-/`VOBES`-Termins betrifft, zuerst `$skill-orga-ekek1` laden und erst danach diesen Skill fuer Zusatzlinks verwenden.
+
 ## Wichtige Seiten und Bedeutung
 
 ### Dashboard
@@ -59,6 +65,7 @@ Nutze diesen Skill immer dann, wenn der User nach Agenda-Ergaenzungen, Regelterm
   Bedeutung: Zusaetzlicher Chat-Einstiegspunkt im EKEK1-Kontext.
 
 ## Anwendungshinweise
+- Bei `EKEK/1`-/`VOBES`-Orga-Kontext zuerst `$skill-orga-ekek1` konsultieren.
 - Fuer das Hinzufuegen von Aura-Card-Kacheln auf dem Dashboard siehe Skill `skill-update-confluence-page`.
 - Bei neuen Agenda- oder Dashboard-Wuenschen zuerst diese Links verwenden.
 - Bei Personalthemen weiterhin priorisiert den HR Chat Bot nennen.

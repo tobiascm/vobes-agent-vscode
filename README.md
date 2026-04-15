@@ -45,6 +45,7 @@ Ctrl+Shift+P → "Tasks: Run Task" → "MCP Atlassian: Start"
 ├── AGENTS.md                          # Agent-Steuerung (Skills, Regeln, Tool-Priorität)
 ├── .agents/skills/                    # Domänenspezifische Skills
 │   ├── skill-knowledge-bordnetz-vobes/  # RAG-basierte Wissensabfragen
+│   ├── skill-orga-ekek1/               # EKEK/1-Orga, Namen, Gremien, Links & Termine
 │   ├── skill-important-pages-links-and-urls/  # Standard-Links & Referenzseiten
 │   ├── skill-protokoll-confluence/      # Protokollseiten erstellen/speichern
 │   ├── skill-update-confluence-page/    # Confluence-Seiten aktualisieren
@@ -79,6 +80,7 @@ Konfiguriert in `.vscode/mcp.json`:
 | Skill | Zweck |
 |---|---|
 | `skill-knowledge-bordnetz-vobes` | RAG-Abfragen zu VOBES, Bordnetz, VEC, KBL, Prozessen |
+| `skill-orga-ekek1` | Zentrale Referenz fuer EKEK/1-Orga, Namen, Gremien, Links und VOBES-Termine |
 | `skill-important-pages-links-and-urls` | Referenz-Links für Confluence/Jira Spaces und Dashboards |
 | `skill-protokoll-confluence` | Protokollseiten für Regeltermine erstellen und in Confluence speichern |
 | `skill-update-confluence-page` | Standardisierter Ablauf zum Aktualisieren von Confluence-Seiten |

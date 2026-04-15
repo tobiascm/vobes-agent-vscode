@@ -15,7 +15,9 @@
 2. Confluence/Jira lesen oder schreiben mit `mcp-atlassian`?
   → PFLICHT: Skill `$skill-important-pages-links-and-urls` laden (enthaelt alle wichtigen Seiten/Links).  
    → Bei Schreiboperationen zusaetzlich Skill `$skill-update-confluence-page` laden und befolgen.
-3. Fachfremdes Thema → Kein Skill, kein RAG.
+3. Namen, Gremien, wichtige Websites, Confluence-Seiten oder Orga-Infos im `EKEK/1`-/`EKEK`-/`VOBES`-Kontext?
+  → PFLICHT: Skill `$skill-orga-ekek1` laden und zuerst dort nachsehen.
+4. Fachfremdes Thema → Kein Skill, kein RAG.
 
 # Tool-Prioritaet
 
@@ -76,6 +78,11 @@ Bei Token-Problemen mit M365-Skills (Mail Search, File Search, Graph Scope Probe
 → PFLICHT: Skill `$skill-m365-file-reader` laden und befolgen. Liest PPTX, XLSX, DOCX, PDF und Bilder ueber Graph API.
 - M365 Mail Search | Mail suchen | Outlook durchsuchen | finde Mail zu | habe ich eine Mail von | Mail-Suche | E-Mail finden | Postfach durchsuchen
 → PFLICHT: Skill `$skill-m365-copilot-mail-search` laden und befolgen. Durchsucht Outlook-Mails ueber Graph Search API. Benoetigt Teams-Token mit Mail.Read Scope.
+- Namen | Gremien | wichtige Websites | Confluence-Seiten | Orga-Infos im `EKEK/1`-/`EKEK`-/`VOBES`-Kontext
+→ PFLICHT: Skill `$skill-orga-ekek1` laden und befolgen. Zentrale Nachschlagequelle fuer Personen, Rollen, Regeltermine, Standardseiten und organisatorische Einordnung.
+- Mail-Fall | Mail-Agent im `EKEK/1`-/`EKEK`-/`VOBES`-Kontext mit Personen-, Meeting-, Website- oder Seitenbezug
+→ PFLICHT: Skill `$skill-m365-mail-agent` laden und befolgen.
+→ Zusaetzlich PFLICHT: Skill `$skill-orga-ekek1` als erste Referenzquelle fuer Namen, Rollen, Gremien, Standardseiten und Orga-Kontext verwenden.
 - Graph Scopes pruefen | 403 Forbidden Ursache | fehlende Scopes | Token-Diagnose | Graph Probe
 → PFLICHT: Skill `$skill-m365-graph-scope-probe` laden und befolgen. Diagnose fuer Graph-Token, fehlende Scopes und 401/403 bei M365-Skills.
 - Outlook Mail suchen | Mail-Thread | verwandte Mails | Mail vollstaendig lesen | Mail-Body | alle Empfaenger | Outlook Suche | wer hat noch ueber X geschrieben | Mail nachladen

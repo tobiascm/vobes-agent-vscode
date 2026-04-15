@@ -20,6 +20,19 @@ sys.path.insert(
 import analyze_case as mod  # noqa: E402
 
 
+def test_mail_agent_default_prompt_requires_orga_skill_for_ekek1_context():
+    prompt = (
+        WORKSPACE
+        / ".agents"
+        / "skills"
+        / "skill-m365-mail-agent"
+        / "agents"
+        / "openai.yaml"
+    ).read_text(encoding="utf-8")
+    assert "$skill-orga-ekek1" in prompt
+    assert "erste Referenzquelle" in prompt
+
+
 class FakeResponse:
     def __init__(self, status_code: int, payload: dict | None = None, text: str = ""):
         self.status_code = status_code

@@ -13,7 +13,8 @@ Jede Protokollseite MUSS:
 
 ## Voraussetzungen
 
-- Skill `$skill-important-pages-links-and-urls` muss bekannt sein (enthaelt die Sammlerseiten).
+- Skill `$skill-orga-ekek1` muss bekannt sein (enthaelt die primaere Zuordnung fuer interne `EKEK/1`-/`VOBES`-Termine, Gremien und Seiten).
+- Skill `$skill-important-pages-links-and-urls` muss bekannt sein (enthaelt allgemeine Standardlinks und Zusatzseiten).
 - Skill `$skill-update-confluence-page` befolgen bei Updates bestehender Seiten.
 
 ## Sammlerseiten und Namenskonventionen
@@ -33,7 +34,9 @@ Jede Protokollseite MUSS:
 ## Ablauf: Neues Protokoll erstellen
 
 ### 1. Termin identifizieren
-- Frage den User, zu welchem Regeltermin das Protokoll gehoert, falls nicht eindeutig.
+- Zuerst `$skill-orga-ekek1` konsultieren, um Terminname, Sammlerseite und internen Kontext fuer `EKEK/1`-/`VOBES`-Termine einzuordnen.
+- Danach bei Bedarf `$skill-important-pages-links-and-urls` fuer allgemeine Standardlinks oder Zusatzseiten nachziehen.
+- Frage den User, zu welchem Regeltermin das Protokoll gehoert, falls es nach diesem Abgleich noch nicht eindeutig ist.
 - Schlage den naechsten passenden Termin vor (basierend auf aktuellem Datum).
 
 ### 2. Pruefen ob Protokollseite bereits existiert
@@ -126,7 +129,7 @@ h2. Themen
 
 - **NIEMALS** eine Protokollseite auf oberster Ebene im Space anlegen — immer `parent_id` setzen!
 - **NIEMALS** die Namenskonvention aendern — bestehende Seiten folgen einem einheitlichen Muster.
-- Bei unbekanntem Termin den User fragen, nicht raten.
+- Bei unbekanntem Termin nach Abgleich mit `$skill-orga-ekek1` und `$skill-important-pages-links-and-urls` den User fragen, nicht raten.
 - Bei Zweifeln am Datum: Aktuelles Datum vorschlagen und User bestaetigen lassen.
 - Titel bestehender Seiten beim Update niemals aendern.
 - Kein Mischbetrieb aus MCP und manuellen REST-Calls.
