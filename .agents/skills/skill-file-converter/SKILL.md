@@ -88,6 +88,7 @@ Optionale Flags:
 - `--no-llm-pdf` — Nur PDF ohne LLM extrahieren (pymupdf4llm statt Claude)
 - `--all-sheets` — Excel: alle Worksheets einzeln konvertieren
 - `--prompt "..."` — Custom-Prompt fuer Bild-Konvertierung (ersetzt den Standard-Prompt)
+- `--clipboard` — Bild aus Windows-Zwischenablage statt Eingabedatei verwenden (INPUT entfaellt)
 
 Ohne OUTPUT wird die Markdown-Datei neben die Eingabedatei gelegt (`<stem>.md`).
 
@@ -117,4 +118,13 @@ python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown
 
 # Bild → Markdown mit Custom-Prompt (z.B. ONG-Screenshot)
 python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown screenshot.png --prompt "Extrahiere alle Tabellenwerte und Bauteilnummern aus dem Screenshot"
+
+# Clipboard-Bild → Markdown (Screenshot aus Zwischenablage)
+python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown --clipboard
+
+# Clipboard-Bild → Markdown mit Custom-Prompt
+python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown --clipboard --prompt "Extrahiere nur die Tabelle"
+
+# Clipboard-Bild → Markdown mit explizitem Output-Pfad
+python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown --clipboard ergebnis.md
 ```
