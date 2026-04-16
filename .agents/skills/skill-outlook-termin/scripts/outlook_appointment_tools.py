@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import re
 import sys
@@ -11,10 +12,13 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 OUTLOOK_SEARCH_DIR = SCRIPT_DIR.parents[1] / "skill-outlook" / "scripts"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 if str(OUTLOOK_SEARCH_DIR) not in sys.path:
     sys.path.insert(0, str(OUTLOOK_SEARCH_DIR))
 
 from outlook_search_tools import (  # noqa: E402
+    _com_to_local,
     _coerce_text,
     _get_item_by_id,
     _lazy_outlook_context,
@@ -78,19 +82,38 @@ def _candidate_payload(name: str, address: str) -> dict[str, str]:
     return {"name": _coerce_text(name).strip(), "address": _coerce_text(address).strip()}
 
 
-def _primary_smtp(entry: Any) -> str:
-    try:
-        if _coerce_text(_safe_get(entry, "Type", "")) == "EX":
-            ex_user = entry.GetExchangeUser()
-            if ex_user and ex_user.PrimarySmtpAddress:
-                return str(ex_user.PrimarySmtpAddress)
-    except Exception:
-        pass
-    return _coerce_text(_safe_get(entry, "Address", ""))
-
-
 def _candidate_target(candidate: dict[str, str]) -> str:
     return candidate["address"] or candidate["name"]
+
+
+def _address_cache_module() -> Any:
+    return importlib.import_module("outlook_address_cache")
+
+
+def _cache_recipient_candidates(
+    token: str,
+    *,
+    refresh_state: dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    try:
+        payload = _address_cache_module().lookup_cached_addresses(
+            token,
+            limit=5,
+            refresh_state=refresh_state,
+        )
+    except Exception:
+        return []
+
+    candidates: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for match in payload.get("matches", []):
+        candidate = _candidate_payload(match.get("display_name", ""), match.get("email", ""))
+        key = (candidate["name"].lower(), candidate["address"].lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(candidate)
+    return candidates
 
 
 def _search_gal_candidates(token: str, limit: int = 5) -> list[dict[str, str]]:
@@ -112,7 +135,7 @@ def _search_gal_candidates(token: str, limit: int = 5) -> list[dict[str, str]]:
         for entry_index in range(1, entry_count + 1):
             entry = entries.Item(entry_index)
             name = _coerce_text(_safe_get(entry, "Name", ""))
-            address = _primary_smtp(entry)
+            address = _try_internet_address(entry)
             haystack = f"{name}\n{address}".lower()
             if not all(term in haystack for term in terms):
                 continue
@@ -126,11 +149,24 @@ def _search_gal_candidates(token: str, limit: int = 5) -> list[dict[str, str]]:
     return candidates
 
 
-def _resolve_recipient(token: str) -> RecipientResult:
+def _resolve_recipient(token: str, refresh_state: dict[str, Any] | None = None) -> RecipientResult:
+    cache_candidates = _cache_recipient_candidates(token, refresh_state=refresh_state)
+    if len(cache_candidates) == 1:
+        candidate = cache_candidates[0]
+        return RecipientResult(
+            token,
+            True,
+            "address-cache",
+            target=_candidate_target(candidate),
+            name=candidate["name"],
+            address=candidate["address"],
+        )
+    if cache_candidates:
+        return RecipientResult(token, False, "ambiguous-cache", candidates=cache_candidates)
+
     _, namespace, _ = _lazy_outlook_context()
     recipient = namespace.CreateRecipient(token)
     if recipient.Resolve():
-        address_entry = recipient.AddressEntry
         name = _coerce_text(_safe_get(recipient, "Name", ""))
         address = _try_internet_address(recipient)
         target = address or name
@@ -150,8 +186,9 @@ def _resolve_recipient(token: str) -> RecipientResult:
 
 
 def _resolve_many(required: list[str], optional: list[str]) -> tuple[list[RecipientResult], list[RecipientResult]]:
-    required_results = [_resolve_recipient(value) for value in required]
-    optional_results = [_resolve_recipient(value) for value in optional]
+    refresh_state: dict[str, Any] = {}
+    required_results = [_resolve_recipient(value, refresh_state=refresh_state) for value in required]
+    optional_results = [_resolve_recipient(value, refresh_state=refresh_state) for value in optional]
     return required_results, optional_results
 
 
@@ -165,8 +202,21 @@ def _recipient_payload(results: list[RecipientResult]) -> list[dict[str, Any]]:
     return [asdict(result) for result in results]
 
 
+def _current_outlook_timezone(app: Any, fallback_item: Any) -> Any:
+    """Return current Outlook timezone object, fallback to item's timezone."""
+    try:
+        time_zones = _safe_get(app, "TimeZones")
+        current = _safe_get(time_zones, "CurrentTimeZone")
+        if current is not None:
+            return current
+    except Exception:
+        pass
+    return _safe_get(fallback_item, "StartTimeZone")
+
+
 def _format_datetime(value: Any) -> str:
     try:
+        value = _com_to_local(value)
         return datetime(
             int(value.year),
             int(value.month),
@@ -212,7 +262,7 @@ def _appointment_payload(item: Any) -> dict[str, Any]:
 
 def _display_item(item: Any) -> dict[str, bool]:
     item.Display(False)
-    inspector = item.GetInspector()
+    inspector = item.GetInspector
     inspector.Activate()
     return {"window_opened": True, "window_activated": True}
 
@@ -239,6 +289,33 @@ def _finalize_item(item: Any, *, send_mode: str, has_attendees: bool, save_when_
     return {"warnings": warnings, **ui_state}
 
 
+def _reapply_times_if_shifted(
+    item: Any,
+    intended_start: datetime,
+    intended_end: datetime,
+    local_start_tz: Any = None,
+    local_end_tz: Any = None,
+) -> None:
+    """Safety net: re-apply Start/End if they drifted during Display/Save."""
+    try:
+        actual = _com_to_local(item.Start)
+        actual_naive = datetime(
+            int(actual.year), int(actual.month), int(actual.day),
+            int(actual.hour), int(actual.minute),
+        )
+        if actual_naive == intended_start:
+            return
+        if local_start_tz is not None:
+            item.StartTimeZone = local_start_tz
+        if local_end_tz is not None:
+            item.EndTimeZone = local_end_tz
+        item.Start = intended_start
+        item.End = intended_end
+        item.Save()
+    except Exception:
+        pass
+
+
 def _calendar_items() -> Any:
     _, namespace, _ = _lazy_outlook_context()
     folder = namespace.GetDefaultFolder(OL_FOLDER_CALENDAR)
@@ -262,6 +339,7 @@ def create_appointment(
     teams: bool = True,
     send_mode: str = SEND_MODE_REVIEW,
     send_without_confirmation: bool = False,
+    normalize_start: bool = True,
 ) -> dict[str, Any]:
     app, _, _ = _lazy_outlook_context()
     required_results, optional_results = _resolve_many(required or [], optional or [])
@@ -274,7 +352,9 @@ def create_appointment(
             "resolved_recipients": _recipient_payload([result for result in required_results + optional_results if result.resolved]),
         }
 
-    start_dt = _apply_standard_start(_parse_local_datetime(start))
+    start_dt = _parse_local_datetime(start)
+    if normalize_start:
+        start_dt = _apply_standard_start(start_dt)
     if end:
         end_dt = _parse_local_datetime(end)
     elif duration_min:
@@ -282,20 +362,42 @@ def create_appointment(
     else:
         end_dt = _default_end(start_dt, short_clarification)
 
+    assign_start_dt = start_dt
+    assign_end_dt = end_dt
+    try:
+        # Outlook COM stores appointment times two hours too early unless
+        # we compensate with the local UTC offset for the target datetime.
+        start_offset = start_dt.astimezone().utcoffset() or timedelta(0)
+        end_offset = end_dt.astimezone().utcoffset() or timedelta(0)
+        assign_start_dt = start_dt + start_offset
+        assign_end_dt = end_dt + end_offset
+    except Exception:
+        pass
+
     item = app.CreateItem(OL_APPOINTMENT_ITEM)
     has_attendees = bool(required_results or optional_results)
     item.MeetingStatus = OL_MEETING if has_attendees else OL_NON_MEETING
     item.Subject = _effective_subject(subject, draft=send_mode == "draft")
-    item.Start = start_dt
-    item.End = end_dt
+    # Freeze timezone to Outlook's current timezone. Without this, Teams
+    # provisioning can keep GMT and shift the displayed local start/end.
+    local_tz = _current_outlook_timezone(app, item)
+    local_start_tz = local_tz
+    local_end_tz = local_tz
     item.Location = _coerce_text(location).strip()
     item.Body = _coerce_text(body)
     if teams:
         item.IsOnlineMeeting = True
     _add_recipients(item, required_results, OL_REQUIRED)
     _add_recipients(item, optional_results, OL_OPTIONAL)
+    # Restore local timezone and set Start/End so the naive datetimes
+    # are interpreted in the correct (local) timezone, not GMT.
+    item.StartTimeZone = local_start_tz
+    item.EndTimeZone = local_end_tz
+    item.Start = assign_start_dt
+    item.End = assign_end_dt
     final_send_mode = _resolve_send_mode(send_mode, send_without_confirmation)
     final_state = _finalize_item(item, send_mode=final_send_mode, has_attendees=has_attendees)
+    _reapply_times_if_shifted(item, start_dt, end_dt, local_start_tz, local_end_tz)
 
     return {
         "status": "ok",
@@ -340,29 +442,49 @@ def update_appointment(
     send_mode: str = "",
     send_without_confirmation: bool = False,
 ) -> dict[str, Any]:
+    app, _, _ = _lazy_outlook_context()
     item = _get_item_by_id(entry_id, store_id)
+    # Freeze timezone to Outlook's current timezone to avoid display drift.
+    local_tz = _current_outlook_timezone(app, item)
+    local_start_tz = local_tz
+    local_end_tz = local_tz
     if subject:
         keep_draft = _coerce_text(_safe_get(item, "Subject", "")).lower().startswith(DRAFT_PREFIX.lower()) and send_mode != "send"
         item.Subject = _effective_subject(subject, draft=keep_draft)
-    if start:
-        start_dt = _apply_standard_start(_parse_local_datetime(start))
-        item.Start = start_dt
-        if end:
-            item.End = _parse_local_datetime(end)
-        elif duration_min:
-            item.End = start_dt + timedelta(minutes=duration_min)
-        elif not _coerce_text(end):
-            item.End = _default_end(start_dt, short_clarification)
-    elif end:
-        item.End = _parse_local_datetime(end)
     if body is not None:
         item.Body = _coerce_text(body)
     if location is not None:
         item.Location = _coerce_text(location).strip()
     if teams is not None:
         item.IsOnlineMeeting = teams
+    # Restore local timezone and set Start/End so naive datetimes
+    # are interpreted in the correct (local) timezone, not GMT.
+    intended_start: datetime | None = None
+    intended_end: datetime | None = None
+    if start:
+        item.StartTimeZone = local_start_tz
+        item.EndTimeZone = local_end_tz
+        start_dt = _apply_standard_start(_parse_local_datetime(start))
+        intended_start = start_dt
+        item.Start = start_dt
+        if end:
+            end_dt = _parse_local_datetime(end)
+            intended_end = end_dt
+            item.End = end_dt
+        elif duration_min:
+            end_dt = start_dt + timedelta(minutes=duration_min)
+            intended_end = end_dt
+            item.End = end_dt
+        elif not _coerce_text(end):
+            end_dt = _default_end(start_dt, short_clarification)
+            intended_end = end_dt
+            item.End = end_dt
+    elif end:
+        item.End = _parse_local_datetime(end)
     final_send_mode = _resolve_send_mode(send_mode, send_without_confirmation)
     final_state = _finalize_item(item, send_mode=final_send_mode, has_attendees=True, save_when_draft=False)
+    if intended_start and intended_end:
+        _reapply_times_if_shifted(item, intended_start, intended_end, local_start_tz, local_end_tz)
     return {
         "status": "ok",
         "action": "update",
@@ -417,13 +539,14 @@ def search_appointments(
         item = items.Item(index)
         start_value = _safe_get(item, "Start")
         try:
+            start_local = _com_to_local(start_value)
             item_start = datetime(
-                int(start_value.year),
-                int(start_value.month),
-                int(start_value.day),
-                int(start_value.hour),
-                int(start_value.minute),
-                int(start_value.second),
+                int(start_local.year),
+                int(start_local.month),
+                int(start_local.day),
+                int(start_local.hour),
+                int(start_local.minute),
+                int(start_local.second),
             )
         except Exception:
             continue
@@ -459,6 +582,131 @@ def diagnostics() -> dict[str, Any]:
         "online_meeting_provider": int(_safe_get(item, "OnlineMeetingProvider", 0) or 0),
         "calendar_folder": _coerce_text(_safe_get(namespace.GetDefaultFolder(OL_FOLDER_CALENDAR), "FolderPath", "")),
     }
+
+
+def _slotfinder_module() -> Any:
+    return importlib.import_module("outlook_find_appointment_slot")
+
+
+def suggest_slots(
+    *,
+    search_start: str,
+    search_end: str,
+    duration_min: int = 60,
+    slot_minutes: int = 30,
+    top_n: int = 10,
+    required: list[str] | None = None,
+    optional: list[str] | None = None,
+    subject: str = "",
+    include_weekends: bool = False,
+    working_hour_start: int = 8,
+    working_hour_end: int = 18,
+    open_best_slot: bool = False,
+    prepare_best_slot_review: bool = False,
+    source_entry_id: str = "",
+    store_id: str = "",
+    body: str = "",
+    location: str = "",
+    teams: bool = True,
+    include_shorter_slots: bool = True,
+) -> dict[str, Any]:
+    slotfinder = _slotfinder_module()
+    search_start_dt = _parse_local_datetime(search_start)
+    search_end_dt = _parse_local_datetime(search_end)
+
+    # Support comma-separated values in --required / --optional
+    def _split_csv(items: list[str] | None) -> list[str]:
+        result: list[str] = []
+        for item in (items or []):
+            result.extend(part.strip() for part in item.split(",") if part.strip())
+        return result
+
+    required = _split_csv(required)
+    optional = _split_csv(optional)
+
+    if source_entry_id:
+        context = slotfinder._load_reschedule_context(
+            source_entry_id,
+            store_id,
+            required or [],
+            optional or [],
+            subject,
+            duration_min,
+        )
+        main_participants = context["main_participants"]
+        other_participants = context["other_participants"]
+        effective_subject = context["subject"]
+        effective_duration = context["duration_minutes"]
+        ignore_entry_ids = context["ignore_entry_ids"]
+        action = "suggest-reschedule-slots"
+        source_payload = context["source"]
+    else:
+        main_participants = required or []
+        other_participants = optional or []
+        effective_subject = _coerce_text(subject).strip() or slotfinder.DEFAULT_SUBJECT
+        effective_duration = duration_min
+        ignore_entry_ids = set()
+        action = "suggest-slots"
+        source_payload = None
+
+    participants = slotfinder._combine_participants(main_participants, other_participants)
+    slots = slotfinder.find_best_slots(
+        search_start=search_start_dt,
+        search_end=search_end_dt,
+        duration_minutes=effective_duration,
+        slot_minutes=slot_minutes,
+        top_n=top_n,
+        main_participants=main_participants,
+        other_participants=other_participants,
+        ignore_entry_ids=ignore_entry_ids,
+        weekdays_only=not include_weekends,
+        working_hour_start=working_hour_start,
+        working_hour_end=working_hour_end,
+        include_shorter_slots=include_shorter_slots,
+    )
+    if open_best_slot and slots:
+        slotfinder.open_best_slot_as_meeting(slots[0], subject=effective_subject, participants=participants)
+
+    prepared_appointment = None
+    if prepare_best_slot_review and slots:
+        best_slot = slots[0]
+        duration_for_create = int((best_slot.end - best_slot.start).total_seconds() // 60)
+        prepared_appointment = create_appointment(
+            subject=effective_subject,
+            start=best_slot.start.isoformat(),
+            duration_min=duration_for_create,
+            required=main_participants,
+            optional=other_participants,
+            body=body,
+            location=location,
+            teams=teams,
+            send_mode=SEND_MODE_REVIEW,
+        )
+
+    payload: dict[str, Any] = {
+        "status": "ok",
+        "action": action,
+        "subject": effective_subject,
+        "criteria": {
+            "search_start": search_start_dt.isoformat(),
+            "search_end": search_end_dt.isoformat(),
+            "duration_minutes": effective_duration,
+            "slot_minutes": slot_minutes,
+            "top_n": top_n,
+            "weekdays_only": not include_weekends,
+            "working_hour_start": working_hour_start,
+            "working_hour_end": working_hour_end,
+            "main_participants": main_participants,
+            "other_participants": other_participants,
+        },
+        "best_slot_opened": bool(open_best_slot and slots),
+        "best_slot_review_prepared": bool(prepare_best_slot_review and prepared_appointment),
+        "slots": [slotfinder._slot_payload(slot) for slot in slots],
+        "prepared_appointment": prepared_appointment,
+    }
+    if source_payload is not None:
+        payload["source_appointment"] = source_payload
+    return payload
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -510,6 +758,29 @@ def _build_parser() -> argparse.ArgumentParser:
     search_parser.add_argument("--subject", default="")
     search_parser.add_argument("--participant", action="append", default=[])
     search_parser.add_argument("--max-results", type=int, default=10)
+
+    slot_parser = subparsers.add_parser("suggest-slots", help="Finde passende Slots fuer neue oder bestehende Termine.")
+    slot_parser.add_argument("--search-start", required=True)
+    slot_parser.add_argument("--search-end", required=True)
+    slot_parser.add_argument("--duration-min", type=int, default=60)
+    slot_parser.add_argument("--slot-minutes", type=int, default=30)
+    slot_parser.add_argument("--top-n", type=int, default=10)
+    slot_parser.add_argument("--required", action="append", default=[])
+    slot_parser.add_argument("--optional", action="append", default=[])
+    slot_parser.add_argument("--subject", default="")
+    slot_parser.add_argument("--include-weekends", action="store_true")
+    slot_parser.add_argument("--working-hour-start", type=int, default=8)
+    slot_parser.add_argument("--working-hour-end", type=int, default=18)
+    slot_parser.add_argument("--open-best-slot", action="store_true")
+    slot_parser.add_argument("--prepare-best-slot-review", action="store_true")
+    slot_parser.add_argument("--body", default="")
+    slot_parser.add_argument("--location", default="")
+    slot_parser.add_argument("--teams", dest="teams", action="store_true", default=True)
+    slot_parser.add_argument("--no-teams", dest="teams", action="store_false")
+    slot_parser.add_argument("--source-entry-id", default="")
+    slot_parser.add_argument("--store-id", default="")
+    slot_parser.add_argument("--no-shorter-slots", dest="include_shorter_slots", action="store_false", default=True,
+                             help="Keine kuerzeren Alternativ-Slots anzeigen.")
 
     resolve_parser = subparsers.add_parser("resolve-recipient", help="Resolve one or more recipients.")
     resolve_parser.add_argument("--name", action="append", default=[], required=True)
@@ -563,11 +834,34 @@ def main(argv: list[str] | None = None) -> int:
             participant=args.participant,
             max_results=args.max_results,
         )
+    elif args.command == "suggest-slots":
+        payload = suggest_slots(
+            search_start=args.search_start,
+            search_end=args.search_end,
+            duration_min=args.duration_min,
+            slot_minutes=args.slot_minutes,
+            top_n=args.top_n,
+            required=args.required,
+            optional=args.optional,
+            subject=args.subject,
+            include_weekends=args.include_weekends,
+            working_hour_start=args.working_hour_start,
+            working_hour_end=args.working_hour_end,
+            open_best_slot=args.open_best_slot,
+            prepare_best_slot_review=args.prepare_best_slot_review,
+            source_entry_id=args.source_entry_id,
+            store_id=args.store_id,
+            body=args.body,
+            location=args.location,
+            teams=args.teams,
+            include_shorter_slots=args.include_shorter_slots,
+        )
     elif args.command == "resolve-recipient":
+        refresh_state: dict[str, Any] = {}
         payload = {
             "status": "ok",
             "action": "resolve-recipient",
-            "results": _recipient_payload([_resolve_recipient(value) for value in args.name]),
+            "results": _recipient_payload([_resolve_recipient(value, refresh_state=refresh_state) for value in args.name]),
         }
     else:
         payload = diagnostics()

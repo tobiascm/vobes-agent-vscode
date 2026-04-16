@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import re
 import sys
@@ -40,6 +41,8 @@ DEFAULT_BACKGROUND_FOLDER_IDS = (
 SUBJECT_DASL = "urn:schemas:httpmail:subject"
 BODY_DASL = "urn:schemas:httpmail:textdescription"
 ADVANCED_SEARCH_TIMEOUT_SECONDS = 120.0
+PR_SMTP_ADDRESS_DASL = "http://schemas.microsoft.com/mapi/proptag/0x39FE001E"
+SMTP_ADDRESS_RE = re.compile(r"^[^@\s<>\"']+@[^@\s<>\"']+$")
 
 
 @dataclass
@@ -140,6 +143,21 @@ def _safe_get(item: Any, name: str, default: Any = None) -> Any:
     return default if value is None else value
 
 
+def _com_to_local(value: Any) -> Any:
+    try:
+        return datetime(
+            int(value.year),
+            int(value.month),
+            int(value.day),
+            int(value.hour),
+            int(value.minute),
+            int(value.second),
+        )
+    except Exception:
+        pass
+    return value
+
+
 def _lazy_outlook_context() -> tuple[Any, Any, OutlookEvents]:
     global _COM_CONTEXT
     if _COM_CONTEXT is not None:
@@ -164,17 +182,60 @@ def _get_item_by_id(entry_id: str, store_id: str = "") -> Any:
     return namespace.GetItemFromID(entry_id)
 
 
-def _try_internet_address(recipient: Any) -> str:
+def _normalize_smtp_address(value: Any) -> str:
+    text = _coerce_text(value).strip().strip("<>").strip()
+    if not text:
+        return ""
+    if text.lower().startswith("smtp:"):
+        text = text[5:].strip()
+    if not text or text.lower().startswith("/o="):
+        return ""
+    if not SMTP_ADDRESS_RE.fullmatch(text):
+        return ""
+    return text
+
+
+def _property_smtp_address(value: Any) -> str:
+    accessor = _safe_get(value, "PropertyAccessor")
+    if accessor is None:
+        return ""
     try:
-        address = recipient.AddressEntry.GetExchangeUser().PrimarySmtpAddress
-        if address:
-            return str(address)
+        return _normalize_smtp_address(accessor.GetProperty(PR_SMTP_ADDRESS_DASL))
     except Exception:
-        pass
-    try:
-        address = recipient.Address
+        return ""
+
+
+def _exchange_primary_smtp(address_entry: Any) -> str:
+    for getter_name in ("GetExchangeUser", "GetExchangeDistributionList"):
+        try:
+            exchange_target = getattr(address_entry, getter_name)()
+        except Exception:
+            continue
+        address = _normalize_smtp_address(_safe_get(exchange_target, "PrimarySmtpAddress", ""))
         if address:
-            return str(address)
+            return address
+    return ""
+
+
+def _try_internet_address(recipient: Any) -> str:
+    address_entry = _safe_get(recipient, "AddressEntry")
+    if address_entry is not None:
+        address = _exchange_primary_smtp(address_entry)
+        if address:
+            return address
+        address = _property_smtp_address(address_entry)
+        if address:
+            return address
+        address = _normalize_smtp_address(_safe_get(address_entry, "Address", ""))
+        if address:
+            return address
+    address = _property_smtp_address(recipient)
+    if address:
+        return address
+    try:
+        address = _normalize_smtp_address(recipient.Address)
+        if address:
+            return address
     except Exception:
         pass
     return ""
@@ -210,11 +271,16 @@ def _extract_recipients(item: Any) -> tuple[list[str], list[str]]:
     return to_values, cc_values
 
 
-def _datetime_like_to_iso(value: Any) -> str | None:
+def _datetime_like_to_utc(value: Any) -> datetime | None:
     if value is None:
         return None
+    if hasattr(value, "astimezone") and getattr(value, "tzinfo", None) is not None:
+        try:
+            return value.astimezone(timezone.utc).replace(microsecond=0)
+        except Exception:
+            pass
     try:
-        dt = datetime(
+        return datetime(
             int(value.year),
             int(value.month),
             int(value.day),
@@ -225,7 +291,16 @@ def _datetime_like_to_iso(value: Any) -> str | None:
         )
     except Exception:
         return None
-    return dt.isoformat()
+
+
+def _datetime_like_to_iso(value: Any) -> str | None:
+    dt = _datetime_like_to_utc(value)
+    return dt.isoformat() if dt is not None else None
+
+
+def _format_outlook_restrict_datetime(dt: datetime) -> str:
+    local_dt = dt.astimezone().replace(tzinfo=None)
+    return local_dt.strftime("%m/%d/%Y %I:%M %p")
 
 
 def _best_item_iso_time(item: Any) -> str | None:
@@ -361,6 +436,68 @@ def _build_ui_query(query: SearchQuery) -> str:
     if not ui_query:
         raise ValueError("search requires --query or at least one positive filter such as --keyword or --subject-must")
     return ui_query
+
+
+def _address_cache_module() -> Any:
+    return importlib.import_module("outlook_address_cache")
+
+
+def _expand_filter_values_via_cache(
+    values: list[str],
+    *,
+    refresh_state: dict[str, Any] | None = None,
+    limit: int = 5,
+) -> tuple[list[str], list[dict[str, Any]], list[str]]:
+    expanded = list(values)
+    expanded_seen = {value for value in values if value}
+    resolutions: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    if not values:
+        return expanded, resolutions, warnings
+
+    try:
+        cache_module = _address_cache_module()
+    except Exception as exc:
+        warnings.append(f"address cache unavailable: {exc!r}")
+        return expanded, resolutions, warnings
+
+    for value in values:
+        try:
+            payload = cache_module.lookup_cached_addresses(
+                value,
+                limit=limit,
+                refresh_state=refresh_state,
+            )
+        except Exception as exc:
+            warnings.append(f"address cache lookup failed for {value!r}: {exc!r}")
+            continue
+
+        matches = payload.get("matches", [])
+        resolution = {
+            "query": value,
+            "match_count": len(matches),
+            "refreshed": bool(payload.get("refreshed")),
+            "refresh_reason": payload.get("refresh_reason"),
+            "matches": [
+                {
+                    "email": match.get("email", ""),
+                    "display_name": match.get("display_name", ""),
+                }
+                for match in matches
+            ],
+        }
+        if payload.get("warnings"):
+            resolution["warnings"] = list(payload["warnings"])
+            warnings.extend(str(warning) for warning in payload["warnings"])
+        resolutions.append(resolution)
+
+        for match in matches:
+            for token in (_normalize_text(match.get("email", "")), _normalize_text(match.get("display_name", ""))):
+                if token and token not in expanded_seen:
+                    expanded.append(token)
+                    expanded_seen.add(token)
+
+    return expanded, resolutions, warnings
 
 
 def _sql_quote(value: str) -> str:
@@ -861,6 +998,30 @@ def search_emails(
         max_results=max_results,
     )
     _validate_search_query(query)
+    refresh_state: dict[str, Any] = {}
+    expanded_sender_filters, sender_cache_resolution, sender_cache_warnings = _expand_filter_values_via_cache(
+        query.sender_filters,
+        refresh_state=refresh_state,
+    )
+    expanded_recipient_filters, recipient_cache_resolution, recipient_cache_warnings = _expand_filter_values_via_cache(
+        query.recipient_filters,
+        refresh_state=refresh_state,
+    )
+    match_query = SearchQuery(
+        raw_query=query.raw_query,
+        keywords=list(query.keywords),
+        sender_filters=expanded_sender_filters,
+        recipient_filters=expanded_recipient_filters,
+        subject_must=list(query.subject_must),
+        exclude_terms=list(query.exclude_terms),
+        search_days=query.search_days,
+        max_results=query.max_results,
+    )
+    cache_resolution = {
+        "sender": sender_cache_resolution,
+        "recipient": recipient_cache_resolution,
+    }
+    cache_warnings = sender_cache_warnings + recipient_cache_warnings
 
     if search_ui:
         ui_query = _build_ui_query(query)
@@ -882,7 +1043,7 @@ def search_emails(
             received_dt = _parse_received_iso(ref.received)
             if received_dt and received_dt < cutoff:
                 continue
-            matched, reasons = _matches_filter_terms(ref, query)
+            matched, reasons = _matches_filter_terms(ref, match_query)
             if not matched:
                 continue
             matches.append(
@@ -907,11 +1068,12 @@ def search_emails(
                 "scope": meta["scope"],
                 "wait_seconds": meta["wait_seconds"],
                 "ui_query": meta["query"],
+                "cache_resolution": cache_resolution,
             },
             "current_folder": meta["current_folder"],
             "selection_count": meta["selection_count"],
             "matches": matches[:max_results],
-            "warnings": warnings[:10],
+            "warnings": (warnings + cache_warnings)[:10],
         }
 
     refs, meta, warnings = _advanced_search_refs(query)
@@ -926,7 +1088,7 @@ def search_emails(
         received_dt = _parse_received_iso(ref.received)
         if received_dt and received_dt < cutoff:
             continue
-        matched, reasons = _matches_filter_terms(ref, query)
+        matched, reasons = _matches_filter_terms(ref, match_query)
         if not matched:
             continue
         matches.append(
@@ -950,10 +1112,11 @@ def search_emails(
             "search_days": search_days,
             "max_results": max_results,
             "search_ui": False,
+            "cache_resolution": cache_resolution,
         },
         "stores": meta["stores"],
         "matches": matches[:max_results],
-        "warnings": warnings[:20],
+        "warnings": (warnings + cache_warnings)[:20],
     }
 
 

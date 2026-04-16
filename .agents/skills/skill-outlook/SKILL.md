@@ -10,6 +10,8 @@ Deckt Suche, Thread-Sicht, verwandte Mails und vollstaendiges Lesen einzelner Ma
 
 Script: `.agents/skills/skill-outlook/scripts/outlook_search_tools.py`
 
+Adress-Cache: `.agents/skills/skill-outlook/scripts/outlook_address_cache.py`
+
 ## Wann verwenden?
 
 - User sucht **Mails zu einem Thema** im lokalen Outlook
@@ -30,6 +32,26 @@ Script: `.agents/skills/skill-outlook/scripts/outlook_search_tools.py`
 
 - **Outlook** muss lokal installiert und geoeffnet sein (COM-Zugriff)
 - Fuer Thread/verwandte Mails: **Entry-ID** und optional **Store-ID** der Seed-Mail
+- Fuer Namens-/Adressfilter nutzt der Skill zusaetzlich einen lokalen Adress-Cache unter `userdata/outlook/address_cache.db`
+
+## Adress-Cache
+
+- Bei `--sender` und `--recipient` wird **zuerst** der lokale Address-Cache befragt
+- Ist der Cache leer, wird automatisch ein Vollaufbau gestartet
+- Gibt es einen Cache-Miss und der letzte erfolgreiche Lauf ist **aelter als 1 Tag**, wird automatisch ein inkrementeller Update-Lauf gestartet
+- Erst wenn danach weiter kein Treffer vorliegt, bleibt die Suche bei den normalen Outlook-Filtern
+
+Manueller Lauf:
+
+```bash
+python .agents/skills/skill-outlook/scripts/outlook_address_cache.py
+```
+
+Kompletter Neuaufbau:
+
+```bash
+python .agents/skills/skill-outlook/scripts/outlook_address_cache.py --force-full
+```
 
 ## CLI-Referenz
 

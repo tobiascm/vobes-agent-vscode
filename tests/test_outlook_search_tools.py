@@ -1,10 +1,13 @@
 from pathlib import Path
+import sqlite3
 import sys
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".agents" / "skills" / "skill-outlook" / "scripts"))
 
+import outlook_address_cache as address_cache  # noqa: E402
 from outlook_search_tools import (  # noqa: E402
     EmailRef,
     EXPLORER_SEARCH_SCOPES,
@@ -22,6 +25,7 @@ from outlook_search_tools import (  # noqa: E402
     _cap_recipients,
     _mail_item_debug_payload,
     _matches_filter_terms,
+    _try_internet_address,
     main,
     search_emails,
 )
@@ -274,3 +278,219 @@ def test_main_rejects_scope_without_search_ui():
     with pytest.raises(SystemExit) as exc:
         main(["search", "--subject-must", "Workshop-Nachbereitung", "--scope", "all_folders"])
     assert exc.value.code == 2
+
+
+def test_search_emails_uses_cache_expansion_for_sender_filters(monkeypatch):
+    monkeypatch.setattr(
+        "outlook_search_tools._advanced_search_refs",
+        lambda *args, **kwargs: (
+            [
+                EmailRef(
+                    entry_id="entry-1",
+                    store_id="store-1",
+                    subject="Workshop",
+                    sender="martin@example.com",
+                    sender_name="Martin",
+                    received="2024-03-15T16:52:53+00:00",
+                )
+            ],
+            {"stores": []},
+            [],
+        ),
+    )
+    monkeypatch.setattr(
+        "outlook_search_tools._expand_filter_values_via_cache",
+        lambda values, **kwargs: (
+            ["martin mustermann", "martin@example.com"] if values else [],
+            [{"query": "martin mustermann", "match_count": 1, "matches": [{"email": "martin@example.com", "display_name": "Martin Mustermann"}]}],
+            [],
+        ),
+    )
+
+    payload = search_emails(sender_filters=["Martin Mustermann"], search_days=1500, max_results=10)
+
+    assert len(payload["matches"]) == 1
+    assert payload["matches"][0]["email"]["sender"] == "martin@example.com"
+    assert payload["query"]["sender"] == ["martin mustermann"]
+    assert payload["query"]["cache_resolution"]["sender"][0]["match_count"] == 1
+
+
+def test_try_internet_address_ignores_exchange_legacy_dn_and_prefers_property_smtp():
+    class FakeAccessor:
+        @staticmethod
+        def GetProperty(name):
+            assert name == "http://schemas.microsoft.com/mapi/proptag/0x39FE001E"
+            return "martin.mustermann@volkswagen.de"
+
+    class FakeAddressEntry:
+        PropertyAccessor = FakeAccessor()
+        Address = "/o=ExchangeLabs/ou=Exchange Administrative Group/cn=Recipients/cn=legacy"
+
+        @staticmethod
+        def GetExchangeUser():
+            raise RuntimeError("no exchange user")
+
+        @staticmethod
+        def GetExchangeDistributionList():
+            raise RuntimeError("no exchange dl")
+
+    class FakeRecipient:
+        AddressEntry = FakeAddressEntry()
+        Address = "/o=ExchangeLabs/ou=Exchange Administrative Group/cn=Recipients/cn=legacy"
+
+    assert _try_internet_address(FakeRecipient()) == "martin.mustermann@volkswagen.de"
+
+
+def test_address_cache_status_marks_entries_older_than_one_day_as_stale(tmp_path, monkeypatch):
+    db_path = tmp_path / "address_cache.db"
+    monkeypatch.setattr(address_cache, "DB_PATH", db_path)
+    monkeypatch.setattr(address_cache, "USERDATA_DIR", tmp_path)
+
+    with address_cache._connect() as conn:
+        conn.execute(
+            "INSERT INTO addresses(email, display_name, seen_count) VALUES(?, ?, ?)",
+            ("martin@example.com", "Martin", 1),
+        )
+        address_cache._set_last_scan_utc(conn, (datetime.now(UTC) - timedelta(days=2)).replace(microsecond=0).isoformat())
+        conn.commit()
+
+    status = address_cache.get_cache_status()
+
+    assert status["address_count"] == 1
+    assert status["is_empty"] is False
+    assert status["is_stale"] is True
+
+
+def test_address_cache_lookup_refreshes_empty_cache_once_and_retries(tmp_path, monkeypatch):
+    db_path = tmp_path / "address_cache.db"
+    monkeypatch.setattr(address_cache, "DB_PATH", db_path)
+    monkeypatch.setattr(address_cache, "USERDATA_DIR", tmp_path)
+
+    refresh_calls = []
+
+    def fake_refresh(*, refresh_state, reason, logger):
+        refresh_calls.append(reason)
+        with address_cache._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO addresses(
+                    email, display_name, seen_count, inbound_count, outbound_count,
+                    sender_count, recipient_count, first_seen_utc, last_seen_utc
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    "martin@example.com",
+                    "Martin Mustermann",
+                    3,
+                    1,
+                    2,
+                    1,
+                    2,
+                    "2026-04-14T08:00:00+00:00",
+                    "2026-04-16T08:00:00+00:00",
+                ),
+            )
+            address_cache._set_last_scan_utc(conn, "2026-04-16T08:00:00+00:00")
+            conn.commit()
+        refresh_state[f"{reason}_attempted"] = True
+        return True
+
+    monkeypatch.setattr(address_cache, "_maybe_refresh_cache", fake_refresh)
+
+    payload = address_cache.lookup_cached_addresses("Martin Mustermann", refresh_state={})
+
+    assert refresh_calls == ["empty-cache"]
+    assert payload["refreshed"] is True
+    assert payload["refresh_reason"] == "empty-cache"
+    assert payload["matches"][0]["email"] == "martin@example.com"
+
+
+def test_address_cache_parse_args_accepts_folder_filter():
+    args = address_cache.parse_args(["--folder", "inbox", "--folder", "sent"])
+
+    assert args.folder == ["inbox", "sent"]
+    assert args.force_full is False
+
+
+def test_address_cache_parse_args_accepts_max_messages():
+    args = address_cache.parse_args(["--folder", "inbox", "--max-messages", "200"])
+
+    assert args.folder == ["inbox"]
+    assert args.max_messages == 200
+
+
+def test_address_cache_execute_scan_stops_after_considered_limit(monkeypatch, tmp_path):
+    db_path = tmp_path / "address_cache.db"
+    monkeypatch.setattr(address_cache, "DB_PATH", db_path)
+    monkeypatch.setattr(address_cache, "USERDATA_DIR", tmp_path)
+
+    class FakeItems:
+        Count = 3
+
+        @staticmethod
+        def Item(index):
+            return [
+                type("Item", (), {"MessageClass": "IPM.Note", "EntryID": "1", "Subject": "A"})(),
+                type("Item", (), {"MessageClass": "IPM.Note", "EntryID": "2", "Subject": "B"})(),
+                type("Item", (), {"MessageClass": "IPM.Note", "EntryID": "3", "Subject": "C"})(),
+            ][index - 1]
+
+    fake_folder = object()
+    monkeypatch.setattr(
+        address_cache,
+        "_discover_scan_folders",
+        lambda logger, folder_filters=None: [
+            address_cache.ScanFolder(
+                folder=fake_folder,
+                store_id="store-1",
+                store_name="Mailbox",
+                folder_path="\\\\Mailbox\\Inbox",
+                source_kind="inbox",
+                filter_field="ReceivedTime",
+            )
+        ],
+    )
+    monkeypatch.setattr(address_cache, "_restrict_items", lambda folder, filter_field, last_scan_utc, logger: address_cache._iter_items(FakeItems()))
+    monkeypatch.setattr(address_cache, "_message_datetime", lambda item, source_kind: datetime(2026, 4, 17, 8, 0, tzinfo=UTC))
+    monkeypatch.setattr(address_cache, "_collect_message_addresses", lambda item, source_kind: [])
+
+    with address_cache._connect() as conn:
+        payload = address_cache.execute_scan(conn, force_full=False, logger=address_cache._cache_logger(), max_messages=2)
+
+    assert payload["messages_considered"] == 2
+    assert payload["messages_seen"] == 2
+    assert payload["stopped_early"] is True
+
+
+def test_address_cache_connect_purges_non_smtp_rows(tmp_path, monkeypatch):
+    db_path = tmp_path / "address_cache.db"
+    monkeypatch.setattr(address_cache, "DB_PATH", db_path)
+    monkeypatch.setattr(address_cache, "USERDATA_DIR", tmp_path)
+
+    conn = sqlite3.connect(db_path)
+    address_cache._ensure_schema(conn)
+    conn.execute(
+        "INSERT INTO addresses(email, display_name, seen_count) VALUES(?, ?, ?)",
+        ("/o=exchangelabs/ou=exchange administrative group/cn=recipients/cn=legacy", "Legacy", 1),
+    )
+    conn.execute(
+        "INSERT INTO addresses(email, display_name, seen_count) VALUES(?, ?, ?)",
+        ("martin@example.com", "Martin", 1),
+    )
+    conn.execute(
+        """
+        INSERT INTO address_observations(
+            store_id, entry_id, email, role, display_name, source_kind, folder_path, message_time_utc
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        ("store-1", "entry-1", "/o=exchangelabs/ou=exchange administrative group/cn=recipients/cn=legacy", "sender", "Legacy", "inbox", "\\\\Mailbox\\Inbox", None),
+    )
+    conn.commit()
+    conn.close()
+
+    with address_cache._connect() as conn:
+        rows = conn.execute("SELECT email FROM addresses ORDER BY email").fetchall()
+        obs_rows = conn.execute("SELECT email FROM address_observations").fetchall()
+
+    assert rows == [("martin@example.com",)]
+    assert obs_rows == []
