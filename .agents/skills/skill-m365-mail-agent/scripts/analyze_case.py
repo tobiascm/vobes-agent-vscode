@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -131,12 +132,73 @@ def _active_case_path() -> Path:
     return _session_state_dir() / "active_case.json"
 
 
+_SMART_QUOTE_RE = re.compile(r"[\u00ab\u00bb\u2018-\u201f]")
+_MISMATCHED_SMART_QUOTE_RE = re.compile(r"([\u00ab\u201c\u201e])([^\"]*)\"")
+
+
+def _sanitize_json_text(text: str) -> str:
+    """Fix non-ASCII quotation marks that collide with the JSON ``"`` delimiter.
+
+    LLMs sometimes produce German typographic quotes like ``\u201eGesperrt"``
+    where the *opening* low-9 quote (U+201E) is a harmless non-ASCII character
+    but the *closing* quote is a plain ASCII ``"`` (U+0022) which terminates the
+    JSON string prematurely.
+
+    Two-step fix:
+
+    1. **Repair mismatched pairs** – If a non-ASCII opening double-quote
+       (U+00AB ``«``, U+201C ``\u201c``, or U+201E ``\u201e``) is followed by
+       text and then a plain ASCII ``"`` (U+0022), replace that ASCII ``"`` with
+       U+201D (RIGHT DOUBLE QUOTATION MARK) so it stops acting as JSON delimiter.
+    2. **Escape remaining smart quotes** – Replace every remaining non-ASCII
+       quotation mark (U+00AB, U+00BB, U+2018\u2013U+201F) with its ``\\uXXXX``
+       escape so the JSON parser never confuses them with structural characters.
+    """
+    # Step 1: „X" (U+201E … U+0022) → „X\u201d  (fix the broken closer)
+    text = _MISMATCHED_SMART_QUOTE_RE.sub(
+        lambda m: m.group(1) + m.group(2) + "\u201d", text
+    )
+    # Step 2: escape all remaining non-ASCII quotes to \\uXXXX
+    text = _SMART_QUOTE_RE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
+    return text
+
+
+def _try_json_repair(text: str, *, label: str) -> Any:
+    """Attempt to repair broken JSON via *json-repair* (optional dependency)."""
+    try:
+        from json_repair import repair_json  # type: ignore[import-untyped]
+    except ImportError:
+        raise CaseError(
+            f"{label} ist kein gueltiges JSON und json-repair ist nicht installiert."
+        )
+    print(f"WARN: {label} – json.loads() fehlgeschlagen, versuche json-repair …", file=sys.stderr)
+    repaired = repair_json(text, return_objects=True)
+    if not isinstance(repaired, (dict, list)):
+        raise CaseError(f"{label} konnte auch mit json-repair nicht repariert werden.")
+    return repaired
+
+
 def _read_json_file(path: Path, *, label: str) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError as exc:
         raise CaseError(f"{label} nicht gefunden: {path}") from exc
-    except json.JSONDecodeError as exc:
+    # 1) Try unmodified text first (fast path for well-formed JSON).
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    # 2) Try after fixing mismatched typographic quotes.
+    try:
+        return json.loads(_sanitize_json_text(raw))
+    except json.JSONDecodeError:
+        pass
+    # 3) Fall back to json-repair (optional dependency).
+    try:
+        return _try_json_repair(raw, label=label)
+    except CaseError:
+        raise
+    except Exception as exc:
         raise CaseError(f"{label} ist kein gueltiges JSON: {path}") from exc
 
 
