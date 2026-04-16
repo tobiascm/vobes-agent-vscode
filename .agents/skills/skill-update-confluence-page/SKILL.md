@@ -8,7 +8,10 @@ description: Standardisierter Ablauf, um eine bestehende Confluence-Seite aussch
 - Für Seitenänderungen immer `mcp_mcp-atlassian_confluence_update_page` verwenden.
 - Vor dem Update den aktuellen Inhalt per `mcp_mcp-atlassian_confluence_get_page` laden.
 - Bei Tabellen den kompletten Tabellenblock im Markdown konsistent zurückschreiben.
-- **Format-Wahl:** Bei Seiten mit verschachtelten Listen (>2 Ebenen) IMMER `content_format="wiki"` verwenden. Markdown verliert auf Confluence Server/DC Einrückungsebenen. Wiki-Markup hat explizite Ebenen (`*`, `**`, `***`, `****`) und wird verlustfrei verarbeitet.
+- **Format-Wahl (Prioritaet):**
+  1. **`content_format="storage"`** — PFLICHT wenn die Seite `<ac:…>`-Makros enthaelt (Tasks, Jira-Links, Status-Makros, Aura-Cards, structured-macros, etc.). Der Wiki-zu-Storage-Converter erkennt `<ac:>`-Namespace-Elemente NICHT und rendert sie als sichtbare HTML-Tags statt als Makros. Seite deshalb mit `convert_to_markdown=false` laden und direkt im Storage-Format (XHTML) bearbeiten.
+  2. **`content_format="wiki"`** — Bevorzugt wenn keine `<ac:>`-Makros vorhanden sind aber verschachtelte Listen (>2 Ebenen) existieren. Wiki-Markup hat explizite Ebenen (`*`, `**`, `***`, `****`) und wird verlustfrei verarbeitet.
+  3. **`content_format="markdown"`** — Nur fuer einfache Seiten ohne Makros und ohne tiefe Listen.
 
 ## Inputs
 
@@ -21,16 +24,21 @@ description: Standardisierter Ablauf, um eine bestehende Confluence-Seite aussch
 1. **Seite laden**
    - Tool: `mcp_mcp-atlassian_confluence_get_page`
    - Parameter: `page_id`, `include_metadata=true`, `convert_to_markdown=true`
-2. **Inhalt anpassen**
-   - Gewünschte Zeile/Abschnitt im Markdown ändern
-   - Struktur (Tabellenkopf/Spalten) unverändert lassen
-3. **Seite updaten**
+2. **Makro-Check**
+   - Pruefen ob der geladene Inhalt `<ac:`-Elemente enthaelt (z.B. `<ac:task`, `<ac:structured-macro`, `<ac:link>`, `<ri:`, `<ac:image`, Jira-Makros etc.).
+   - Falls ja: Seite ERNEUT laden mit `convert_to_markdown=false` und ab hier im **Storage-Format** arbeiten (siehe Format-Wahl oben).
+   - Falls nein: Weiter mit Markdown oder Wiki-Markup.
+3. **Inhalt anpassen**
+   - Gewuenschte Zeile/Abschnitt aendern
+   - Struktur (Tabellenkopf/Spalten) unveraendert lassen
+   - Bei Storage-Format: XHTML-Struktur beibehalten, nur gezielt Abschnitte einfuegen/aendern
+4. **Seite updaten**
    - Tool: `mcp_mcp-atlassian_confluence_update_page`
    - Parameter:
      - `page_id`
-     - `title` (unverändert von der Seite)
-     - `content` (vollständiger aktualisierter Markdown-Inhalt)
-     - `content_format="markdown"`
+     - `title` (unveraendert von der Seite)
+     - `content` (vollstaendiger aktualisierter Inhalt)
+     - `content_format`: `"storage"` (bei Makros), `"wiki"` (bei tiefen Listen), oder `"markdown"` (einfache Seiten)
      - optional `version_comment`
 4. **Ergebnis validieren**
    - Erfolgsmeldung prüfen (`message: Page updated successfully`)
@@ -47,8 +55,9 @@ Beispiel-Zeile:
 ## Fehlervermeidung
 
 - Kein Mischbetrieb aus MCP und manuellen REST-Calls.
-- Bei Umlauten/Zeichenproblemen direkt im Markdown gegenprüfen.
-- Nur die gewünschte Stelle ändern, keine unnötigen Strukturänderungen.
+- Bei Umlauten/Zeichenproblemen direkt im Markdown gegenpruefn.
+- Nur die gewuenschte Stelle aendern, keine unnoetigen Strukturaenderungen.
+- **`<ac:>`-Makros NIEMALS mit `content_format="wiki"` oder `"markdown"` zurueckschreiben** — sie werden als sichtbare HTML-Tags gerendert statt als Makros. IMMER `content_format="storage"` verwenden wenn `<ac:>`-Elemente vorhanden sind.
 
 ---
 

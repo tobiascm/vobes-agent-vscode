@@ -104,11 +104,13 @@ h2. Themen
 
 ### 2. Aktuellen Inhalt laden
 - Tool: `mcp_mcp-atlassian_confluence_get_page`
-- Parameter: `page_id`, `include_metadata=true`, `convert_to_markdown=true`
+- Parameter: `page_id`, `include_metadata=true`, `convert_to_markdown=false`
+- **Wichtig:** `convert_to_markdown=false` verwenden, damit `<ac:>`-Makros (Tasks, Jira-Links, Status etc.) im Original-Storage-Format erhalten bleiben. Bei `convert_to_markdown=true` gehen diese Makros verloren oder werden in nicht-rueckkonvertierbares Markdown umgewandelt.
 
 ### 3. Inhalt anpassen
-- Aenderungen des Users in den bestehenden Inhalt einarbeiten.
-- Inhalt in **Wiki-Markup** konvertieren (Listen-Ebenen: `*`, `**`, `***`; Headings: `h2.`; Tabellen: `||Kopf||` / `|Zelle|`).
+- Aenderungen des Users direkt im **Storage-Format** (XHTML) einarbeiten.
+- Bestehende `<ac:>`-Makros (Tasks, Jira-Verweise, Status-Makros etc.) NICHT veraendern oder entfernen.
+- Neue Textabschnitte als XHTML einfuegen (z.B. `<h2>Themen</h2>`, `<ul><li>...</li></ul>`).
 - Struktur beibehalten, keine unnoetige Umformatierung.
 
 ### 4. Seite updaten
@@ -117,8 +119,8 @@ h2. Themen
   - Parameter:
     - `page_id`
     - `title` (unveraendert!)
-    - `content` (vollstaendiger aktualisierter Inhalt im Wiki-Markup)
-    - `content_format`: `"wiki"`
+    - `content` (vollstaendiger aktualisierter Inhalt im Storage-Format)
+    - `content_format`: `"storage"`
     - `version_comment`: Kurzer Kommentar zur Aenderung
 
 ### 5. Ergebnis bestaetigen
@@ -173,9 +175,9 @@ TODOs in Protokollseiten MUESSEN als Confluence Task-List im **Storage-Format** 
 
 Da Tasks Storage-Format (HTML) benoetigen, muss beim Erstellen/Updaten der Seite darauf geachtet werden:
 
-1. **Bei `content_format="wiki"`**: Task-Liste als Raw-HTML-Block direkt einbetten (Wiki-Format unterstuetzt eingebettetes Storage-Markup).
-2. **Bei `content_format="storage"`**: Task-Liste direkt im Storage-Format schreiben.
-3. **Bei `content_format="markdown"`**: Markdown unterstuetzt KEINE Task-Makros. Falls die Seite TODOs enthaelt, auf `"wiki"` oder `"storage"` wechseln.
+1. **Bei `content_format="storage"` (EMPFOHLEN)**: Task-Liste direkt im Storage-Format schreiben. Alle `<ac:>`-Makros (Tasks, Jira-Links, Status etc.) werden nativ verarbeitet.
+2. **Bei `content_format="wiki"`**: **NICHT verwenden wenn `<ac:>`-Makros vorhanden sind!** Der Wiki-zu-Storage-Converter erkennt `<ac:>`-Namespace-Elemente NICHT und rendert sie als sichtbare HTML-Tags auf der Seite.
+3. **Bei `content_format="markdown"`**: Markdown unterstuetzt KEINE Confluence-Makros. Falls die Seite TODOs, Jira-Links oder andere Makros enthaelt, MUSS `"storage"` verwendet werden.
 
 ### Beispiel: Zwei TODOs mit Zuweisung und Datum
 
@@ -193,6 +195,61 @@ Da Tasks Storage-Format (HTML) benoetigen, muss beim Erstellen/Updaten der Seite
 </ac:task>
 </ac:task-list>
 ```
+
+## Diff-Review-Workflow (Standard)
+
+Vor jedem Confluence-Write MUSS der Diff-Review-Workflow durchlaufen werden. Das Script `scripts/confluence_md_bridge.py` uebernimmt Konvertierung, Diff-Oeffnung und Benachrichtigung.
+
+### Ablauf
+
+```
+1. MCP: get_page(page_id, convert_to_markdown=false)
+   → Agent speichert content als userdata/tmp/page_raw.html
+
+2. Agent: Protokoll aus Transkript aufbereiten
+   → Schreibt Ergaenzungen als MD in userdata/tmp/page_after.md
+   (page_before.md wird vom Script erzeugt)
+
+3. Terminal:
+   python scripts/confluence_md_bridge.py prepare \
+     --before userdata/tmp/page_raw.html \
+     --after  userdata/tmp/page_after.md \
+     --notify "Protokoll XYZ — Diff bitte reviewen"
+   → VS Code Diff oeffnet sich
+   → Windows-Popup erscheint
+
+4. ── User reviewt, editiert page_after.md, sagt "go" ──
+
+5. Terminal:
+   python scripts/confluence_md_bridge.py finalize \
+     --input  userdata/tmp/page_after.md \
+     --output userdata/tmp/page_updated.html \
+     --base   userdata/tmp/page_raw.html
+
+6. Agent: Liest page_updated.html
+   MCP: update_page(page_id, title=UNCHANGED, content=..., content_format="storage")
+
+7. Bestaetigung: URL + Version an User
+```
+
+### Markdown-Annotationen (Referenz)
+
+| Confluence-Element | Markdown-Darstellung |
+|---|---|
+| `<ac:task>` (incomplete) | `- [ ] Text <!-- task id=N uuid=xxx status=incomplete -->` |
+| `<ac:task>` (complete) | `- [x] Text <!-- task id=N uuid=xxx status=complete -->` |
+| `<ri:user>` | `@[userkey:xxx]` |
+| `<time>` | `(bis YYYY-MM-DD)` |
+| `<ac:emoticon name="tick">` | ✅ |
+| `<ac:emoticon name="warning">` | ⚠️ |
+| `<ac:emoticon name="cross">` | ❌ |
+| `<ri:page>` | `[[Seitentitel]]` |
+| Unbekannte `<ac:>`-Bloecke | `<!-- confluence:raw -->` Passthrough |
+
+### Utility-Commands
+
+- `python scripts/confluence_md_bridge.py storage2md <in.html> <out.md>` — nur Konvertierung
+- `python scripts/confluence_md_bridge.py md2storage <in.md> <out.html>` — nur Konvertierung
 
 ## Sonderfaelle
 
