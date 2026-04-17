@@ -14,6 +14,7 @@ from outlook_appointment_tools import (  # noqa: E402
     _recipient_payload,
     _resolve_recipient,
     _resolve_send_mode,
+    _search_gal_candidates,
     _strip_draft_prefix,
     suggest_slots,
 )
@@ -300,3 +301,55 @@ def test_recipient_payload_omits_empty_top_level_fields_for_ambiguous_result(mon
     assert "oe" not in payload
     assert "seen_count" not in payload
     assert payload["candidates"][0]["email"] == "christian.junge@volkswagen.de"
+
+
+def test_search_gal_candidates_skips_offline_global_address_list(monkeypatch):
+    class ShouldNotBeReadEntries:
+        @property
+        def Count(self):
+            raise AssertionError("offline GAL must not be scanned")
+
+    class MatchingEntries:
+        Count = 1
+
+        @staticmethod
+        def Item(index):
+            assert index == 1
+            return type(
+                "Entry",
+                (),
+                {
+                    "Name": "Aydin, Taner (EKEK/1)",
+                    "Address": "taner.aydin@volkswagen.de",
+                },
+            )()
+
+    class AddressLists:
+        Count = 2
+
+        @staticmethod
+        def Item(index):
+            if index == 1:
+                return type("AddressList", (), {"Name": "Offline Global Address List", "AddressEntries": ShouldNotBeReadEntries()})()
+            if index == 2:
+                return type("AddressList", (), {"Name": "Globale Adressliste", "AddressEntries": MatchingEntries()})()
+            raise AssertionError("unexpected index")
+
+    fake_address_lists = AddressLists()
+
+    class FakeNamespace:
+        AddressLists = fake_address_lists
+
+    monkeypatch.setattr("outlook_appointment_tools._lazy_outlook_context", lambda: (None, FakeNamespace(), None))
+    monkeypatch.setattr("outlook_appointment_tools._try_internet_address", lambda entry: "taner.aydin@volkswagen.de")
+
+    results = _search_gal_candidates("Aydin Taner")
+
+    assert results == [
+        {
+            "name": "Aydin, Taner (EKEK/1)",
+            "email": "taner.aydin@volkswagen.de",
+            "oe": "EKEK/1",
+            "seen_count": 0,
+        }
+    ]

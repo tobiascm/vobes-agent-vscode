@@ -158,6 +158,8 @@ def _search_gal_candidates(token: str, limit: int = 5) -> list[dict[str, Any]]:
     for index in range(1, count + 1):
         address_list = address_lists.Item(index)
         list_name = _coerce_text(_safe_get(address_list, "Name", "")).lower()
+        if "offline global address list" in list_name:
+            continue
         if "globale adressliste" not in list_name and "global address list" not in list_name:
             continue
         entries = _safe_get(address_list, "AddressEntries")
