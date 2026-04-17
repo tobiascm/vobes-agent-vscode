@@ -501,6 +501,25 @@ def get_participant_slot_status(
     return ParticipantSlotStatus(True, "FreeOrTentative", PARTICIPANT_SCORE[score_key], needs_confirmation=False)
 
 
+def _participant_status(
+    freebusy_string: str | None,
+    offset: int,
+    duration_slots: int,
+    *,
+    is_main: bool,
+) -> ParticipantSlotStatus:
+    if freebusy_string is None:
+        if is_main:
+            return ParticipantSlotStatus(False, "FreeBusyUnavailable", -1000)
+        return ParticipantSlotStatus(True, "FreeBusyUnavailable", 0, needs_confirmation=True)
+    return get_participant_slot_status(
+        freebusy_string,
+        offset,
+        duration_slots,
+        is_main=is_main,
+    )
+
+
 def _try_ruecksprache_move(
     appt: Any,
     slot_start: datetime,
@@ -616,8 +635,11 @@ def find_best_slots(
     participants = _combine_participants(main_participants, other_participants)
     for participant in participants:
         if participant.name not in _freebusy_cache:
-            _freebusy_cache[participant.name] = _get_freebusy_string(
-                participant.name, base_date, slot_minutes)
+            try:
+                _freebusy_cache[participant.name] = _get_freebusy_string(
+                    participant.name, base_date, slot_minutes)
+            except Exception:
+                _freebusy_cache[participant.name] = None
     freebusy_map = {p.name: _freebusy_cache[p.name] for p in participants}
 
     # Prefetch all own appointments (reuse cache from parent call if available)
@@ -675,7 +697,7 @@ def find_best_slots(
                 needs_confirmation = True
 
         for participant in participants:
-            status = get_participant_slot_status(
+            status = _participant_status(
                 freebusy_map[participant.name],
                 offset,
                 duration_slots,
@@ -762,7 +784,7 @@ def find_best_slots(
                     needs_confirmation = True
 
             for participant in participants:
-                status = get_participant_slot_status(
+                status = _participant_status(
                     freebusy_map[participant.name],
                     offset,
                     shorter_duration_slots,

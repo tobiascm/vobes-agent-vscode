@@ -22,8 +22,12 @@ from outlook_search_tools import (  # noqa: E402
     _coerce_text,
     _get_item_by_id,
     _lazy_outlook_context,
+    _normalize_smtp_address,
     _safe_get,
     _try_internet_address,
+    inspect_selected_email,
+    outlook_read_email,
+    search_emails,
 )
 
 OL_APPOINTMENT_ITEM = 1
@@ -35,6 +39,8 @@ OL_REQUIRED = 1
 OL_OPTIONAL = 2
 DRAFT_PREFIX = "Entwurf: "
 SEND_MODE_REVIEW = "review"
+DEFAULT_APPOINTMENT_CATEGORY = "EKEK1"
+DEFAULT_MAIL_SEARCH_DAYS = 365
 
 
 @dataclass
@@ -84,6 +90,143 @@ def _extract_oe(name: str) -> str:
     text = _coerce_text(name).strip()
     match = re.search(r"\(([^()]+)\)\s*$", text)
     return _coerce_text(match.group(1)).strip() if match else ""
+
+
+def _normalize_subject_text(value: str) -> str:
+    return _coerce_text(value).strip().lower()
+
+
+def _strip_reply_prefixes(subject: str) -> str:
+    text = _coerce_text(subject).strip()
+    while True:
+        updated = re.sub(r"^(?:re|aw|wg|fw|fwd)\s*:\s*", "", text, flags=re.IGNORECASE)
+        if updated == text:
+            return text
+        text = updated.strip()
+
+
+def _mail_subject_matches(candidate_subject: str, requested_subject: str) -> bool:
+    candidate = _normalize_subject_text(candidate_subject)
+    requested = _normalize_subject_text(requested_subject)
+    if not candidate or not requested:
+        return False
+    return candidate == requested or requested in candidate or candidate in requested
+
+
+def _unique_texts(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _coerce_text(value).strip()
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
+
+
+def _extract_email_address(value: str) -> str:
+    text = _coerce_text(value).strip()
+    if not text:
+        return ""
+    match = re.search(r"<([^>]+)>", text)
+    if match:
+        return _normalize_smtp_address(match.group(1))
+    return _normalize_smtp_address(text)
+
+
+def _own_mail_addresses() -> set[str]:
+    _, namespace, _ = _lazy_outlook_context()
+    stores = _safe_get(namespace, "Stores")
+    count = int(_safe_get(stores, "Count", 0) or 0)
+    addresses: set[str] = set()
+    for index in range(1, count + 1):
+        try:
+            store = stores.Item(index)
+        except Exception:
+            continue
+        address = _normalize_smtp_address(_safe_get(store, "DisplayName", ""))
+        if address:
+            addresses.add(address.lower())
+    return addresses
+
+
+def _mail_recipients(mail_payload: dict[str, Any]) -> tuple[list[str], list[str]]:
+    own_addresses = _own_mail_addresses()
+    to_values = [_extract_email_address(value) for value in mail_payload.get("to_recipients", [])]
+    cc_values = [_extract_email_address(value) for value in mail_payload.get("cc_recipients", [])]
+    to_clean = [value for value in to_values if value and value.lower() not in own_addresses]
+    cc_clean = [
+        value
+        for value in cc_values
+        if value and value.lower() not in own_addresses and value.lower() not in {item.lower() for item in to_clean}
+    ]
+    return _unique_texts(to_clean), _unique_texts(cc_clean)
+
+
+def _mail_context_lines(body: str, limit: int = 4) -> list[str]:
+    stop_markers = (
+        "-----original appointment-----",
+        "-----ursprünglicher termin-----",
+        "-----urspruenglicher termin-----",
+        "microsoft teams-besprechung",
+        "microsoft teams meeting",
+        "________________________________________________________________________________",
+    )
+    lines: list[str] = []
+    for raw_line in _coerce_text(body).splitlines():
+        line = raw_line.strip()
+        normalized = line.lower()
+        if not line:
+            if lines:
+                break
+            continue
+        if normalized == "internal":
+            continue
+        if any(marker in normalized for marker in stop_markers):
+            break
+        lines.append(line)
+        if len(lines) >= limit:
+            break
+    return lines
+
+
+def _mail_context_body(subject: str, mail_payload: dict[str, Any]) -> str:
+    excerpt = _mail_context_lines(mail_payload.get("body", ""))
+    intro = f'ich habe den Termin zur Abstimmung "{subject}" vorbereitet.'
+    if excerpt:
+        intro = f"{intro}\n\nKontext aus der letzten Mail:\n" + "\n".join(excerpt)
+    return f"Hallo zusammen,\n\n{intro}\n\nViele Gruesse\nTobias"
+
+
+def _load_mail_context(source_mail_subject: str) -> dict[str, Any]:
+    requested_subject = _coerce_text(source_mail_subject).strip()
+    if not requested_subject:
+        raise ValueError("source_mail_subject darf nicht leer sein.")
+
+    try:
+        selection = inspect_selected_email()
+        selected_item = selection.get("selected_item", {})
+        if _mail_subject_matches(selected_item.get("subject", ""), requested_subject):
+            return outlook_read_email(
+                selected_item.get("entry_id", ""),
+                selected_item.get("parent", {}).get("store_id", ""),
+            )
+    except Exception:
+        pass
+
+    payload = search_emails(
+        subject_must=[requested_subject],
+        search_days=DEFAULT_MAIL_SEARCH_DAYS,
+        max_results=10,
+    )
+    matches = payload.get("matches", [])
+    if not matches:
+        raise RuntimeError(f"Keine Outlook-Mail mit passendem Betreff gefunden: {requested_subject}")
+
+    best_match = matches[0]["email"]
+    return outlook_read_email(best_match.get("entry_id", ""), best_match.get("store_id", ""))
 
 
 def _candidate_payload(name: str, address: str, *, seen_count: int = 0) -> dict[str, Any]:
@@ -446,6 +589,7 @@ def create_appointment(
     has_attendees = bool(required_results or optional_results)
     item.MeetingStatus = OL_MEETING if has_attendees else OL_NON_MEETING
     item.Subject = _effective_subject(subject, draft=send_mode == "draft")
+    item.Categories = DEFAULT_APPOINTMENT_CATEGORY
     # Freeze timezone to Outlook's current timezone. Without this, Teams
     # provisioning can keep GMT and shift the displayed local start/end.
     local_tz = _current_outlook_timezone(app, item)
@@ -509,6 +653,7 @@ def update_appointment(
     teams: bool | None = None,
     send_mode: str = "",
     send_without_confirmation: bool = False,
+    normalize_start: bool = True,
 ) -> dict[str, Any]:
     app, _, _ = _lazy_outlook_context()
     item = _get_item_by_id(entry_id, store_id)
@@ -532,7 +677,9 @@ def update_appointment(
     if start:
         item.StartTimeZone = local_start_tz
         item.EndTimeZone = local_end_tz
-        start_dt = _apply_standard_start(_parse_local_datetime(start))
+        start_dt = _parse_local_datetime(start)
+        if normalize_start:
+            start_dt = _apply_standard_start(start_dt)
         intended_start = start_dt
         item.Start = start_dt
         if end:
@@ -677,6 +824,8 @@ def suggest_slots(
     location: str = "",
     teams: bool = True,
     include_shorter_slots: bool = True,
+    prepare_slot_index: int = 0,
+    source_mail_subject: str = "",
 ) -> dict[str, Any]:
     slotfinder = _slotfinder_module()
     search_start_dt = _parse_local_datetime(search_start)
@@ -691,6 +840,7 @@ def suggest_slots(
 
     required = _split_csv(required)
     optional = _split_csv(optional)
+    mail_payload = _load_mail_context(source_mail_subject) if source_mail_subject else None
 
     if source_entry_id:
         context = slotfinder._load_reschedule_context(
@@ -709,9 +859,21 @@ def suggest_slots(
         action = "suggest-reschedule-slots"
         source_payload = context["source"]
     else:
-        main_participants = required or []
-        other_participants = optional or []
-        effective_subject = _coerce_text(subject).strip() or slotfinder.DEFAULT_SUBJECT
+        derived_required: list[str] = []
+        derived_optional: list[str] = []
+        if mail_payload is not None:
+            derived_required, derived_optional = _mail_recipients(mail_payload)
+        main_participants = required or derived_required
+        remaining_from_mail = [
+            value for value in derived_required + derived_optional
+            if value.lower() not in {item.lower() for item in main_participants}
+        ]
+        other_participants = _unique_texts((optional or []) + remaining_from_mail)
+        effective_subject = (
+            _coerce_text(subject).strip()
+            or (_strip_reply_prefixes(mail_payload.get("subject", "")) if mail_payload is not None else "")
+            or slotfinder.DEFAULT_SUBJECT
+        )
         effective_duration = duration_min
         ignore_entry_ids = set()
         action = "suggest-slots"
@@ -736,19 +898,27 @@ def suggest_slots(
         slotfinder.open_best_slot_as_meeting(slots[0], subject=effective_subject, participants=participants)
 
     prepared_appointment = None
-    if prepare_best_slot_review and slots:
-        best_slot = slots[0]
-        duration_for_create = int((best_slot.end - best_slot.start).total_seconds() // 60)
+    selected_slot = None
+    if prepare_slot_index:
+        if prepare_slot_index < 1 or prepare_slot_index > len(slots):
+            raise ValueError(f"prepare_slot_index muss zwischen 1 und {len(slots)} liegen.")
+        selected_slot = slots[prepare_slot_index - 1]
+    elif prepare_best_slot_review and slots:
+        selected_slot = slots[0]
+    effective_body = body or (_mail_context_body(effective_subject, mail_payload) if mail_payload is not None else "")
+    if selected_slot is not None:
+        duration_for_create = int((selected_slot.end - selected_slot.start).total_seconds() // 60)
         prepared_appointment = create_appointment(
             subject=effective_subject,
-            start=best_slot.start.isoformat(),
+            start=selected_slot.start.isoformat(),
             duration_min=duration_for_create,
             required=main_participants,
             optional=other_participants,
-            body=body,
+            body=effective_body,
             location=location,
             teams=teams,
             send_mode=SEND_MODE_REVIEW,
+            normalize_start=not bool(prepare_slot_index),
         )
 
     payload: dict[str, Any] = {
@@ -768,12 +938,19 @@ def suggest_slots(
             "other_participants": other_participants,
         },
         "best_slot_opened": bool(open_best_slot and slots),
-        "best_slot_review_prepared": bool(prepare_best_slot_review and prepared_appointment),
+        "best_slot_review_prepared": bool((prepare_best_slot_review or prepare_slot_index) and prepared_appointment),
         "slots": [slotfinder._slot_payload(slot) for slot in slots],
         "prepared_appointment": prepared_appointment,
     }
     if source_payload is not None:
         payload["source_appointment"] = source_payload
+    if mail_payload is not None:
+        payload["source_mail"] = {
+            "entry_id": mail_payload.get("entry_id", ""),
+            "store_id": mail_payload.get("store_id", ""),
+            "subject": mail_payload.get("subject", ""),
+            "conversation_id": mail_payload.get("conversation_id", ""),
+        }
     return payload
 
 
@@ -798,6 +975,7 @@ def _build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument("--send-without-confirmation", action="store_true")
     create_parser.add_argument("--teams", dest="teams", action="store_true", default=True)
     create_parser.add_argument("--no-teams", dest="teams", action="store_false")
+    create_parser.add_argument("--no-normalize-start", dest="normalize_start", action="store_false", default=True)
 
     send_parser = subparsers.add_parser("send", help="Send a prepared draft meeting.")
     send_parser.add_argument("--entry-id", required=True)
@@ -814,6 +992,7 @@ def _build_parser() -> argparse.ArgumentParser:
     update_parser.add_argument("--send-without-confirmation", action="store_true")
     update_parser.add_argument("--teams", dest="teams", action="store_true", default=None)
     update_parser.add_argument("--no-teams", dest="teams", action="store_false")
+    update_parser.add_argument("--no-normalize-start", dest="normalize_start", action="store_false", default=True)
 
     cancel_parser = subparsers.add_parser("cancel", help="Cancel an existing appointment.")
     cancel_parser.add_argument("--entry-id", required=True)
@@ -841,12 +1020,14 @@ def _build_parser() -> argparse.ArgumentParser:
     slot_parser.add_argument("--working-hour-end", type=int, default=18)
     slot_parser.add_argument("--open-best-slot", action="store_true")
     slot_parser.add_argument("--prepare-best-slot-review", action="store_true")
+    slot_parser.add_argument("--prepare-slot-index", type=int, default=0)
     slot_parser.add_argument("--body", default="")
     slot_parser.add_argument("--location", default="")
     slot_parser.add_argument("--teams", dest="teams", action="store_true", default=True)
     slot_parser.add_argument("--no-teams", dest="teams", action="store_false")
     slot_parser.add_argument("--source-entry-id", default="")
     slot_parser.add_argument("--store-id", default="")
+    slot_parser.add_argument("--source-mail-subject", default="")
     slot_parser.add_argument("--no-shorter-slots", dest="include_shorter_slots", action="store_false", default=True,
                              help="Keine kuerzeren Alternativ-Slots anzeigen.")
 
@@ -874,6 +1055,7 @@ def main(argv: list[str] | None = None) -> int:
             teams=args.teams,
             send_mode=args.send_mode,
             send_without_confirmation=args.send_without_confirmation,
+            normalize_start=args.normalize_start,
         )
     elif args.command == "send":
         payload = send_appointment(args.entry_id, args.store_id)
@@ -891,6 +1073,7 @@ def main(argv: list[str] | None = None) -> int:
             teams=args.teams,
             send_mode=args.send_mode,
             send_without_confirmation=args.send_without_confirmation,
+            normalize_start=args.normalize_start,
         )
     elif args.command == "cancel":
         payload = cancel_appointment(args.entry_id, args.store_id, send_without_confirmation=args.send_without_confirmation)
@@ -917,8 +1100,10 @@ def main(argv: list[str] | None = None) -> int:
             working_hour_end=args.working_hour_end,
             open_best_slot=args.open_best_slot,
             prepare_best_slot_review=args.prepare_best_slot_review,
+            prepare_slot_index=args.prepare_slot_index,
             source_entry_id=args.source_entry_id,
             store_id=args.store_id,
+            source_mail_subject=args.source_mail_subject,
             body=args.body,
             location=args.location,
             teams=args.teams,

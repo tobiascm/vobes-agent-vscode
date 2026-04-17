@@ -41,6 +41,7 @@ Wichtige Optionen:
 - `--send-mode review|draft|send`: Default `review`
 - `--send-without-confirmation`: Direkter Versand ohne Outlook-Review-Fenster
 - `--teams` / `--no-teams`: Default `teams`
+- `--no-normalize-start`: Startzeit exakt uebernehmen, also kein automatisches `:05`/`:35`
 
 ### Passende Slots finden
 
@@ -59,6 +60,7 @@ Wichtige Optionen:
 
 - `--required`: Hauptperson (mehrfach moeglich). Alle `--required`-Teilnehmer muessen fuer den Slot frei oder tentative sein
 - `--optional`: weiterer Teilnehmer (mehrfach moeglich). `busy` ist erlaubt, aber schlechter gerankt; `OOF` blockiert
+- Wenn fuer einen optionalen Teilnehmer keine Free/Busy-Daten geladen werden koennen, bleibt der Slot zulaessig, wird aber als Rueckfrage-Fall markiert
 - `--slot-minutes`: Raster fuer die Slot-Suche, Default `30`
 - `--top-n`: Anzahl der zurueckgegebenen Slots, Default `10`
 - `--working-hour-start` / `--working-hour-end`: Suchfenster innerhalb des Tages, Default `8` bis `18`
@@ -66,9 +68,15 @@ Wichtige Optionen:
 - `--no-shorter-slots`: Keine kuerzeren Alternativ-Slots (30 Min) anzeigen. Standardmaessig werden bei wenigen Treffern automatisch kuerzere Slots mit niedrigerem Score ergaenzt
 - `--open-best-slot`: Oeffnet direkt ein Outlook-Terminfenster fuer den besten Slot
 - `--prepare-best-slot-review`: Erstellt direkt fuer den besten Slot einen Review-Entwurf ueber `create --send-mode review`
-- `--body`: Termintext fuer `--prepare-best-slot-review`
-- `--location`: Ort fuer `--prepare-best-slot-review`
-- `--teams` / `--no-teams`: Default `teams`; wirkt bei `--prepare-best-slot-review`
+- `--prepare-slot-index N`: Erstellt direkt fuer den ausgewaehlten Slot `N` einen Review-Entwurf; die Slot-Zeit wird dabei exakt uebernommen
+- `--body`: Termintext fuer `--prepare-best-slot-review` und `--prepare-slot-index`
+- `--location`: Ort fuer `--prepare-best-slot-review` und `--prepare-slot-index`
+- `--teams` / `--no-teams`: Default `teams`; wirkt bei `--prepare-best-slot-review` und `--prepare-slot-index`
+- `--source-mail-subject`: Schneller Pfad ueber Mail-Betreff. Die Mail wird erst vollstaendig gelesen, daraus werden Teilnehmer und ein sinnvoller Termintext abgeleitet
+  - zuerst wird die aktuelle Outlook-Auswahl geprueft
+  - wenn der Betreff nicht passt, wird per Betreff in Outlook gesucht und die passende Mail gelesen
+  - aus der Mail werden Betreff, Teilnehmer und Termintext abgeleitet
+  - explizit uebergebene `--required` / `--optional` haben Vorrang vor der Mail-Ableitung
 
 Bewertungslogik:
 
@@ -139,6 +147,8 @@ python .agents/skills/skill-outlook-termin/scripts/outlook_appointment_tools.py 
 4. Fuer neue Termine mit sicherem Zeitpunkt direkt `create --send-mode review`
 5. Fuer bestehende Termine mit neuem Zeitslot `suggest-slots --source-entry-id ...` verwenden
 6. Wenn der beste gefundene Slot direkt als Entwurf vorbereitet werden soll, `suggest-slots --prepare-best-slot-review` verwenden
+6a. Wenn ein konkreter Slot aus der Trefferliste vorbereitet werden soll, `suggest-slots --prepare-slot-index N` verwenden
+6b. Wenn der User nur einen Mail-Betreff nennt, `suggest-slots --source-mail-subject "..."` verwenden; die Mail wird dabei trotzdem voll gelesen, um den Termintext aus dem Kontext zu formulieren
 7. Bei `direkt senden` oder `sofort senden` `create --send-without-confirmation`
 8. Fuer spaetere Aenderungen oder Versand zuerst `search` oder bekannte `entry_id` verwenden
 9. Bei Ambiguitaet bei Teilnehmern Termin nicht raten, sondern Rueckfrage ausloesen

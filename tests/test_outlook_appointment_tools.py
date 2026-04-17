@@ -6,11 +6,13 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / ".agents" / "skills" / "skill-outlook-termin" / "scripts"))
 
 from outlook_appointment_tools import (  # noqa: E402
+    DEFAULT_APPOINTMENT_CATEGORY,
     DRAFT_PREFIX,
     _apply_standard_start,
     _default_end,
     _effective_subject,
     _build_parser,
+    create_appointment,
     _recipient_payload,
     _resolve_recipient,
     _resolve_send_mode,
@@ -64,6 +66,7 @@ def test_build_parser_supports_suggest_slots_command():
     assert args.duration_min == 60
     assert args.slot_minutes == 30
     assert args.prepare_best_slot_review is True
+    assert args.prepare_slot_index == 0
 
 
 class _FakeSlotFinder:
@@ -103,6 +106,24 @@ class _FakeSlotFinder:
                     "participant_state": "haupt@example.com: FreeOrTentative",
                     "participant_details": ["haupt@example.com: FreeOrTentative"],
                     "needs_confirmation": False,
+                    "is_shorter_alternative": False,
+                    "ruecksprache_moves": [],
+                },
+            )(),
+            type(
+                "Slot",
+                (),
+                {
+                    "start": datetime(2026, 4, 17, 14, 0),
+                    "end": datetime(2026, 4, 17, 14, 45),
+                    "score": 140.0,
+                    "own_rank": 1,
+                    "own_reason": "Kein Konflikt",
+                    "participant_state": "haupt@example.com: FreeOrTentative",
+                    "participant_details": ["haupt@example.com: FreeOrTentative"],
+                    "needs_confirmation": False,
+                    "is_shorter_alternative": False,
+                    "ruecksprache_moves": [],
                 },
             )()
         ]
@@ -120,6 +141,8 @@ class _FakeSlotFinder:
             "participant_state": slot.participant_state,
             "participant_details": slot.participant_details,
             "needs_confirmation": slot.needs_confirmation,
+            "is_shorter_alternative": slot.is_shorter_alternative,
+            "ruecksprache_moves": slot.ruecksprache_moves,
         }
 
 
@@ -188,8 +211,152 @@ def test_suggest_slots_can_prepare_best_slot_review_with_standardized_start_and_
             "location": "Teams",
             "teams": False,
             "send_mode": "review",
+            "normalize_start": True,
         }
     ]
+
+
+def test_suggest_slots_can_prepare_selected_slot_without_start_normalization(monkeypatch):
+    fake = _FakeSlotFinder()
+    create_calls = []
+
+    def fake_create_appointment(**kwargs):
+        create_calls.append(kwargs)
+        return {"status": "ok", "action": "create", "appointment": {"entry_id": "NEW-2"}}
+
+    monkeypatch.setattr("outlook_appointment_tools._slotfinder_module", lambda: fake)
+    monkeypatch.setattr("outlook_appointment_tools.create_appointment", fake_create_appointment)
+
+    payload = suggest_slots(
+        search_start="2026-04-17T09:00:00",
+        search_end="2026-04-17T18:00:00",
+        required=["haupt@example.com"],
+        subject="Abstimmung",
+        prepare_slot_index=2,
+    )
+
+    assert payload["best_slot_review_prepared"] is True
+    assert payload["prepared_appointment"]["appointment"]["entry_id"] == "NEW-2"
+    assert create_calls == [
+        {
+            "subject": "Abstimmung",
+            "start": "2026-04-17T14:00:00",
+            "duration_min": 45,
+            "required": ["haupt@example.com"],
+            "optional": [],
+            "body": "",
+            "location": "",
+            "teams": True,
+            "send_mode": "review",
+            "normalize_start": False,
+        }
+    ]
+
+
+def test_suggest_slots_can_derive_context_from_source_mail_subject(monkeypatch):
+    fake = _FakeSlotFinder()
+    create_calls = []
+
+    def fake_create_appointment(**kwargs):
+        create_calls.append(kwargs)
+        return {"status": "ok", "action": "create", "appointment": {"entry_id": "MAIL-1"}}
+
+    monkeypatch.setattr("outlook_appointment_tools._slotfinder_module", lambda: fake)
+    monkeypatch.setattr("outlook_appointment_tools.create_appointment", fake_create_appointment)
+    monkeypatch.setattr(
+        "outlook_appointment_tools.inspect_selected_email",
+        lambda: {
+            "selected_item": {
+                "entry_id": "ENTRY-1",
+                "subject": "RE: Abstimmung RollOut VOBES2025 VW+Audi",
+                "parent": {"store_id": "STORE-1"},
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "outlook_appointment_tools.outlook_read_email",
+        lambda entry_id, store_id="", include_body=True: {
+            "entry_id": entry_id,
+            "store_id": store_id,
+            "subject": "RE: Abstimmung RollOut VOBES2025 VW+Audi",
+            "conversation_id": "CONV-1",
+            "to_recipients": [
+                "Mueller, Tobias Carsten, Dr. (EKEK/1) <tobias.carsten.mueller@volkswagen.de>",
+                "Haensel, Thomas, Dr. (VCTC-AW) <thomas.haensel@volkswagen-tech.com>",
+                "Frauenhofer, Michael, Dr.-Ing. (I/EE-B3) <michael.frauenhofer@audi.de>",
+                "Syring, Frank (EKEK/1) <frank.syring@volkswagen.de>",
+            ],
+            "cc_recipients": ["Mi, Bo (VCTC-AW) <bo.mi@volkswagen-tech.com>"],
+            "body": "Hallo zusammen,\nWann koennen wir diesen Termin nachholen?\nBitte 30 Minuten.\n\n-----Original Appointment-----\nMicrosoft Teams-Besprechung",
+        },
+    )
+    monkeypatch.setattr("outlook_appointment_tools._own_mail_addresses", lambda: {"tobias.carsten.mueller@volkswagen.de"})
+
+    payload = suggest_slots(
+        search_start="2026-04-17T09:00:00",
+        search_end="2026-04-17T18:00:00",
+        required=["thomas.haensel@volkswagen-tech.com", "michael.frauenhofer@audi.de"],
+        source_mail_subject="RE: Abstimmung RollOut VOBES2025 VW+Audi",
+        prepare_slot_index=1,
+    )
+
+    assert payload["source_mail"]["entry_id"] == "ENTRY-1"
+    assert payload["subject"] == "Abstimmung RollOut VOBES2025 VW+Audi"
+    assert create_calls[0]["required"] == ["thomas.haensel@volkswagen-tech.com", "michael.frauenhofer@audi.de"]
+    assert create_calls[0]["optional"] == ["frank.syring@volkswagen.de", "bo.mi@volkswagen-tech.com"]
+    assert "Wann koennen wir diesen Termin nachholen?" in create_calls[0]["body"]
+    assert create_calls[0]["normalize_start"] is False
+
+
+def test_create_appointment_sets_default_category(monkeypatch):
+    class FakeRecipients:
+        Count = 0
+
+        @staticmethod
+        def Add(_value):
+            raise AssertionError("no recipients expected")
+
+    class FakeItem:
+        def __init__(self):
+            self.MeetingStatus = 0
+            self.Subject = ""
+            self.Categories = ""
+            self.Location = ""
+            self.Body = ""
+            self.IsOnlineMeeting = False
+            self.StartTimeZone = None
+            self.EndTimeZone = None
+            self.Start = None
+            self.End = None
+            self.OnlineMeetingProvider = 0
+            self.Recipients = FakeRecipients()
+
+        def Save(self):
+            return None
+
+    class FakeApp:
+        def __init__(self, item):
+            self._item = item
+
+        def CreateItem(self, _kind):
+            return self._item
+
+    fake_item = FakeItem()
+    monkeypatch.setattr("outlook_appointment_tools._lazy_outlook_context", lambda: (FakeApp(fake_item), None, None))
+    monkeypatch.setattr("outlook_appointment_tools._resolve_many", lambda required, optional: ([], []))
+    monkeypatch.setattr("outlook_appointment_tools._current_outlook_timezone", lambda app, item: None)
+
+    payload = create_appointment(
+        subject="Kategorie-Test",
+        start="2026-04-24T13:00:00",
+        duration_min=60,
+        teams=False,
+        send_mode="draft",
+        normalize_start=False,
+    )
+
+    assert fake_item.Categories == DEFAULT_APPOINTMENT_CATEGORY
+    assert payload["status"] == "ok"
 
 
 def test_resolve_recipient_prefers_address_cache_before_direct(monkeypatch):
