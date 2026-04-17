@@ -555,9 +555,17 @@ Wird dreifach genutzt — die drei Parameter scheinen drei verschiedene Update-S
 
 **Service-Methode:** `PlanningExceptionClient.updatePlanningExceptions(planningException)`
 
-Aktualisiert Abwesenheiten / inaktive Monate für einen Mitarbeiter.
+Aktualisiert die Monatswerte und Planungsdaten eines Mitarbeiters.
 
-> **Wissenslücke:** HTTP-Methode (POST oder PUT) und Request-Body-Format unbekannt.
+**Live verifiziert:**
+```http
+POST /ek/api/PlanningException/UpdatePlanningExceptions
+```
+
+**Verifiziertes Request-Format:** kompletter Payload aus
+`GET /ek/api/PlanningException/GetPlanningExceptionsForUser?...`, inklusive
+aller `planningExceptions`, wobei nur die Zielzeile bzw. Zielmonate angepasst
+werden.
 
 ---
 

@@ -70,6 +70,16 @@ def report_el(budget_db, report_utils):
     return mod
 
 
+@pytest.fixture(scope="session")
+def el_change(budget_db, report_utils):
+    """Import el_change module."""
+    skill_dir = str(WORKSPACE / ".agents" / "skills" / "skill-budget-eigenleistung-el")
+    if skill_dir not in sys.path:
+        sys.path.insert(0, skill_dir)
+    import el_change as mod
+    return mod
+
+
 @pytest.fixture()
 def btl_rows(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """All BTL rows from the test DB, ordered like fetch_rows()."""
