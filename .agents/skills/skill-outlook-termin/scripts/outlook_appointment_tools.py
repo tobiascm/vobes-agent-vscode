@@ -5,7 +5,7 @@ import importlib
 import json
 import re
 import sys
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -44,8 +44,10 @@ class RecipientResult:
     kind: str
     target: str = ""
     name: str = ""
-    address: str = ""
-    candidates: list[dict[str, str]] = field(default_factory=list)
+    email: str = ""
+    oe: str = ""
+    seen_count: int = 0
+    candidates: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _parse_local_datetime(value: str) -> datetime:
@@ -78,12 +80,36 @@ def _effective_subject(subject: str, draft: bool) -> str:
     return f"{DRAFT_PREFIX}{base}" if draft and base else base
 
 
-def _candidate_payload(name: str, address: str) -> dict[str, str]:
-    return {"name": _coerce_text(name).strip(), "address": _coerce_text(address).strip()}
+def _extract_oe(name: str) -> str:
+    text = _coerce_text(name).strip()
+    match = re.search(r"\(([^()]+)\)\s*$", text)
+    return _coerce_text(match.group(1)).strip() if match else ""
 
 
-def _candidate_target(candidate: dict[str, str]) -> str:
-    return candidate["address"] or candidate["name"]
+def _candidate_payload(name: str, address: str, *, seen_count: int = 0) -> dict[str, Any]:
+    cleaned_name = _coerce_text(name).strip()
+    cleaned_address = _coerce_text(address).strip()
+    return {
+        "name": cleaned_name,
+        "email": cleaned_address,
+        "oe": _extract_oe(cleaned_name),
+        "seen_count": max(int(seen_count or 0), 0),
+    }
+
+
+def _candidate_target(candidate: dict[str, Any]) -> str:
+    return _coerce_text(candidate.get("email") or candidate.get("name")).strip()
+
+
+def _sort_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return sorted(
+        candidates,
+        key=lambda item: (
+            -int(item.get("seen_count", 0) or 0),
+            _coerce_text(item.get("name", "")).lower(),
+            _coerce_text(item.get("email", "")).lower(),
+        ),
+    )
 
 
 def _address_cache_module() -> Any:
@@ -104,24 +130,28 @@ def _cache_recipient_candidates(
     except Exception:
         return []
 
-    candidates: list[dict[str, str]] = []
+    candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     for match in payload.get("matches", []):
-        candidate = _candidate_payload(match.get("display_name", ""), match.get("email", ""))
-        key = (candidate["name"].lower(), candidate["address"].lower())
+        candidate = _candidate_payload(
+            match.get("display_name", ""),
+            match.get("email", ""),
+            seen_count=int(match.get("seen_count", 0) or 0),
+        )
+        key = (candidate["name"].lower(), candidate["email"].lower())
         if key in seen:
             continue
         seen.add(key)
         candidates.append(candidate)
-    return candidates
+    return _sort_candidates(candidates)
 
 
-def _search_gal_candidates(token: str, limit: int = 5) -> list[dict[str, str]]:
+def _search_gal_candidates(token: str, limit: int = 5) -> list[dict[str, Any]]:
     _, namespace, _ = _lazy_outlook_context()
     terms = [part for part in re.split(r"\W+", token.lower()) if part]
     if not terms:
         return []
-    candidates: list[dict[str, str]] = []
+    candidates: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     address_lists = _safe_get(namespace, "AddressLists")
     count = int(_safe_get(address_lists, "Count", 0) or 0)
@@ -146,11 +176,11 @@ def _search_gal_candidates(token: str, limit: int = 5) -> list[dict[str, str]]:
             candidates.append(_candidate_payload(name, address))
             if len(candidates) >= limit:
                 return candidates
-    return candidates
+    return _sort_candidates(candidates)
 
 
 def _resolve_recipient(token: str, refresh_state: dict[str, Any] | None = None) -> RecipientResult:
-    cache_candidates = _cache_recipient_candidates(token, refresh_state=refresh_state)
+    cache_candidates = _sort_candidates(_cache_recipient_candidates(token, refresh_state=refresh_state))
     if len(cache_candidates) == 1:
         candidate = cache_candidates[0]
         return RecipientResult(
@@ -159,7 +189,9 @@ def _resolve_recipient(token: str, refresh_state: dict[str, Any] | None = None) 
             "address-cache",
             target=_candidate_target(candidate),
             name=candidate["name"],
-            address=candidate["address"],
+            email=_coerce_text(candidate.get("email", "")),
+            oe=_coerce_text(candidate.get("oe", "")),
+            seen_count=int(candidate.get("seen_count", 0) or 0),
         )
     if cache_candidates:
         return RecipientResult(token, False, "ambiguous-cache", candidates=cache_candidates)
@@ -170,8 +202,16 @@ def _resolve_recipient(token: str, refresh_state: dict[str, Any] | None = None) 
         name = _coerce_text(_safe_get(recipient, "Name", ""))
         address = _try_internet_address(recipient)
         target = address or name
-        return RecipientResult(token, True, "direct", target=target, name=name, address=address)
-    candidates = _search_gal_candidates(token)
+        return RecipientResult(
+            token,
+            True,
+            "direct",
+            target=target,
+            name=name,
+            email=address,
+            oe=_extract_oe(name),
+        )
+    candidates = _sort_candidates(_search_gal_candidates(token))
     if len(candidates) == 1:
         candidate = candidates[0]
         return RecipientResult(
@@ -180,9 +220,18 @@ def _resolve_recipient(token: str, refresh_state: dict[str, Any] | None = None) 
             "gal-search",
             target=_candidate_target(candidate),
             name=candidate["name"],
-            address=candidate["address"],
+            email=_coerce_text(candidate.get("email", "")),
+            oe=_coerce_text(candidate.get("oe", "")),
+            seen_count=int(candidate.get("seen_count", 0) or 0),
         )
-    return RecipientResult(token, False, "ambiguous" if candidates else "missing", candidates=candidates)
+    return RecipientResult(
+        token,
+        False,
+        "ambiguous" if candidates else "missing",
+        email=address if 'address' in locals() else "",
+        oe=_extract_oe(name) if 'name' in locals() else "",
+        candidates=candidates,
+    )
 
 
 def _resolve_many(required: list[str], optional: list[str]) -> tuple[list[RecipientResult], list[RecipientResult]]:
@@ -198,8 +247,25 @@ def _add_recipients(item: Any, recipient_results: list[RecipientResult], recipie
         recipient.Type = recipient_type
 
 
+def _recipient_result_payload(result: RecipientResult) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "requested": result.requested,
+        "resolved": result.resolved,
+        "kind": result.kind,
+    }
+    if result.resolved:
+        payload["target"] = result.target
+        payload["name"] = result.name
+        payload["email"] = result.email
+        payload["oe"] = result.oe
+        payload["seen_count"] = result.seen_count
+    if result.candidates:
+        payload["candidates"] = result.candidates
+    return payload
+
+
 def _recipient_payload(results: list[RecipientResult]) -> list[dict[str, Any]]:
-    return [asdict(result) for result in results]
+    return [_recipient_result_payload(result) for result in results]
 
 
 def _current_outlook_timezone(app: Any, fallback_item: Any) -> Any:

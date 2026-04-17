@@ -11,6 +11,7 @@ from outlook_appointment_tools import (  # noqa: E402
     _default_end,
     _effective_subject,
     _build_parser,
+    _recipient_payload,
     _resolve_recipient,
     _resolve_send_mode,
     _strip_draft_prefix,
@@ -193,7 +194,14 @@ def test_suggest_slots_can_prepare_best_slot_review_with_standardized_start_and_
 def test_resolve_recipient_prefers_address_cache_before_direct(monkeypatch):
     monkeypatch.setattr(
         "outlook_appointment_tools._cache_recipient_candidates",
-        lambda token, refresh_state=None: [{"name": "Martin Mustermann", "address": "martin@example.com"}],
+        lambda token, refresh_state=None: [
+            {
+                "name": "Mustermann, Martin (EKEK/1)",
+                "email": "martin@example.com",
+                "oe": "EKEK/1",
+                "seen_count": 42,
+            }
+        ],
     )
     monkeypatch.setattr(
         "outlook_appointment_tools._lazy_outlook_context",
@@ -204,7 +212,9 @@ def test_resolve_recipient_prefers_address_cache_before_direct(monkeypatch):
 
     assert result.resolved is True
     assert result.kind == "address-cache"
-    assert result.address == "martin@example.com"
+    assert result.email == "martin@example.com"
+    assert result.oe == "EKEK/1"
+    assert result.seen_count == 42
 
 
 def test_resolve_recipient_falls_back_to_direct_then_gal_after_cache_miss(monkeypatch):
@@ -229,4 +239,64 @@ def test_resolve_recipient_falls_back_to_direct_then_gal_after_cache_miss(monkey
 
     assert result.resolved is True
     assert result.kind == "direct"
-    assert result.address == "martin@example.com"
+    assert result.email == "martin@example.com"
+
+
+def test_resolve_recipient_ambiguous_cache_candidates_include_email_oe_and_seen_count(monkeypatch):
+    monkeypatch.setattr(
+        "outlook_appointment_tools._cache_recipient_candidates",
+        lambda token, refresh_state=None: [
+            {
+                "name": "Junge, Christian (EHH/1)",
+                "email": "christian.junge1@volkswagen.de",
+                "oe": "EHH/1",
+                "seen_count": 8,
+            },
+            {
+                "name": "Junge, Christian (EKEK/1)",
+                "email": "christian.junge@volkswagen.de",
+                "oe": "EKEK/1",
+                "seen_count": 716,
+            },
+        ],
+    )
+
+    result = _resolve_recipient("Christian Junge", refresh_state={})
+
+    assert result.resolved is False
+    assert result.kind == "ambiguous-cache"
+    assert result.candidates[0]["email"] == "christian.junge@volkswagen.de"
+    assert result.candidates[0]["oe"] == "EKEK/1"
+    assert result.candidates[0]["seen_count"] == 716
+
+
+def test_recipient_payload_omits_empty_top_level_fields_for_ambiguous_result(monkeypatch):
+    monkeypatch.setattr(
+        "outlook_appointment_tools._cache_recipient_candidates",
+        lambda token, refresh_state=None: [
+            {
+                "name": "Junge, Christian (EKEK/1)",
+                "email": "christian.junge@volkswagen.de",
+                "oe": "EKEK/1",
+                "seen_count": 716,
+            },
+            {
+                "name": "Junge, Christian (EHH/1)",
+                "email": "christian.junge1@volkswagen.de",
+                "oe": "EHH/1",
+                "seen_count": 8,
+            },
+        ],
+    )
+
+    payload = _recipient_payload([_resolve_recipient("Christian Junge", refresh_state={})])[0]
+
+    assert payload["requested"] == "Christian Junge"
+    assert payload["resolved"] is False
+    assert payload["kind"] == "ambiguous-cache"
+    assert "target" not in payload
+    assert "name" not in payload
+    assert "email" not in payload
+    assert "oe" not in payload
+    assert "seen_count" not in payload
+    assert payload["candidates"][0]["email"] == "christian.junge@volkswagen.de"

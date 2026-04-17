@@ -405,6 +405,40 @@ def test_address_cache_lookup_refreshes_empty_cache_once_and_retries(tmp_path, m
     assert payload["matches"][0]["email"] == "martin@example.com"
 
 
+def test_address_cache_lookup_matches_multiword_name_independent_of_display_order(tmp_path, monkeypatch):
+    db_path = tmp_path / "address_cache.db"
+    monkeypatch.setattr(address_cache, "DB_PATH", db_path)
+    monkeypatch.setattr(address_cache, "USERDATA_DIR", tmp_path)
+
+    with address_cache._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO addresses(
+                email, display_name, seen_count, inbound_count, outbound_count,
+                sender_count, recipient_count, first_seen_utc, last_seen_utc
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "christian.junge@volkswagen.de",
+                "Junge, Christian (EKEK/1)",
+                5,
+                3,
+                2,
+                1,
+                4,
+                "2026-04-10T08:00:00+00:00",
+                "2026-04-16T08:00:00+00:00",
+            ),
+        )
+        address_cache._set_last_scan_utc(conn, "2026-04-16T08:00:00+00:00")
+        conn.commit()
+
+    payload = address_cache.lookup_cached_addresses("Christian Junge", refresh_state={})
+
+    assert payload["matches"][0]["email"] == "christian.junge@volkswagen.de"
+    assert payload["matches"][0]["display_name"] == "Junge, Christian (EKEK/1)"
+
+
 def test_address_cache_parse_args_accepts_folder_filter():
     args = address_cache.parse_args(["--folder", "inbox", "--folder", "sent"])
 
@@ -417,6 +451,12 @@ def test_address_cache_parse_args_accepts_max_messages():
 
     assert args.folder == ["inbox"]
     assert args.max_messages == 200
+
+
+def test_address_cache_parse_args_accepts_days():
+    args = address_cache.parse_args(["--days", "7"])
+
+    assert args.days == 7
 
 
 def test_address_cache_execute_scan_stops_after_considered_limit(monkeypatch, tmp_path):
@@ -460,6 +500,34 @@ def test_address_cache_execute_scan_stops_after_considered_limit(monkeypatch, tm
     assert payload["messages_considered"] == 2
     assert payload["messages_seen"] == 2
     assert payload["stopped_early"] is True
+
+
+def test_effective_scan_cutoff_prefers_more_recent_days_window():
+    last_scan_utc = datetime(2026, 4, 10, 12, 0, tzinfo=UTC)
+    now_utc = datetime(2026, 4, 17, 12, 0, tzinfo=UTC)
+
+    cutoff = address_cache._effective_scan_cutoff(
+        force_full=False,
+        last_scan_utc=last_scan_utc,
+        days=3,
+        now_utc=now_utc,
+    )
+
+    assert cutoff == datetime(2026, 4, 14, 12, 0, tzinfo=UTC)
+
+
+def test_effective_scan_cutoff_keeps_newer_incremental_timestamp():
+    last_scan_utc = datetime(2026, 4, 16, 12, 0, tzinfo=UTC)
+    now_utc = datetime(2026, 4, 17, 12, 0, tzinfo=UTC)
+
+    cutoff = address_cache._effective_scan_cutoff(
+        force_full=False,
+        last_scan_utc=last_scan_utc,
+        days=7,
+        now_utc=now_utc,
+    )
+
+    assert cutoff == last_scan_utc
 
 
 def test_address_cache_connect_purges_non_smtp_rows(tmp_path, monkeypatch):

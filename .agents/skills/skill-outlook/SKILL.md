@@ -53,6 +53,12 @@ Kompletter Neuaufbau:
 python .agents/skills/skill-outlook/scripts/outlook_address_cache.py --force-full
 ```
 
+Nur letzte 7 Tage:
+
+```bash
+python .agents/skills/skill-outlook/scripts/outlook_address_cache.py --days 7
+```
+
 ## CLI-Referenz
 
 ### search — Hintergrundsuche (Standard)

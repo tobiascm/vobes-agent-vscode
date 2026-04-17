@@ -410,6 +410,22 @@ def _restrict_items(folder: Any, filter_field: str, last_scan_utc: datetime | No
         return _iter_items(items)
 
 
+def _effective_scan_cutoff(
+    *,
+    force_full: bool,
+    last_scan_utc: datetime | None,
+    days: int,
+    now_utc: datetime | None = None,
+) -> datetime | None:
+    cutoff: datetime | None = None if force_full else last_scan_utc
+    if days > 0:
+        now_utc = now_utc or datetime.now(UTC)
+        days_cutoff = now_utc - timedelta(days=days)
+        if cutoff is None or days_cutoff > cutoff:
+            cutoff = days_cutoff
+    return cutoff
+
+
 def _iter_items(items: Any) -> Iterable[Any]:
     count = int(_safe_get(items, "Count", 0) or 0)
     for index in range(1, count + 1):
@@ -555,9 +571,16 @@ def execute_scan(
     logger: logging.Logger,
     folder_filters: set[str] | None = None,
     max_messages: int = 0,
+    days: int = 0,
 ) -> dict[str, Any]:
     started_at = _iso_utc_now()
     last_scan_utc = None if force_full else _get_last_scan_utc(conn)
+    effective_cutoff_utc = _effective_scan_cutoff(
+        force_full=force_full,
+        last_scan_utc=last_scan_utc,
+        days=days,
+        now_utc=_parse_iso_utc(started_at),
+    )
     if force_full:
         _reset_full_scan(conn)
         conn.commit()
@@ -594,7 +617,7 @@ def execute_scan(
                 folder_summaries.append(folder_summary)
                 continue
 
-            for item in _restrict_items(folder, scan_folder.filter_field, last_scan_utc, logger):
+            for item in _restrict_items(folder, scan_folder.filter_field, effective_cutoff_utc, logger):
                 if not _item_is_mail(item):
                     continue
                 entry_id = _coerce_text(_safe_get(item, "EntryID", "")).strip()
@@ -602,7 +625,7 @@ def execute_scan(
                     continue
 
                 message_dt = _message_datetime(item, scan_folder.source_kind)
-                if last_scan_utc is not None and message_dt is not None and message_dt < last_scan_utc:
+                if effective_cutoff_utc is not None and message_dt is not None and message_dt < effective_cutoff_utc:
                     continue
 
                 if max_messages > 0 and messages_considered >= max_messages:
@@ -675,8 +698,10 @@ def execute_scan(
         details = {
             "db_path": str(DB_PATH),
             "last_scan_before": last_scan_utc.isoformat() if last_scan_utc else None,
+            "effective_cutoff_utc": effective_cutoff_utc.isoformat() if effective_cutoff_utc else None,
             "last_scan_after": finished_at,
             "selected_folders": selected_folders,
+            "days": days,
             "max_messages": max_messages,
             "stopped_early": stopped_early,
             "messages_considered": messages_considered,
@@ -699,10 +724,12 @@ def execute_scan(
             "db_path": str(DB_PATH),
             "force_full": force_full,
             "selected_folders": selected_folders,
+            "days": days,
             "max_messages": max_messages,
             "stopped_early": stopped_early,
             "messages_considered": messages_considered,
             "last_scan_before": last_scan_utc.isoformat() if last_scan_utc else None,
+            "effective_cutoff_utc": effective_cutoff_utc.isoformat() if effective_cutoff_utc else None,
             "last_scan_after": finished_at,
             "folders_scanned": len(folders),
             "messages_seen": messages_seen,
@@ -716,7 +743,9 @@ def execute_scan(
             "error": repr(exc),
             "db_path": str(DB_PATH),
             "last_scan_before": last_scan_utc.isoformat() if last_scan_utc else None,
+            "effective_cutoff_utc": effective_cutoff_utc.isoformat() if effective_cutoff_utc else None,
             "selected_folders": selected_folders,
+            "days": days,
             "max_messages": max_messages,
             "stopped_early": stopped_early,
             "messages_considered": messages_considered,
@@ -788,11 +817,13 @@ def _lookup_terms(query: str) -> list[str]:
     normalized = _normalize_text(query)
     if not normalized:
         return []
-    terms: list[str] = [normalized]
+    terms: list[str] = []
     for part in re.split(r"[^\w@.+-]+", normalized):
         token = part.strip()
         if token and token not in terms:
             terms.append(token)
+    if not terms and normalized:
+        terms.append(normalized)
     return terms
 
 
@@ -840,6 +871,8 @@ def _lookup_candidates(conn: sqlite3.Connection, query: str, *, limit: int = 5) 
             score += 200
         if normalized_query and normalized_query in name_norm:
             score += 180
+        score += sum(40 for term in terms if term in name_norm)
+        score += sum(20 for term in terms if term in email_norm)
         score += min(int(row[2] or 0), 100)
         score += min(len(terms) * 15, 60)
 
@@ -942,6 +975,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Scanne nur die angegebene Quelle. Kann mehrfach angegeben werden: inbox, archive, sent.",
     )
     parser.add_argument(
+        "--days",
+        type=int,
+        default=0,
+        help="Beschraenke den Lauf zusaetzlich auf die letzten N Tage. 0 = kein zusaetzliches Zeitfenster.",
+    )
+    parser.add_argument(
         "--max-messages",
         type=int,
         default=0,
@@ -960,6 +999,7 @@ def main(argv: list[str] | None = None) -> int:
             force_full=args.force_full,
             logger=logger,
             folder_filters=set(args.folder),
+            days=max(args.days, 0),
             max_messages=max(args.max_messages, 0),
         )
 
