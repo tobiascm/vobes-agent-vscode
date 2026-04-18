@@ -153,6 +153,9 @@ th, td {
 }
 """
 
+SOURCE_NOTICE_PREFIX = "[SOURCE_NOTICE]"
+SOURCE_TABLES = {"btl", "btl_opt"}
+
 # ── CSV laden: 2025 + Target ──────────────────────────────────────────
 
 def load_status_mapping() -> dict[str, str]:
@@ -250,6 +253,50 @@ def load_praemissen() -> str:
     """Liest praemissen.md als String."""
     with open(PRAEMISSEN_MD, encoding="utf-8") as f:
         return f.read().strip()
+
+
+def _normalize_source_table(source_table: str) -> str:
+    normalized = str(source_table or "btl").strip().lower()
+    if normalized not in SOURCE_TABLES:
+        raise ValueError(f"Ungueltige Source-Tabelle: {source_table}")
+    return normalized
+
+
+def _source_notice_line(source_table: str) -> str | None:
+    if _normalize_source_table(source_table) != "btl_opt":
+        return None
+    return (
+        f"{SOURCE_NOTICE_PREFIX} OPTIMIERUNGSVORSCHLAG AUS btl_opt - "
+        "keine Ist-Analyse aus btl"
+    )
+
+
+def _is_source_notice(line: str) -> bool:
+    return str(line).startswith(SOURCE_NOTICE_PREFIX)
+
+
+def _display_meta_line(line: str) -> str:
+    if _is_source_notice(line):
+        return str(line)[len(SOURCE_NOTICE_PREFIX):].strip()
+    return line
+
+
+def _render_meta_line_markdown(line: str) -> str:
+    text = _display_meta_line(line)
+    if _is_source_notice(line):
+        return f'<span style="color:#c00000"><strong>{text}</strong></span>'
+    return text
+
+
+def _meta_line_font(line: str) -> Font:
+    if _is_source_notice(line):
+        return Font(size=10, bold=True, color="FFC00000")
+    return Font(size=10, italic=True)
+
+
+def _budget_source_sql(source_table: str) -> str:
+    table = _normalize_source_table(source_table)
+    return f"SELECT concept, dev_order, ea, title, planned_value, company, status, bm_text, target_date FROM {table}"
 
 
 MONTH_COLUMNS = (
@@ -1388,7 +1435,7 @@ def _render_table_markdown(section: TableSection) -> list[str]:
 
 def render_markdown(report: ReportDocument) -> str:
     lines: list[str] = [f"# {report.title}", ""]
-    lines.extend(report.meta_lines)
+    lines.extend(_render_meta_line_markdown(line) for line in report.meta_lines)
 
     for section in report.sections:
         lines.append("")
@@ -1546,7 +1593,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
             merge_row(report.title, font=Font(size=16, bold=True), min_height=30, line_height=18)
         if include_meta:
             for line in report.meta_lines:
-                merge_row(line, font=Font(size=10, italic=True), min_height=20, line_height=15)
+                merge_row(_display_meta_line(line), font=_meta_line_font(line), min_height=20, line_height=15)
         if empty_message and not sections:
             merge_row(empty_message, font=Font(size=10, italic=True), min_height=20, line_height=15)
 
@@ -1737,13 +1784,24 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
     return xlsx_file
 
 
-def main():
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--year", type=int, default=datetime.date.today().year)
+    parser.add_argument("--source-table", choices=sorted(SOURCE_TABLES), default="btl")
     parser.add_argument("--pdf", action="store_true", help="Erzeugt zusaetzlich eine PDF-Datei neben Markdown und XLSX.")
     parser.add_argument("--inherit-notes-from")
-    args = parser.parse_args()
-    year = args.year
+    return parser
+
+
+def generate_report(
+    *,
+    year: int,
+    source_table: str = "btl",
+    pdf: bool = False,
+    inherit_notes_from: str | None = None,
+    open_excel: bool = False,
+) -> dict[str, str]:
+    source_table = _normalize_source_table(source_table)
 
     # ── Vorgaben + Prämissen laden ─────────────────────────────────────
     REF_2025, TARGET_2026, AREA_ORDER, START_Q, COMPANY_TARGET_OVERRIDES, QUARTER_SPLIT = load_targets()
@@ -1765,7 +1823,7 @@ def main():
     q_label = f"Q1-{num_q}" if num_q > 1 else "Q1"
 
     # ── BMs laden (inkl. Status) ───────────────────────────────────────
-    sql = "SELECT concept, dev_order, ea, title, planned_value, company, status, bm_text, target_date FROM btl"
+    sql = _budget_source_sql(source_table)
     rows = run_sql(sql, year)
 
     # ── Status-Mapping aus CSV laden ───────────────────────────────────
@@ -1907,6 +1965,9 @@ def main():
     meta_lines = [
         f"**Stand BPLUS-NG:** {sync_time} | **Erstellt:** {datetime.date.today().strftime('%d.%m.%Y')}"
     ]
+    source_notice = _source_notice_line(source_table)
+    if source_notice:
+        meta_lines.append(source_notice)
     sections: list[TextSection | TableSection] = []
 
     # ── Gesamtübersicht (oben) ────────────────────────────────────────
@@ -2278,20 +2339,35 @@ def main():
         f.write(md_text + "\n")
 
     xlsx_file = os.path.join(OUT_DIR, f"{ts}_budget_massnahmenplan_ekek1.xlsx")
-    inherit_notes_from = args.inherit_notes_from or _find_previous_xlsx(OUT_DIR, xlsx_file)
+    inherit_notes_from = inherit_notes_from or _find_previous_xlsx(OUT_DIR, xlsx_file)
     write_xlsx_report(report, xlsx_file, inherit_notes_from=inherit_notes_from)
 
-    pdf_file = write_pdf_beside_markdown(out_file) if args.pdf else None
+    pdf_file = write_pdf_beside_markdown(out_file) if pdf else None
 
-    rel = os.path.relpath(out_file, REPO_ROOT)
-    rel_xlsx = os.path.relpath(xlsx_file, REPO_ROOT)
-    print(rel)
-    print(rel_xlsx)
+    result = {
+        "markdown": os.path.relpath(out_file, REPO_ROOT),
+        "xlsx": os.path.relpath(xlsx_file, REPO_ROOT),
+    }
     if pdf_file:
-        rel_pdf = os.path.relpath(pdf_file, REPO_ROOT)
-        print(rel_pdf)
+        result["pdf"] = os.path.relpath(pdf_file, REPO_ROOT)
+    if open_excel:
+        open_excel_file(xlsx_file)
+    return result
 
-    open_excel_file(xlsx_file)
+
+def main():
+    args = build_arg_parser().parse_args()
+    result = generate_report(
+        year=args.year,
+        source_table=args.source_table,
+        pdf=args.pdf,
+        inherit_notes_from=args.inherit_notes_from,
+        open_excel=True,
+    )
+    print(result["markdown"])
+    print(result["xlsx"])
+    if "pdf" in result:
+        print(result["pdf"])
 
 
 if __name__ == "__main__":

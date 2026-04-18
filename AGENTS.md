@@ -60,8 +60,8 @@ Bei Token-Problemen mit M365-Skills (Mail Search, File Search, Graph Scope Probe
 → PFLICHT: Skill `$skill-budget-ua-leiter` laden und befolgen. NUR fuer Budget-spezifische OE→Mail-Zuordnung, NICHT fuer Personensuche (dafuer `$skill-personensuche-groupfind`).
 - EA-Uebersicht | EA-Stammdaten / EA-Nummern / Laufzeiten / Projektfamilien / DevOrders aus BPLUS-NG abrufen  
 → PFLICHT: Skill `$skill-budget-ea-uebersicht` laden und befolgen.
-- Eigenleistung | EL-Planung | Mitarbeiter-EL-Buchung (auf welche EA bucht ein MA) | Buchungssperren | Jahressicht EL | EL vs. Fremdleistung  
-→ PFLICHT: Skill `$skill-budget-eigenleistung-el` laden und befolgen.
+- Eigenleistung | EL-Planung | Mitarbeiter-EL-Buchung (auf welche EA bucht ein MA) | Buchungssperren | Jahressicht EL | EL vs. Fremdleistung | EL aendern | EL schreiben | EL auf 0 setzen | EL Monate anpassen | reset-ea | plan-changes  
+→ PFLICHT: Skill `$skill-budget-eigenleistung-el` laden und befolgen. Schreibzugriff via el_change.py. Monate koennen nur ab dem aktuellen Monat geaendert werden, nicht rueckwirkend.
 - Plausibilisierung | Begruendung | BM-Text | Aufwandsplausibilisierung | Nachfrage Controller | warum wird X benoetigt | Aufwaende begruenden  
 → PFLICHT: Skill `$skill-budget-plausibilisierung` laden und befolgen.
 - Massnahmenplan | Budget-Massnahmenplan | Budget-Arbeitstabelle | Aufgabenbereiche mit Massnahmen | Budget-Vergleich Vorjahr Target Ist  

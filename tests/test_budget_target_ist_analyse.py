@@ -75,6 +75,21 @@ def test_render_markdown_formats_summary_and_sections():
     assert "**Wichtig**" in content
 
 
+def test_render_markdown_marks_btl_opt_as_optimization_proposal():
+    mod = load_module()
+    report = mod.ReportDocument(
+        title="Testreport",
+        meta_lines=[mod._source_notice_line("btl_opt")],
+        sections=[],
+        max_columns=1,
+    )
+
+    content = mod.render_markdown(report)
+
+    assert "OPTIMIERUNGSVORSCHLAG AUS btl_opt" in content
+    assert "<span style=\"color:#c00000\"><strong>" in content
+
+
 def test_exclude_from_budget_filters_storniert():
     mod = load_module()
 
@@ -154,6 +169,27 @@ def test_write_xlsx_report_writes_titles_and_summary_style(tmp_path):
     assert correction["A1"].value == "Korrektur Überplanung"
     assert "Korrektur Überplanung" in correction_values
     assert "Lieferant A — Jahres-Korrektur: 50 T€ zu reduzieren" in correction_values
+
+
+def test_write_xlsx_report_marks_btl_opt_notice_red_and_bold(tmp_path):
+    mod = load_module()
+    report = mod.ReportDocument(
+        title="Testreport",
+        meta_lines=[mod._source_notice_line("btl_opt"), "Meta"],
+        sections=[],
+        max_columns=1,
+    )
+    output = tmp_path / "report.xlsx"
+
+    mod.write_xlsx_report(report, str(output))
+
+    workbook = load_workbook(output)
+    overview = workbook["Übersicht"]
+
+    assert overview["A2"].value == "OPTIMIERUNGSVORSCHLAG AUS btl_opt - keine Ist-Analyse aus btl"
+    assert overview["A2"].font.bold is True
+    assert overview["A2"].font.color.type == "rgb"
+    assert overview["A2"].font.color.rgb == "FFC00000"
 
 
 def test_reporting_company_maps_voitas_rulechecker_to_4soft():

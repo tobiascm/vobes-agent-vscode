@@ -1,6 +1,6 @@
 ---
 name: skill-budget-target-ist-analyse
-description: "Budget Target/Ist-Analyse EKEK/1: Aufgabenbereiche und Firmen mit 2025, Target 2026, Ist 2026, Delta. Maßnahmen-Spalte bleibt leer — Agent befüllt sie nach User-Vorgaben."
+description: "Budget Target/Ist-Analyse EKEK/1: Aufgabenbereiche und Firmen mit 2025, Target 2026, Ist 2026, Delta. Kann standardmaessig aus `btl` oder optional aus `btl_opt` lesen; bei `btl_opt` wird der Report deutlich als Optimierungsvorschlag markiert. Maßnahmen-Spalte bleibt leer — Agent befüllt sie nach User-Vorgaben."
 ---
 
 # Skill: Budget Target/Ist-Analyse EKEK/1
@@ -30,6 +30,10 @@ Die Spalte **Maßnahmen** bleibt initial leer und wird durch den Agent nach User
    ```bash
    python .agents/skills/skill-budget-target-ist-analyse/report_massnahmenplan.py
    ```
+   Fuer Validierung eines Optimierungsvorschlags:
+   ```bash
+   python .agents/skills/skill-budget-target-ist-analyse/report_massnahmenplan.py --source-table btl_opt
+   ```
    Für zusätzlichen PDF-Export:
    ```bash
    python .agents/skills/skill-budget-target-ist-analyse/report_massnahmenplan.py --pdf
@@ -38,8 +42,10 @@ Die Spalte **Maßnahmen** bleibt initial leer und wird durch den Agent nach User
    - Lädt 2025 + Target aus `userdata/budget/vorgaben/target.csv`
    - Lädt Prämissen-Text aus `userdata/budget/vorgaben/praemissen.md`
    - Synchronisiert BTL-Daten (aktuelles Jahr) aus BPLUS-NG
+   - Liest standardmäßig aus `btl`, optional aus `btl_opt`
    - Ordnet BMs den Aufgabenbereichen zu (Firma→Bereich-Mapping inkl. Split-Logik)
    - Schreibt standardmäßig Markdown und XLSX nach `userdata/budget/`
+   - Kennzeichnet Reports aus `btl_opt` oben fett und rot als Optimierungsvorschlag
    - Erzeugt nur mit `--pdf` und installierter Dependency `markdown-pdf` zusätzlich eine PDF-Datei
    - Übernimmt in der XLSX manuelle Notizen/Aktionen aus der letzten älteren Maßnahmenplan-Datei (oder optional via `--inherit-notes-from <xlsx>`) per stabilem Schlüssel
    - Gibt die erzeugten Dateipfade auf stdout aus (Markdown, XLSX, optional PDF nur bei `--pdf`)

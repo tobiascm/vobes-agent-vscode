@@ -18,3 +18,5 @@ vobes_agent.egg-info/*
 tmp/*
 restore/*
 prompt*.md
+.claude/scheduled_tasks.lock
+
