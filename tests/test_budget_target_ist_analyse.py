@@ -171,6 +171,50 @@ def test_write_xlsx_report_writes_titles_and_summary_style(tmp_path):
     assert "Lieferant A — Jahres-Korrektur: 50 T€ zu reduzieren" in correction_values
 
 
+def test_write_xlsx_report_creates_neutral_tables_only_on_korrektur(tmp_path):
+    mod = load_module()
+    report = sample_report(mod)
+    output = tmp_path / "report.xlsx"
+
+    mod.write_xlsx_report(report, str(output))
+
+    workbook = load_workbook(output)
+
+    assert len(workbook["Übersicht"].tables) == 0
+    assert len(workbook["Korrektur"].tables) == 1
+    assert workbook["Korrektur"].tables["Korrektur_1"].ref == "A4:J5"
+
+
+def test_write_xlsx_report_korrektur_table_falls_back_to_full_block_for_interleaved_summary(tmp_path):
+    mod = load_module()
+    report = mod.ReportDocument(
+        title="Testreport",
+        meta_lines=["Meta"],
+        sections=[
+            mod.TableSection(
+                title="Block",
+                headers=["Firma", "Typ", "Konzept", "EA-Nr.", "EA", "BM-Titel", "Wert ist", "Wert neu", "Status", "Aktion"],
+                rows=[
+                    mod.TableRow(["4SOFT", "Reduzieren", "831058", "0043516", "EA1", "Titel 1", "2 T€", "", "01_In Erstellung", ""]),
+                    mod.TableRow(["", "", "", "", "", "Summe", "2 T€", "", "", ""], style="summary"),
+                    mod.TableRow(["EDAG", "Reduzieren", "831059", "0043517", "EA2", "Titel 2", "3 T€", "", "im Durchlauf", ""]),
+                ],
+                align_right={6, 7},
+                sheet_name="Korrektur",
+                separator_before=False,
+            ),
+        ],
+        max_columns=10,
+    )
+    output = tmp_path / "report.xlsx"
+
+    mod.write_xlsx_report(report, str(output))
+
+    workbook = load_workbook(output)
+
+    assert workbook["Korrektur"].tables["Korrektur_1"].ref == "A2:J5"
+
+
 def test_write_xlsx_report_marks_btl_opt_notice_red_and_bold(tmp_path):
     mod = load_module()
     report = mod.ReportDocument(

@@ -23,6 +23,7 @@ from typing import Any
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1850,10 +1851,11 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
         first_col_min: int = 14,
         first_col_max: int = 42,
         fixed_widths: dict[int, float] | None = None,
-    ) -> None:
+    ) -> list[tuple[int, int, int]]:
         current_row = 1
         col_widths = [12] * (max_cols + 1)
         col_widths[1] = first_col_width
+        table_ranges: list[tuple[int, int, int]] = []
 
         def estimate_lines(text: str, chars_per_line: int) -> int:
             clean = _strip_markdown(text)
@@ -1998,6 +2000,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
                 else:
                     current_row += 1
 
+            header_row = current_row
             for col_idx, header in enumerate(section.headers, start=1):
                 cell = ws.cell(current_row, col_idx, header)
                 cell.font = Font(bold=True)
@@ -2014,6 +2017,14 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
                 line_height=15,
             )
             current_row += 1
+
+            body_indexes = [idx for idx, row in enumerate(section.rows) if row.style == "body"]
+            if ws.title == "Korrektur" and body_indexes:
+                first_body = min(body_indexes)
+                last_body = max(body_indexes)
+                contiguous = body_indexes == list(range(first_body, last_body + 1))
+                last_table_row = header_row + (last_body + 1 if contiguous else len(section.rows))
+                table_ranges.append((header_row, last_table_row, len(section.headers)))
 
             is_sonder = section.title == "Sondervereinbarungen"
 
@@ -2088,6 +2099,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
         for col_idx in range(1, max_cols + 1):
             letter = get_column_letter(col_idx)
             ws.column_dimensions[letter].width = fixed_widths.get(col_idx, col_widths[col_idx]) if fixed_widths else col_widths[col_idx]
+        return table_ranges
 
     overview_sections = [section for section in report.sections if section.sheet_name == "Übersicht"]
     correction_sections = [section for section in report.sections if section.sheet_name == "Korrektur"]
@@ -2102,7 +2114,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
         first_col_max=44,
         fixed_widths={1: 44, 12: 65},
     )
-    render_sheet(
+    correction_table_ranges = render_sheet(
         correction_ws,
         correction_sections,
         include_title=False,
@@ -2113,6 +2125,18 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
         first_col_max=20,
         fixed_widths={5: 48},
     )
+    table_style = TableStyleInfo(
+        name="TableStyleLight1",
+        showFirstColumn=False,
+        showLastColumn=False,
+        showRowStripes=False,
+        showColumnStripes=False,
+    )
+    for idx, (start_row, end_row, width) in enumerate(correction_table_ranges, start=1):
+        ref = f"A{start_row}:{get_column_letter(width)}{end_row}"
+        tab = Table(displayName=f"Korrektur_{idx}", ref=ref)
+        tab.tableStyleInfo = table_style
+        correction_ws.add_table(tab)
     _embed_target_image(overview_ws, TARGET_IMAGE)
 
     _, target_firm_rows = _collect_table_key_rows(overview_ws, "Firma")
