@@ -42,6 +42,7 @@ if PLANNING_SCRIPTS_DIR not in sys.path:
 
 try:
     from beauftragungsplanung_core import (  # noqa: E402
+        CURRENT_QUARTER_TODO_STATUS,
         COMPANY_ALIAS_FALLBACKS,
         _detect_special_cadence,
         _extract_allowed_company_tokens,
@@ -50,6 +51,7 @@ try:
         _resolve_company_tokens,
     )
 except ImportError:  # pragma: no cover - fallback for missing planning core in local workspace
+    CURRENT_QUARTER_TODO_STATUS = "02_Freigabe Kostenstelle"
     COMPANY_ALIAS_FALLBACKS = {
         "4SOFT": "4SOFT GMBH MUENCHEN",
         "THIESEN": "THIESEN HARDWARE SOFTW. GMBH WARTENBERG",
@@ -64,6 +66,11 @@ except ImportError:  # pragma: no cover - fallback for missing planning core in 
         blob = " ".join(part for part in [display_name, remark, notes] if part).lower()
         if "nur el" in blob or "keine fl" in blob:
             return "fl_forbidden"
+        if (
+            (re.search(r"\b1\.?\s*hj\b", blob) or "erstes halbjahr" in blob)
+            and ("beauftragt" in blob or "freigegeben" in blob or "noch kein budget" in blob)
+        ):
+            return "first_half_exact"
         if "pro halbjahr" in blob:
             return "semiannual_tranche_exact"
         if "pro quartal" in blob:
@@ -455,12 +462,16 @@ def _period_target_for_cadence(base_target: float | None, cadence_type: str, num
     annual_target = _annual_target_for_cadence(base_target, cadence_type)
     if annual_target is None:
         return None
-    if cadence_type == "quarterly_tranche_exact":
-        return base_target if base_target is not None and num_q >= 1 else 0.0
-    if cadence_type == "semiannual_tranche_exact":
+    if cadence_type == "first_half_exact":
         if num_q < 2:
             return 0.0
         return base_target
+    if cadence_type == "quarterly_tranche_exact":
+        return (base_target * num_q / 4) if base_target is not None and num_q >= 1 else 0.0
+    if cadence_type == "semiannual_tranche_exact":
+        if num_q < 2:
+            return 0.0
+        return base_target / 2 if base_target is not None else None
     return annual_target * num_q / 4
 
 
@@ -1142,11 +1153,12 @@ def _collect_correction_rows(ws) -> dict[tuple[str, str, str], int]:
         if parsed is not None:
             current_section = parsed
             continue
-        if first_value == "Konzept":
+        if first_value == "Firma":
             continue
-        if current_section is None or not re.fullmatch(r"\d+", first_value):
+        concept_value = _strip_markdown(str(ws.cell(row_idx, 3).value or ""))
+        if current_section is None or not re.fullmatch(r"\d+", concept_value):
             continue
-        rows[(current_section[0], current_section[1], first_value)] = row_idx
+        rows[(current_section[0], current_section[1], concept_value)] = row_idx
     return rows
 
 
@@ -1230,15 +1242,24 @@ def _inherit_notes_from_workbook(workbook: Workbook, source_xlsx: str | None) ->
     source_correction = source_wb["Korrektur"] if "Korrektur" in source_wb.sheetnames else None
     target_correction = workbook["Korrektur"] if "Korrektur" in workbook.sheetnames else None
     if source_correction and target_correction:
-        source_f_width = source_correction.column_dimensions["F"].width
-        if source_f_width is not None:
-            target_correction.column_dimensions["F"].width = source_f_width
+        source_j_width = source_correction.column_dimensions["J"].width
+        if source_j_width is None:
+            source_j_width = source_correction.column_dimensions["G"].width
+        if source_j_width is None:
+            source_j_width = source_correction.column_dimensions["F"].width
+        if source_j_width is not None:
+            target_correction.column_dimensions["J"].width = source_j_width
         source_rows = _collect_correction_rows(source_correction)
         target_rows = _collect_correction_rows(target_correction)
         for key, target_row in target_rows.items():
             source_row = source_rows.get(key)
             if source_row is not None:
-                _copy_note_cell(source_correction, target_correction, source_row, 6, target_row, 6)
+                source_col = 10
+                if not _cell_has_text(source_correction.cell(source_row, source_col).value):
+                    source_col = 7
+                if not _cell_has_text(source_correction.cell(source_row, source_col).value):
+                    source_col = 6
+                _copy_note_cell(source_correction, target_correction, source_row, source_col, target_row, 10)
 
 
 def _heading(level: int, title: str) -> str:
@@ -1325,6 +1346,10 @@ def _quarter_split_period_target_eur(quarter_split: dict[str, Any] | None, num_q
     return round(total_te * 1000)
 
 
+def _quarter_index(quarter: str) -> int:
+    return QUARTERS.index(str(quarter).upper()) + 1
+
+
 def _scale_distribution_to_target(values: dict[str, int], target_total: int | None) -> dict[str, int]:
     if target_total is None:
         return dict(values)
@@ -1367,6 +1392,337 @@ def _reporting_company(area: str, company: str) -> str:
     if area == "RuleChecker (4soft, ex Voitas)" and "VOITAS" in upper:
         return "4SOFT GMBH MUENCHEN"
     return company
+
+
+def _new_firm_totals() -> dict[str, Any]:
+    return {
+        "sum": 0,
+        "count": 0,
+        "bestellt": 0,
+        "durchlauf": 0,
+        "konzept": 0,
+        "storniert": 0,
+        "konzept_quarters": defaultdict(int),
+    }
+
+
+def _row_ea_number(row: dict[str, Any]) -> str:
+    return str(row.get("dev_order") or row.get("ea") or "").strip()
+
+
+def _load_ea_title_by_number(year: int) -> dict[str, str]:
+    if not os.path.isfile(DB_PATH):
+        return {}
+    titles: dict[str, str] = {}
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            for row in conn.execute(
+                """
+                SELECT dev_order, ea
+                FROM btl
+                WHERE substr(COALESCE(target_date, ''), 1, 4) = ?
+                  AND COALESCE(dev_order, '') <> ''
+                  AND COALESCE(ea, '') <> ''
+                ORDER BY dev_order
+                """,
+                (str(year),),
+            ).fetchall():
+                ea_number = str(row["dev_order"] or "").strip()
+                ea_title = str(row["ea"] or "").strip()
+                if ea_number and ea_title and ea_number != ea_title and not re.fullmatch(r"[0-9]+", ea_title):
+                    titles.setdefault(ea_number, ea_title)
+            for row in conn.execute(
+                """
+                SELECT ea_number, title
+                FROM devorder
+                WHERE COALESCE(ea_number, '') <> ''
+                  AND COALESCE(title, '') <> ''
+                ORDER BY ea_number
+                """
+            ).fetchall():
+                ea_number = str(row["ea_number"] or "").strip()
+                title = str(row["title"] or "").strip()
+                if ea_number and title:
+                    titles.setdefault(ea_number, title)
+    except sqlite3.OperationalError:
+        return titles
+    return titles
+
+
+def _display_ea_title(ea_value: str, ea_number: str, ea_title_by_number: dict[str, str] | None = None) -> str:
+    ea_text = str(ea_value or "").strip()
+    ea_number_text = str(ea_number or "").strip()
+    if ea_title_by_number and ea_number_text and (ea_text == ea_number_text or re.fullmatch(r"[0-9]+", ea_text)):
+        resolved = str(ea_title_by_number.get(ea_number_text) or "").strip()
+        if resolved:
+            return resolved
+    return ea_text
+
+
+def _budget_entry_from_row(
+    row: dict[str, Any],
+    status_map: dict[str, str],
+    ea_title_by_number: dict[str, str] | None = None,
+) -> dict[str, Any] | None:
+    pv = int(float(row.get("planned_value", "0")))
+    company = str(row.get("company", "") or "")
+    ea_number = _row_ea_number(row)
+    ea = _display_ea_title(str(row.get("ea", "") or ""), ea_number, ea_title_by_number)
+    title = str(row.get("title", "") or "")
+    status = str(row.get("status", "") or "")
+    bm_text = str(row.get("bm_text", "") or "")
+    status_label = status_map.get(status, "")
+    if _exclude_from_budget(status_label):
+        return None
+    quarter = _quarter_for_date(row.get("target_date"), title=title, bm_text=bm_text)
+    area = classify_bm(company, title, bm_text)
+    reporting_company = _reporting_company(area, company)
+    return {
+        "concept": row.get("concept", ""),
+        "ea": ea,
+        "ea_number": ea_number,
+        "title": title,
+        "value": pv,
+        "status_label": status_label,
+        "status_raw": status,
+        "source_company": company,
+        "reporting_company": reporting_company,
+        "quarter": quarter,
+        "area": area,
+    }
+
+
+def _accumulate_firm_totals(totals: dict[str, Any], status_label: str, value_eur: int, quarter: str | None) -> None:
+    totals["sum"] += value_eur
+    totals["count"] += 1
+    if status_label == "bestellt":
+        totals["bestellt"] += value_eur
+        return
+    if status_label == "im Durchlauf":
+        totals["durchlauf"] += value_eur
+        return
+    if status_label == "Konzept":
+        totals["konzept"] += value_eur
+        if quarter in QUARTERS:
+            totals["konzept_quarters"][quarter] += value_eur
+        return
+    if status_label == "storniert":
+        totals["storniert"] += value_eur
+
+
+def _firm_period_value_eur(totals: dict[str, Any], num_q: int) -> int:
+    base_value = int(totals["bestellt"]) + int(totals["durchlauf"])
+    if num_q <= 2:
+        return base_value
+    if num_q == 3:
+        return base_value + int(totals["konzept_quarters"].get("Q3", 0))
+    return base_value + int(totals["konzept_quarters"].get("Q4", 0))
+
+
+def _load_reporting_company_targets(year: int) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
+    if not os.path.isfile(DB_PATH):
+        return {}, {}
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT company, gewerk, quarter, SUM(target_value) AS target_value
+                FROM plan_company_targets
+                WHERE year = ?
+                GROUP BY company, gewerk, quarter
+                """,
+                (year,),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {}, {}
+
+    annual_targets: dict[str, int] = defaultdict(int)
+    quarter_targets: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    for row in rows:
+        quarter = str(row["quarter"] or "").strip().upper()
+        if quarter not in QUARTERS:
+            continue
+        reporting_company = _reporting_company(str(row["gewerk"] or ""), str(row["company"] or ""))
+        target_value = int(row["target_value"] or 0)
+        annual_targets[reporting_company] += target_value
+        quarter_targets[reporting_company][quarter] += target_value
+    return dict(annual_targets), {firm: dict(values) for firm, values in quarter_targets.items()}
+
+
+def _cumulative_company_targets(
+    targets_by_quarter: dict[str, dict[str, int]],
+    num_q: int,
+) -> dict[str, int]:
+    quarters = QUARTERS[:num_q]
+    return {
+        firm: sum(values.get(quarter, 0) for quarter in quarters)
+        for firm, values in targets_by_quarter.items()
+    }
+
+
+def _merge_quarter_todo_entries(
+    base: dict[str, list[dict[str, Any]]],
+    extra: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    merged: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for quarter, entries in base.items():
+        merged[quarter].extend(entries)
+    for quarter, entries in extra.items():
+        merged[quarter].extend(entries)
+    return merged
+
+
+def _build_quarter_delta_todos(
+    actual_entries: list[dict[str, Any]],
+    target_entries: list[dict[str, Any]],
+    *,
+    current_period_quarter: int,
+) -> dict[str, list[dict[str, Any]]]:
+    active_statuses = {"Konzept", "im Durchlauf", "bestellt"}
+    target_totals: dict[tuple[str, str, str], int] = defaultdict(int)
+    for entry in target_entries:
+        if entry.get("quarter") not in QUARTERS:
+            continue
+        if entry.get("status_label") not in active_statuses:
+            continue
+        key = (
+            str(entry.get("source_company") or ""),
+            str(entry.get("quarter") or ""),
+            str(entry.get("ea_number") or ""),
+        )
+        target_totals[key] += int(entry.get("value") or 0)
+
+    actual_by_key: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    actual_totals: dict[tuple[str, str, str], int] = defaultdict(int)
+    for entry in actual_entries:
+        quarter = entry.get("quarter")
+        if quarter not in QUARTERS or _quarter_index(str(quarter)) < current_period_quarter:
+            continue
+        if entry.get("status_label") not in active_statuses:
+            continue
+        key = (
+            str(entry.get("source_company") or ""),
+            str(quarter),
+            str(entry.get("ea_number") or ""),
+        )
+        actual_by_key[key].append(entry)
+        actual_totals[key] += int(entry.get("value") or 0)
+
+    todo_entries: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    status_priority = {"Konzept": 0, "im Durchlauf": 1, "bestellt": 2}
+    for key, current_total in actual_totals.items():
+        target_total = target_totals.get(key, 0)
+        if current_total <= target_total:
+            continue
+        remaining = current_total - target_total
+        quarter = key[1]
+        candidates = sorted(
+            actual_by_key[key],
+            key=lambda entry: (
+                status_priority.get(str(entry.get("status_label") or ""), 9),
+                -int(entry.get("value") or 0),
+                str(entry.get("concept") or ""),
+            ),
+        )
+        for entry in candidates:
+            if remaining <= 0:
+                break
+            value = int(entry.get("value") or 0)
+            reduce_value = min(value, remaining)
+            if reduce_value <= 0:
+                continue
+            remaining_after = value - reduce_value
+            is_delete = remaining_after <= 0
+            todo_entries[quarter].append(
+                {
+                    **entry,
+                    "value_ist": value,
+                    "value_neu": remaining_after,
+                    "sort_value": value,
+                    "todo_type": "Löschen" if is_delete else "Reduzieren",
+                    "action": "Abruf löschen / zurückziehen"
+                    if is_delete
+                    else f"Abruf auf {fmt(round(remaining_after / 1000))} reduzieren",
+                }
+            )
+            remaining -= reduce_value
+    return todo_entries
+
+
+def _build_quarter_todo_sections(
+    todo_bms_by_quarter: dict[str, list[dict[str, Any]]],
+    *,
+    current_period_quarter: int,
+) -> list[TextSection | TableSection]:
+    sections: list[TextSection | TableSection] = []
+    for quarter in QUARTERS:
+        entries = todo_bms_by_quarter.get(quarter, [])
+        if not entries:
+            continue
+        quarter_num = _quarter_index(quarter)
+        is_current = quarter_num == current_period_quarter
+        if is_current:
+            intro_title = f"{quarter}-Todo: Maßnahmen jetzt umsetzen"
+            intro_lines = [
+                "Diese Liste zeigt alle Maßnahmen, um den realen Ist-Stand auf das Optimierungssoll des aktuellen Quartals zu bringen.",
+                f"Neue Abrufe stehen dafür bewusst auf dem frühen Durchlauf-Status **{CURRENT_QUARTER_TODO_STATUS}**.",
+                "Aktion: neue Abrufe starten sowie bestehende Positionen bei Bedarf löschen oder reduzieren.",
+            ]
+        else:
+            intro_title = f"{quarter}-Todo: künftige Maßnahmen vorbereiten"
+            intro_lines = [
+                f"Diese Liste zeigt alle Maßnahmen, um den realen Ist-Stand rechtzeitig auf das Optimierungssoll für {quarter} zu bringen.",
+                "Neue Abrufe stehen dafür bewusst noch auf **01_In Erstellung**.",
+                "Aktion: neue Abrufe vorbereiten sowie bestehende Positionen bei Bedarf löschen oder reduzieren.",
+            ]
+
+        sections.append(
+            TextSection(
+                title=intro_title,
+                lines=intro_lines,
+                sheet_name="Korrektur",
+            )
+        )
+        todo_rows = [
+            TableRow(
+                [
+                    entry["reporting_company"].split()[0] if str(entry["reporting_company"]).strip() else str(entry["reporting_company"]),
+                    entry["todo_type"],
+                    entry["concept"],
+                    entry["ea_number"],
+                    entry["ea"],
+                    entry["title"],
+                    "" if entry.get("value_ist") in (None, "") else fmt(round(int(entry["value_ist"]) / 1000)),
+                    "" if entry.get("value_neu") in (None, "") else fmt(round(int(entry["value_neu"]) / 1000)),
+                    entry["status_raw"],
+                    entry["action"],
+                ]
+            )
+            for entry in sorted(
+                entries,
+                key=lambda item: (
+                    str(item["reporting_company"]),
+                    {"Löschen": 0, "Reduzieren": 1, "Neu": 2}.get(str(item.get("todo_type") or ""), 9),
+                    -int(item.get("sort_value", item.get("value_neu", 0)) or 0),
+                    str(item["concept"]),
+                ),
+            )
+        ]
+        sections.append(
+            TableSection(
+                title=f"{quarter}-Todo-Liste",
+                headers=["Firma", "Typ", "Konzept", "EA-Nr.", "EA", "BM-Titel", "Wert ist", "Wert neu", "Status", "Aktion"],
+                rows=todo_rows,
+                align_right={6, 7},
+                level=3,
+                separator_before=False,
+                sheet_name="Korrektur",
+                body_row_height=15,
+            )
+        )
+    return sections
 
 
 def _thiesen_manual_soll(company: str, targets: dict[str, int], start_q: dict[str, int], num_q: int) -> tuple[int, int] | None:
@@ -1423,12 +1779,13 @@ def _render_table_markdown(section: TableSection) -> list[str]:
             section.sheet_name == "Korrektur"
             and row.style == "body"
             and section.headers
-            and section.headers[0] == "Konzept"
+            and "Konzept" in section.headers
             and values
         ):
-            url = _bplus_vorgang_url(values[0])
+            concept_idx = section.headers.index("Konzept")
+            url = _bplus_vorgang_url(values[concept_idx])
             if url:
-                values[0] = f"[{_strip_markdown(values[0])}]({url})"
+                values[concept_idx] = f"[{_strip_markdown(values[concept_idx])}]({url})"
         lines.append(f"| {' | '.join(values)} |")
     return lines
 
@@ -1689,7 +2046,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
                         cell.alignment = center
                     else:
                         cell.alignment = right if (col_idx - 1) in section.align_right else left
-                    if ws.title == "Korrektur" and row.style == "body" and col_idx == 1:
+                    if ws.title == "Korrektur" and row.style == "body" and header == "Konzept":
                         url = _bplus_vorgang_url(str(value))
                         if url:
                             cell.hyperlink = url
@@ -1709,7 +2066,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
                         fill = special_status_fill(str(cell_value))
                         if fill is not None:
                             cell.fill = fill
-                    elif ws.title == "Korrektur" and col_idx == 5:
+                    elif ws.title == "Korrektur" and header == "Status":
                         fill = status_fill_for(str(cell_value))
                         if fill is not None:
                             cell.fill = fill
@@ -1754,7 +2111,7 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
         first_col_width=16,
         first_col_min=10,
         first_col_max=20,
-        fixed_widths={3: 48},
+        fixed_widths={5: 48},
     )
     _embed_target_image(overview_ws, TARGET_IMAGE)
 
@@ -1825,6 +2182,7 @@ def generate_report(
     # ── BMs laden (inkl. Status) ───────────────────────────────────────
     sql = _budget_source_sql(source_table)
     rows = run_sql(sql, year)
+    ea_title_by_number = _load_ea_title_by_number(year)
 
     # ── Status-Mapping aus CSV laden ───────────────────────────────────
     status_map = load_status_mapping()
@@ -1838,62 +2196,89 @@ def generate_report(
     # ── BMs klassifizieren ─────────────────────────────────────────────
     area_values: dict[str, int] = {a: 0 for a in AREA_ORDER}
     area_values["_SONSTIGE"] = 0
-    firm_values: dict[str, dict] = {}  # firm → {sum, count, beauftragt}
+    firm_values: dict[str, dict[str, Any]] = {}
     firm_bms: dict[str, list[dict]] = {}  # firm → [{concept, ea, title, value, status_label}, ...]
+    quarter_todo_bms: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    budget_entries: list[dict[str, Any]] = []
     # Für Soll-Berechnung: Firma→Area→Ist-Anteil
     firm_area_ist: dict[str, dict[str, int]] = {}
     actual_quarter_eur = {quarter: 0 for quarter in QUARTERS}
 
     for row in rows:
-        pv = int(float(row.get("planned_value", "0")))
-        company = row.get("company", "")
-        ea = row.get("ea", "")
-        title = row.get("title", "")
-        status = row.get("status", "")
-        bm_text = row.get("bm_text", "")
-        benennung = status_map.get(status, "")
-        if _exclude_from_budget(benennung):
+        entry = _budget_entry_from_row(row, status_map, ea_title_by_number)
+        if entry is None:
             continue
-        quarter = _quarter_for_date(row.get("target_date"), title=title, bm_text=bm_text)
+        budget_entries.append(entry)
+        pv = int(entry["value"])
+        company = str(entry["source_company"])
+        ea = str(entry["ea"])
+        title = str(entry["title"])
+        status = str(entry["status_raw"])
+        benennung = str(entry["status_label"])
+        quarter = entry["quarter"]
         if quarter in actual_quarter_eur:
             actual_quarter_eur[quarter] += pv
-        area = classify_bm(company, title, bm_text)
-        reporting_company = _reporting_company(area, company)
+        area = str(entry["area"])
+        reporting_company = str(entry["reporting_company"])
         area_values[area] = area_values.get(area, 0) + pv
 
         # Firmen-Aggregation
         if reporting_company not in firm_values:
-            firm_values[reporting_company] = {"sum": 0, "count": 0, "bestellt": 0, "durchlauf": 0, "konzept": 0, "storniert": 0}
-        firm_values[reporting_company]["sum"] += pv
-        firm_values[reporting_company]["count"] += 1
-        if benennung == "bestellt":
-            firm_values[reporting_company]["bestellt"] += pv
-        elif benennung == "im Durchlauf":
-            firm_values[reporting_company]["durchlauf"] += pv
-        elif benennung == "Konzept":
-            firm_values[reporting_company]["konzept"] += pv
-        elif benennung == "storniert":
-            firm_values[reporting_company]["storniert"] += pv
+            firm_values[reporting_company] = _new_firm_totals()
+        _accumulate_firm_totals(firm_values[reporting_company], benennung, pv, quarter)
 
         # BM-Einzeldaten für Korrektur-Abschnitt sammeln
         if benennung in ("Konzept", "im Durchlauf", "bestellt", "storniert"):
             if reporting_company not in firm_bms:
                 firm_bms[reporting_company] = []
-            firm_bms[reporting_company].append({
-                "concept": row.get("concept", ""),
+            bm_entry = {
+                "concept": entry["concept"],
+                "ea_number": entry["ea_number"],
                 "ea": ea,
                 "title": title,
                 "value": pv,
                 "status_label": benennung,
                 "status_raw": status,
                 "source_company": company,
-            })
+            }
+            firm_bms[reporting_company].append(bm_entry)
+            if _normalize_source_table(source_table) == "btl_opt" and quarter in QUARTERS:
+                include_current = quarter == f"Q{num_q}" and status == CURRENT_QUARTER_TODO_STATUS
+                include_future = _quarter_index(quarter) > num_q and benennung == "Konzept"
+                if include_current or include_future:
+                    quarter_todo_bms[quarter].append(
+                        {
+                            **entry,
+                            "value_ist": "",
+                            "value_neu": pv,
+                            "sort_value": pv,
+                            "todo_type": "Neu",
+                            "action": "Abruf erstellen / in Durchlauf schicken"
+                            if include_current
+                            else f"Abruf vorbereiten / für {quarter} vormerken",
+                        }
+                    )
 
         # Firma→Area Zuordnung für Soll-Verteilung
         if area != "_SONSTIGE":
             if reporting_company not in firm_area_ist:
                 firm_area_ist[reporting_company] = {}
             firm_area_ist[reporting_company][area] = firm_area_ist[reporting_company].get(area, 0) + pv
+
+    if _normalize_source_table(source_table) == "btl_opt":
+        actual_entries = [
+            entry
+            for entry in (_budget_entry_from_row(row, status_map, ea_title_by_number) for row in run_sql(_budget_source_sql("btl"), year))
+            if entry is not None
+        ]
+        quarter_todo_bms = _merge_quarter_todo_entries(
+            quarter_todo_bms,
+            _build_quarter_delta_todos(
+                actual_entries,
+                budget_entries,
+                current_period_quarter=num_q,
+            ),
+        )
 
     # ── AUDI-Korrektur: von Systemschaltplänen abziehen ────────────────
     sysschalt_key = "Systemschaltpläne und Bibl. (EDAG, Bertrandt)"
@@ -1960,6 +2345,9 @@ def generate_report(
         firm_soll[firm] = soll
         firm_soll_q[firm] = soll_q
     firm_soll_q = _scale_distribution_to_target(firm_soll_q, _quarter_split_period_target_eur(quarter_split, num_q))
+    _plan_firm_soll, plan_firm_targets_by_quarter = _load_reporting_company_targets(year)
+    if plan_firm_targets_by_quarter:
+        firm_soll_q.update(_cumulative_company_targets(plan_firm_targets_by_quarter, num_q))
 
     report_title = f"EKEK/1 Budget {year} — Target / Ist-Analyse"
     meta_lines = [
@@ -2075,7 +2463,8 @@ def generate_report(
         storniert = round(data["storniert"] / 1000)
         soll_q = round(firm_soll_q.get(firm, 0) / 1000)
         diff_planung = ist - soll
-        diff_q = soll_q - (durchlauf + bestellt)
+        period_ist = round(_firm_period_value_eur(data, num_q) / 1000)
+        diff_q = soll_q - period_ist
         firm_short = firm.split()[0] if firm.strip() else firm
 
         massnahmen_parts: list[str] = []
@@ -2122,7 +2511,12 @@ def generate_report(
         for f in firm_values
         if not _hide_from_firm_overview(f)
     )
-    firm_total_diff_q = firm_total_soll_q - (firm_total_durchlauf + firm_total_bestellt)
+    firm_total_period_ist = sum(
+        round(_firm_period_value_eur(data, num_q) / 1000)
+        for firm, data in firm_values.items()
+        if not _hide_from_firm_overview(firm)
+    )
+    firm_total_diff_q = firm_total_soll_q - firm_total_period_ist
     firm_total_diff_planung = firm_total - firm_total_soll
     firm_rows.append(
         TableRow(
@@ -2176,6 +2570,13 @@ def generate_report(
     if special_section is not None:
         sections.append(special_section)
 
+    sections.extend(
+        _build_quarter_todo_sections(
+            quarter_todo_bms,
+            current_period_quarter=num_q,
+        )
+    )
+
     # ── Tabelle 3: Korrektur Überplanung ──────────────────────────────
     korrektur_firmen: list[dict] = []
     for firm, data in sorted(firm_values.items(), key=lambda x: -x[1]["sum"]):
@@ -2185,7 +2586,7 @@ def generate_report(
         durchlauf_te = round(data["durchlauf"] / 1000)
         soll_q_te = round(firm_soll_q.get(firm, 0) / 1000)
         diff_jahr = ist - soll
-        diff_q = soll_q_te - (durchlauf_te + bestellt_te)
+        diff_q = soll_q_te - round(_firm_period_value_eur(data, num_q) / 1000)
         if diff_jahr > 0 or diff_q < 0:
             korrektur_firmen.append({"firm": firm, "diff_jahr": diff_jahr, "diff_q": diff_q})
 
@@ -2203,7 +2604,7 @@ def generate_report(
         )
 
         korrektur_firmen.sort(key=lambda x: -(x["diff_jahr"] + abs(min(x["diff_q"], 0))))
-        korrektur_headers = ["Konzept", "EA", "BM-Titel", "Wert", "Status", "Aktion"]
+        korrektur_headers = ["Firma", "Typ", "Konzept", "EA-Nr.", "EA", "BM-Titel", "Wert ist", "Wert neu", "Status", "Aktion"]
 
         for kf in korrektur_firmen:
             firm = kf["firm"]
@@ -2218,16 +2619,18 @@ def generate_report(
                 sum_storno = 0
                 for b in storno_bms:
                     v = round(b["value"] / 1000)
-                    rows_storno.append(TableRow([b["concept"], b["ea"], b["title"], fmt(v), b["status_raw"], "löschen"]))
+                    rows_storno.append(
+                        TableRow([firm_short, "Löschen", b["concept"], b["ea_number"], b["ea"], b["title"], fmt(v), fmt(0), b["status_raw"], "löschen"])
+                    )
                     sum_storno += v
-                rows_storno.append(TableRow(["", "", "Summe storniert", fmt(sum_storno), "", ""], style="summary"))
+                rows_storno.append(TableRow(["", "", "", "", "", "Summe storniert", fmt(sum_storno), fmt(0), "", ""], style="summary"))
 
                 sections.append(
                     TableSection(
                         title=f"{firm_short} — Stornierte Vorgänge: löschen",
                         headers=korrektur_headers,
                         rows=rows_storno,
-                        align_right={3},
+                        align_right={6, 7},
                         level=3,
                         separator_before=False,
                         sheet_name="Korrektur",
@@ -2242,30 +2645,30 @@ def generate_report(
                 sum_p1 = 0
                 for b in prio1:
                     v = round(b["value"] / 1000)
-                    rows_q.append(TableRow([b["concept"], b["ea"], b["title"], fmt(v), b["status_raw"], ""]))
+                    rows_q.append(TableRow([firm_short, "Reduzieren", b["concept"], b["ea_number"], b["ea"], b["title"], fmt(v), "", b["status_raw"], ""]))
                     sum_p1 += v
                 if prio1:
-                    rows_q.append(TableRow(["", "", "Summe im Durchlauf", fmt(sum_p1), "", ""], style="summary"))
+                    rows_q.append(TableRow(["", "", "", "", "", "Summe im Durchlauf", fmt(sum_p1), "", "", ""], style="summary"))
 
                 if sum_p1 < reduce_q:
                     prio2 = sorted([b for b in bms if b["status_label"] == "bestellt"], key=lambda x: -x["value"])
                     sum_p2 = 0
                     for b in prio2:
                         v = round(b["value"] / 1000)
-                        rows_q.append(TableRow([b["concept"], b["ea"], b["title"], fmt(v), b["status_raw"], ""]))
+                        rows_q.append(TableRow([firm_short, "Reduzieren", b["concept"], b["ea_number"], b["ea"], b["title"], fmt(v), "", b["status_raw"], ""]))
                         sum_p2 += v
                     if prio2:
-                        rows_q.append(TableRow(["", "", "Summe bestellt", fmt(sum_p2), "", ""], style="summary"))
+                        rows_q.append(TableRow(["", "", "", "", "", "Summe bestellt", fmt(sum_p2), "", "", ""], style="summary"))
 
                 if not prio1 and not [b for b in bms if b["status_label"] == "bestellt"]:
-                    rows_q.append(TableRow(["", "", "Keine rückziehbaren Vorgänge vorhanden", "", "", ""], style="note"))
+                    rows_q.append(TableRow(["", "", "", "", "", "Keine rückziehbaren Vorgänge vorhanden", "", "", "", ""], style="note"))
 
                 sections.append(
                     TableSection(
                         title=f"{firm_short} — Quartals-Korrektur ({q_label}): {fmt(reduce_q)} zu reduzieren",
                         headers=korrektur_headers,
                         rows=rows_q,
-                        align_right={3},
+                        align_right={6, 7},
                         level=3,
                         separator_before=False,
                         sheet_name="Korrektur",
@@ -2279,30 +2682,30 @@ def generate_report(
                 sum_p1 = 0
                 for b in prio1:
                     v = round(b["value"] / 1000)
-                    rows_jahr.append(TableRow([b["concept"], b["ea"], b["title"], fmt(v), b["status_raw"], ""]))
+                    rows_jahr.append(TableRow([firm_short, "Reduzieren", b["concept"], b["ea_number"], b["ea"], b["title"], fmt(v), "", b["status_raw"], ""]))
                     sum_p1 += v
                 if prio1:
-                    rows_jahr.append(TableRow(["", "", "Summe 01 Erstellung", fmt(sum_p1), "", ""], style="summary"))
+                    rows_jahr.append(TableRow(["", "", "", "", "", "Summe 01 Erstellung", fmt(sum_p1), "", "", ""], style="summary"))
 
                 if sum_p1 < diff_jahr:
                     prio2 = sorted([b for b in bms if b["status_label"] == "im Durchlauf"], key=lambda x: -x["value"])
                     sum_p2 = 0
                     for b in prio2:
                         v = round(b["value"] / 1000)
-                        rows_jahr.append(TableRow([b["concept"], b["ea"], b["title"], fmt(v), b["status_raw"], ""]))
+                        rows_jahr.append(TableRow([firm_short, "Reduzieren", b["concept"], b["ea_number"], b["ea"], b["title"], fmt(v), "", b["status_raw"], ""]))
                         sum_p2 += v
                     if prio2:
-                        rows_jahr.append(TableRow(["", "", "Summe im Durchlauf", fmt(sum_p2), "", ""], style="summary"))
+                        rows_jahr.append(TableRow(["", "", "", "", "", "Summe im Durchlauf", fmt(sum_p2), "", "", ""], style="summary"))
 
                 if not prio1 and not [b for b in bms if b["status_label"] == "im Durchlauf"]:
-                    rows_jahr.append(TableRow(["", "", "Keine rückziehbaren Vorgänge vorhanden", "", "", ""], style="note"))
+                    rows_jahr.append(TableRow(["", "", "", "", "", "Keine rückziehbaren Vorgänge vorhanden", "", "", "", ""], style="note"))
 
                 sections.append(
                     TableSection(
                         title=f"{firm_short} — Jahres-Korrektur: {fmt(diff_jahr)} zu reduzieren",
                         headers=korrektur_headers,
                         rows=rows_jahr,
-                        align_right={3},
+                        align_right={6, 7},
                         level=3,
                         separator_before=False,
                         sheet_name="Korrektur",

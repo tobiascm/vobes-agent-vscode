@@ -45,9 +45,9 @@ def sample_report(mod):
             ),
             mod.TableSection(
                 title="Lieferant A — Jahres-Korrektur: 50 T€ zu reduzieren",
-                headers=["Konzept", "EA", "BM-Titel", "Wert", "Status", "Aktion"],
-                rows=[mod.TableRow(["K1", "EA1", "BM 1", "50 T€", "01 Erstellung", ""])],
-                align_right={3},
+                headers=["Firma", "Typ", "Konzept", "EA-Nr.", "EA", "BM-Titel", "Wert ist", "Wert neu", "Status", "Aktion"],
+                rows=[mod.TableRow(["Lieferant A", "Reduzieren", "K1", "0001", "EA1", "BM 1", "50 T€", "", "01 Erstellung", ""])],
+                align_right={6, 7},
                 level=3,
                 separator_before=False,
                 sheet_name="Korrektur",
@@ -155,7 +155,7 @@ def test_write_xlsx_report_writes_titles_and_summary_style(tmp_path):
     assert correction.row_dimensions[1].height and correction.row_dimensions[1].height >= 24
     assert overview.column_dimensions["A"].width == 44
     assert correction.column_dimensions["A"].width <= 20
-    assert correction.column_dimensions["C"].width == 48
+    assert correction.column_dimensions["E"].width == 48
     assert correction.row_dimensions[5].height == 15
     assert positions["Gesamtübersicht"] == "A3"
     assert positions["Summe"] == "A6"
@@ -199,6 +199,245 @@ def test_reporting_company_maps_voitas_rulechecker_to_4soft():
     assert mod._reporting_company("Vorentwicklung (4soft)", "4SOFT GMBH MUENCHEN") == "4SOFT GMBH MUENCHEN"
 
 
+def test_firm_period_value_eur_uses_global_ordered_and_future_quarter_concept_only():
+    mod = load_module()
+    totals = mod._new_firm_totals()
+    mod._accumulate_firm_totals(totals, "bestellt", 470_000, "Q1")
+    mod._accumulate_firm_totals(totals, "im Durchlauf", 78_000, "Q2")
+    mod._accumulate_firm_totals(totals, "Konzept", 168_000, "Q3")
+    mod._accumulate_firm_totals(totals, "Konzept", 113_000, "Q4")
+
+    assert mod._firm_period_value_eur(totals, 2) == 548_000
+    assert mod._firm_period_value_eur(totals, 3) == 716_000
+    assert mod._firm_period_value_eur(totals, 4) == 661_000
+
+
+def test_load_reporting_company_targets_prefers_plan_company_targets(tmp_path, monkeypatch):
+    mod = load_module()
+    db_path = tmp_path / "budget.db"
+    monkeypatch.setattr(mod, "DB_PATH", str(db_path))
+
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE plan_company_targets (
+                year INTEGER NOT NULL,
+                company TEXT NOT NULL,
+                gewerk TEXT NOT NULL DEFAULT '',
+                quarter TEXT NOT NULL,
+                target_value INTEGER NOT NULL,
+                annual_target INTEGER,
+                quarter_cap INTEGER,
+                step_value INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        conn.executemany(
+            """
+            INSERT INTO plan_company_targets
+                (year, company, gewerk, quarter, target_value, annual_target, step_value)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (2026, "4SOFT GMBH MUENCHEN", "Vorentwicklung (4soft)", "Q1", 100_000, 400_000, 100_000),
+                (2026, "4SOFT GMBH MUENCHEN", "Vorentwicklung (4soft)", "Q2", 120_000, 400_000, 100_000),
+                (2026, "4SOFT GMBH MUENCHEN", "Vorentwicklung (4soft)", "Q3", 80_000, 400_000, 100_000),
+                (2026, "4SOFT GMBH MUENCHEN", "Vorentwicklung (4soft)", "Q4", 100_000, 400_000, 100_000),
+                (2026, "EDAG ENGINEERING GMBH WOLFSBURG", "Systemschaltpläne und Bibl. (EDAG, Bertrandt)", "Q1", 200_000, 1_088_000, 100_000),
+                (2026, "EDAG ENGINEERING GMBH WOLFSBURG", "Systemschaltpläne und Bibl. (EDAG, Bertrandt)", "Q2", 300_000, 1_088_000, 100_000),
+            ],
+        )
+        conn.commit()
+
+    annual_targets, quarter_targets = mod._load_reporting_company_targets(2026)
+
+    assert annual_targets["4SOFT GMBH MUENCHEN"] == 400_000
+    assert annual_targets["EDAG ENGINEERING GMBH WOLFSBURG"] == 500_000
+    assert quarter_targets["4SOFT GMBH MUENCHEN"] == {
+        "Q1": 100_000,
+        "Q2": 120_000,
+        "Q3": 80_000,
+        "Q4": 100_000,
+    }
+    assert mod._cumulative_company_targets(quarter_targets, 2)["4SOFT GMBH MUENCHEN"] == 220_000
+
+
+def test_build_quarter_todo_sections_creates_current_and_future_lists():
+    mod = load_module()
+
+    sections = mod._build_quarter_todo_sections(
+        {
+            "Q2": [
+                {
+                    "reporting_company": "4SOFT GMBH MUENCHEN",
+                    "todo_type": "Neu",
+                    "concept": "OPT-2026-Q2-0001",
+                    "ea_number": "0048040",
+                    "ea": "0048040",
+                    "title": "Vorentwicklung (4soft) 0048040",
+                    "value_ist": "",
+                    "value_neu": 75_000,
+                    "sort_value": 75_000,
+                    "status_raw": "02_Freigabe Kostenstelle",
+                    "action": "Abruf erstellen / in Durchlauf schicken",
+                }
+            ],
+            "Q3": [
+                {
+                    "reporting_company": "EDAG ENGINEERING GMBH WOLFSBURG",
+                    "todo_type": "Neu",
+                    "concept": "OPT-2026-Q3-0001",
+                    "ea_number": "0093037",
+                    "ea": "0093037",
+                    "title": "Systemschaltpläne 0093037",
+                    "value_ist": "",
+                    "value_neu": 125_000,
+                    "sort_value": 125_000,
+                    "status_raw": "01_In Erstellung",
+                    "action": "Abruf vorbereiten / für Q3 vormerken",
+                }
+            ],
+        },
+        current_period_quarter=2,
+    )
+
+    assert [section.title for section in sections] == [
+        "Q2-Todo: Maßnahmen jetzt umsetzen",
+        "Q2-Todo-Liste",
+        "Q3-Todo: künftige Maßnahmen vorbereiten",
+        "Q3-Todo-Liste",
+    ]
+    assert sections[1].headers == ["Firma", "Typ", "Konzept", "EA-Nr.", "EA", "BM-Titel", "Wert ist", "Wert neu", "Status", "Aktion"]
+    assert sections[1].rows[0].values[1] == "Neu"
+    assert sections[1].rows[0].values[5] == "Vorentwicklung (4soft) 0048040"
+    assert sections[1].rows[0].values[6] == ""
+    assert sections[1].rows[0].values[7] == "75 T€"
+    assert sections[1].rows[0].values[9] == "Abruf erstellen / in Durchlauf schicken"
+    assert sections[3].rows[0].values[6] == ""
+    assert sections[3].rows[0].values[7] == "125 T€"
+    assert sections[3].rows[0].values[9] == "Abruf vorbereiten / für Q3 vormerken"
+
+
+def test_build_quarter_delta_todos_creates_delete_and_reduce_entries():
+    mod = load_module()
+
+    actual_entries = [
+        {
+            "concept": "A1",
+            "ea": "EA1",
+            "ea_number": "EA1",
+            "title": "Konzept A",
+            "value": 20_000,
+            "status_label": "Konzept",
+            "status_raw": "01_In Erstellung",
+            "source_company": "Firma A",
+            "reporting_company": "Firma A",
+            "quarter": "Q3",
+            "area": "Area",
+        },
+        {
+            "concept": "A2",
+            "ea": "EA1",
+            "ea_number": "EA1",
+            "title": "Durchlauf A",
+            "value": 30_000,
+            "status_label": "im Durchlauf",
+            "status_raw": "02_Freigabe Kostenstelle",
+            "source_company": "Firma A",
+            "reporting_company": "Firma A",
+            "quarter": "Q3",
+            "area": "Area",
+        },
+        {
+            "concept": "B1",
+            "ea": "EA2",
+            "ea_number": "EA2",
+            "title": "Konzept B",
+            "value": 50_000,
+            "status_label": "Konzept",
+            "status_raw": "01_In Erstellung",
+            "source_company": "Firma B",
+            "reporting_company": "Firma B",
+            "quarter": "Q4",
+            "area": "Area",
+        },
+        {
+            "concept": "OLD",
+            "ea": "EA0",
+            "ea_number": "EA0",
+            "title": "Vergangen",
+            "value": 40_000,
+            "status_label": "Konzept",
+            "status_raw": "01_In Erstellung",
+            "source_company": "Firma Alt",
+            "reporting_company": "Firma Alt",
+            "quarter": "Q1",
+            "area": "Area",
+        },
+    ]
+    target_entries = [
+        {
+            "source_company": "Firma A",
+            "quarter": "Q3",
+            "ea_number": "EA1",
+            "value": 30_000,
+            "status_label": "Konzept",
+        },
+        {
+            "source_company": "Firma B",
+            "quarter": "Q4",
+            "ea_number": "EA2",
+            "value": 20_000,
+            "status_label": "Konzept",
+        },
+    ]
+
+    todos = mod._build_quarter_delta_todos(
+        actual_entries,
+        target_entries,
+        current_period_quarter=2,
+    )
+
+    assert [entry["todo_type"] for entry in todos["Q3"]] == ["Löschen"]
+    assert todos["Q3"][0]["concept"] == "A1"
+    assert todos["Q3"][0]["value_ist"] == 20_000
+    assert todos["Q3"][0]["value_neu"] == 0
+    assert todos["Q3"][0]["action"] == "Abruf löschen / zurückziehen"
+
+    assert [entry["todo_type"] for entry in todos["Q4"]] == ["Reduzieren"]
+    assert todos["Q4"][0]["concept"] == "B1"
+    assert todos["Q4"][0]["value_ist"] == 50_000
+    assert todos["Q4"][0]["value_neu"] == 20_000
+    assert todos["Q4"][0]["action"] == "Abruf auf 20 T€ reduzieren"
+    assert "Q1" not in todos
+
+
+def test_budget_entry_from_row_resolves_numeric_ea_to_title():
+    mod = load_module()
+
+    entry = mod._budget_entry_from_row(
+        {
+            "concept": "OPT-1",
+            "ea": "0093037",
+            "dev_order": "0093037",
+            "title": "Dummy BM",
+            "planned_value": 10000,
+            "company": "EDAG ENGINEERING GMBH WOLFSBURG",
+            "status": "01_In Erstellung",
+            "bm_text": "",
+            "target_date": "2026-09-30",
+        },
+        {"01_In Erstellung": "Konzept"},
+        {"0093037": "Arbeiten EK für China nicht projektbez."},
+    )
+
+    assert entry is not None
+    assert entry["ea"] == "Arbeiten EK für China nicht projektbez."
+    assert entry["ea_number"] == "0093037"
+
+
 def test_load_targets_reads_company_target_overrides():
     mod = load_module()
 
@@ -231,9 +470,9 @@ def test_write_xlsx_report_inherits_notes_and_column_widths(tmp_path):
             mod.TextSection(title="Korrektur Überplanung", lines=["Hinweis"], sheet_name="Korrektur"),
             mod.TableSection(
                 title="4SOFT — Jahres-Korrektur: 2 T€ zu reduzieren",
-                headers=["Konzept", "EA", "BM-Titel", "Wert", "Status", "Aktion"],
-                rows=[mod.TableRow(["831058", "EA1", "Titel", "2 T€", "01_In Erstellung", ""])],
-                align_right={3},
+                headers=["Firma", "Typ", "Konzept", "EA-Nr.", "EA", "BM-Titel", "Wert ist", "Wert neu", "Status", "Aktion"],
+                rows=[mod.TableRow(["4SOFT", "Reduzieren", "831058", "0043516", "EA1", "Titel", "2 T€", "", "01_In Erstellung", ""])],
+                align_right={6, 7},
                 level=3,
                 separator_before=False,
                 sheet_name="Korrektur",
@@ -267,10 +506,17 @@ def test_write_xlsx_report_inherits_notes_and_column_widths(tmp_path):
     overview["M5"].alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
     overview["M5"].border = Border(left=Side(style="thin"), right=Side(style="thin"), top=Side(style="thin"), bottom=Side(style="thin"))
     correction["A1"] = "4SOFT — Jahres-Korrektur: 2 T€ zu reduzieren"
-    correction["A2"] = "Konzept"
-    correction["A3"] = "831058"
-    correction["F3"] = "manuell"
-    correction.column_dimensions["F"].width = 88
+    correction["A2"] = "Firma"
+    correction["A3"] = "4SOFT"
+    correction["B3"] = "Reduzieren"
+    correction["C3"] = "831058"
+    correction["D3"] = "0043516"
+    correction["E3"] = "EA1"
+    correction["F3"] = "Titel"
+    correction["G3"] = "2 T€"
+    correction["I3"] = "01_In Erstellung"
+    correction["J3"] = "manuell"
+    correction.column_dimensions["J"].width = 88
     wb.save(source)
 
     mod.write_xlsx_report(report, str(target), inherit_notes_from=str(source))
@@ -282,7 +528,7 @@ def test_write_xlsx_report_inherits_notes_and_column_widths(tmp_path):
     area_row = next(row for row in range(1, out_overview.max_row + 1) if out_overview[f"A{row}"].value == "Area A")
     firm_header_row = next(row for row in range(1, out_overview.max_row + 1) if out_overview[f"A{row}"].value == "Firma")
     firm_row = next(row for row in range(firm_header_row + 1, out_overview.max_row + 1) if out_overview[f"A{row}"].value == "4SOFT")
-    correction_row = next(row for row in range(1, out_correction.max_row + 1) if out_correction[f"A{row}"].value == "831058")
+    correction_row = next(row for row in range(1, out_correction.max_row + 1) if out_correction[f"C{row}"].value == "831058")
 
     assert out_overview.cell(area_row, 6).value == "Bereichsnotiz"
     assert out_overview.cell(firm_header_row, 13).value == "Notizen"
@@ -291,8 +537,8 @@ def test_write_xlsx_report_inherits_notes_and_column_widths(tmp_path):
     assert out_overview.cell(firm_row, 13).font.color.rgb == "FFFF0000"
     assert out_overview.column_dimensions["F"].width == 33
     assert out_overview.column_dimensions["M"].width == 77
-    assert out_correction.cell(correction_row, 6).value == "manuell"
-    assert out_correction.column_dimensions["F"].width == 88
+    assert out_correction.cell(correction_row, 10).value == "manuell"
+    assert out_correction.column_dimensions["J"].width == 88
 
 
 def test_load_special_rule_rows_reads_xlsx_and_resolves_companies(tmp_path):
@@ -667,13 +913,22 @@ def test_build_special_rule_section_digi_budget_el_kann_niedriger(tmp_path, monk
         num_q=2,
         q_label="Q1-2",
         rows=[
-            {"ea": "48040", "planned_value": "290000", "company": "4SOFT GMBH MUENCHEN", "title": "BM A", "bm_text": "", "status": "best"},
+            {
+                "ea": "48040",
+                "planned_value": "290000",
+                "company": "4SOFT GMBH MUENCHEN",
+                "title": "Entwicklungsleistung VW-EK-26-0001",
+                "bm_text": "Projekt Digitalisierung DMU",
+                "status": "best",
+            },
         ],
         status_map={"best": "bestellt"},
     )
 
     assert section is not None
     assert len(section.rows) == 3
+    assert section.rows[0].values[5] == "290 T€"
+    assert section.rows[0].values[10] == "0 T€"
 
 
 def test_build_special_rule_section_digi_budget_filters_budget_rows_by_title_and_bm_text(tmp_path, monkeypatch):
@@ -753,16 +1008,161 @@ def test_build_special_rule_section_digi_budget_filters_budget_rows_by_title_and
     first_row = section.rows[0]
     assert first_row.values[0] == "Digi-budget"
     assert first_row.values[3] == "290 T€"
+    assert first_row.values[5] == "290 T€"
     assert first_row.values[6] == "170 T€"
     assert first_row.values[7] == "120 T€"
     assert first_row.values[4] == "0 T€"
-    assert first_row.values[10] == "+145 T€"
+    assert first_row.values[10] == "0 T€"
     # Hint 0: "FL muss exakt passen!" -> year_band OK -> IO
     assert section.rows[0].values[13] == "IO"
     # Hint 1: "EL kann niedriger sein..." -> EL mode=manual, no target -> "-"
     assert section.rows[1].values[13] == "-"
     # Hint 2: "Werte für 1. HJ..." -> period_te (290) vs annual target (290) -> IO
     assert section.rows[2].values[13] == "IO"
+
+
+def test_detect_special_cadence_and_period_target_for_first_half_exact():
+    mod = load_module()
+
+    cadence = mod._detect_special_cadence(
+        "Digi-budget",
+        "1. HJ DMU (170T€) + RuleChecker (120T€), 2. HJ noch kein Budget",
+        "Werte für 1. HJ müssen auch wirklich im 1.HJ beauftragt werden.",
+    )
+
+    assert cadence == "first_half_exact"
+    assert mod._period_target_for_cadence(290.0, cadence, 1) == 0.0
+    assert mod._period_target_for_cadence(290.0, cadence, 2) == 290.0
+    assert mod._period_target_for_cadence(290.0, cadence, 3) == 290.0
+
+
+def test_period_target_for_semiannual_tranche_exact_is_half_year_share():
+    mod = load_module()
+
+    assert mod._period_target_for_cadence(150.0, "semiannual_tranche_exact", 1) == 0.0
+    assert mod._period_target_for_cadence(150.0, "semiannual_tranche_exact", 2) == 75.0
+    assert mod._period_target_for_cadence(150.0, "semiannual_tranche_exact", 3) == 75.0
+
+
+def test_period_target_for_quarterly_tranche_exact_is_year_share():
+    mod = load_module()
+
+    assert mod._period_target_for_cadence(150.0, "quarterly_tranche_exact", 1) == 37.5
+    assert mod._period_target_for_cadence(150.0, "quarterly_tranche_exact", 2) == 75.0
+    assert mod._period_target_for_cadence(150.0, "quarterly_tranche_exact", 3) == 112.5
+    assert mod._period_target_for_cadence(150.0, "quarterly_tranche_exact", 4) == 150.0
+
+
+def test_build_special_rule_section_pro_halbjahr_uses_half_year_target(tmp_path, monkeypatch):
+    mod = load_module()
+    workbook = Workbook()
+    ws = workbook.active
+    ws.append(["Sondervereinbarungen"])
+    ws.append([])
+    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
+    ws.append([
+        "NE Space Crafter",
+        "22020",
+        "1,9",
+        150,
+        "Pro Halbjahr, EL: Armin, Donato, Afshin, TCM",
+        "",
+        "EL und FL müssen exakt passen!\nEL und FL müssen hier pro Halbjahr beauftragt werden!",
+    ])
+    special_path = tmp_path / "sondervereinbarungen_halbjahr.xlsx"
+    workbook.save(special_path)
+    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(
+        mod,
+        "_load_el_aggregates",
+        lambda year, num_q: {
+            "22020": {
+                "year_hours": 0.0,
+                "period_hours": 0.0,
+                "year_te": 1.9,
+                "period_te": 0.0,
+            }
+        },
+    )
+
+    section = mod.build_special_rule_section(
+        year=2026,
+        num_q=2,
+        q_label="Q1-2",
+        rows=[
+            {
+                "ea": "22020",
+                "planned_value": "75100",
+                "company": "Firma A",
+                "title": "BM A",
+                "bm_text": "",
+                "status": "best",
+            }
+        ],
+        status_map={"best": "bestellt"},
+    )
+
+    assert section is not None
+    first_row = section.rows[0]
+    assert first_row.values[5] == "75 T€"
+    assert first_row.values[6] == "75,1 T€"
+    assert first_row.values[10] == "+0,1 T€"
+
+
+def test_build_special_rule_section_pro_quartal_uses_year_share_target(tmp_path, monkeypatch):
+    mod = load_module()
+    workbook = Workbook()
+    ws = workbook.active
+    ws.append(["Sondervereinbarungen"])
+    ws.append([])
+    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
+    ws.append([
+        "NE ID Buzz AD",
+        "35566",
+        "2,9",
+        150,
+        "Pro Quartal, EL: Armin, Donato, Afshin, TCM",
+        "",
+        "EL und FL müssen exakt passen!\nEL und FL müssen hier pro por Quartal beauftragt werden!",
+    ])
+    special_path = tmp_path / "sondervereinbarungen_quartal.xlsx"
+    workbook.save(special_path)
+    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(
+        mod,
+        "_load_el_aggregates",
+        lambda year, num_q: {
+            "35566": {
+                "year_hours": 0.0,
+                "period_hours": 0.0,
+                "year_te": 2.9,
+                "period_te": 0.0,
+            }
+        },
+    )
+
+    section = mod.build_special_rule_section(
+        year=2026,
+        num_q=2,
+        q_label="Q1-2",
+        rows=[
+            {
+                "ea": "35566",
+                "planned_value": "76300",
+                "company": "Firma A",
+                "title": "BM A",
+                "bm_text": "",
+                "status": "best",
+            }
+        ],
+        status_map={"best": "bestellt"},
+    )
+
+    assert section is not None
+    first_row = section.rows[0]
+    assert first_row.values[5] == "75 T€"
+    assert first_row.values[6] == "76,3 T€"
+    assert first_row.values[10] == "+1,3 T€"
 
 
 def test_build_special_rule_section_nur_fl_und_nur_el(tmp_path, monkeypatch):
