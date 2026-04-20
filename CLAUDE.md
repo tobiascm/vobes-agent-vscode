@@ -90,8 +90,8 @@
   → PFLICHT: Skill `$skill-chatgpt-research` laden und befolgen. Stellt Frage an ChatGPT via Playwright CDP und speichert Antwort als Markdown.
 - Datei konvertieren | lokale Datei nach PDF | PPTX nach PDF | Word nach PDF | Excel nach PDF | Datei nach Markdown | Dokument in Markdown umwandeln | Clipboard-Bild nach Markdown | Zwischenablage nach Markdown | Screenshot konvertieren  
   → PFLICHT: Skill `$skill-file-converter` laden und befolgen. Konvertiert lokale Dateien nach PDF (Office COM) oder Markdown (lightrag LLM-Pipeline). Mit `--clipboard` auch direkt aus der Zwischenablage.
-- SharePoint-Liste lesen | Listen-Eintraege abrufen | SharePoint Items filtern | Listendaten extrahieren | SharePoint REST API | DispForm-Daten lesen | SharePoint-Listen durchsuchen  
-  → PFLICHT: Skill `$skill-sharepoint-lists` laden und befolgen. Liest SharePoint-Listen per REST API ueber die Playwright-Browser-Session (SSO-Auth). Unterstuetzt Einzel-Item, Batch, Filter und Paging.
+- SharePoint-Liste lesen | Listen-Eintraege abrufen | SharePoint Items filtern | Listendaten extrahieren | SharePoint REST API | DispForm-Daten lesen | SharePoint-Listen durchsuchen | SharePoint-Ordner auflisten | SharePoint-Suche | Site-Metadaten | SharePoint Dokumentbibliothek | SharePoint Pages  
+  → PFLICHT: Skill `$skill-sharepoint` laden und befolgen. Liest SharePoint-Daten per REST API ueber die Playwright-Browser-Session (SSO-Auth). Listen (Items, Filter, Paging), Dokumentbibliotheken, Suche, Site Pages, Benutzer.
 
 # Tool-Prioritaet
 
