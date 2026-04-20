@@ -22,6 +22,7 @@ Generischer Skill zum Oeffnen und Interagieren mit **beliebigen Webseiten** (Int
 | Confluence / Jira lesen oder schreiben | `mcp-atlassian` (Skills `$skill-important-pages-links-and-urls`, `$skill-update-confluence-page`) |
 | iProject / TE Regelwerk durchsuchen | `$skill-te-regelwerk` |
 | BPLUS-NG Excel-Export | `$skill-budget-bplus-export` |
+| SharePoint-**Listen** lesen (Items, Felder, Filter) | `$skill-sharepoint-lists` |
 | Komplexe Multi-Page-Automation mit eigenem Server | `$skill-dev-browser` |
 
 ## Abgrenzung zu skill-dev-browser
