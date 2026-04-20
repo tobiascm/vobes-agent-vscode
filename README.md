@@ -139,6 +139,7 @@ Konfiguriert in `.vscode/mcp.json`:
 | [`skill-m365-copilot-file-search`](.agents/skills/skill-m365-copilot-file-search/SKILL.md) | SharePoint/OneDrive via Graph Beta API durchsuchen |
 | [`skill-m365-copilot-mail-search`](.agents/skills/skill-m365-copilot-mail-search/SKILL.md) | Outlook-Mails via Graph Search API durchsuchen |
 | [`skill-m365-file-reader`](.agents/skills/skill-m365-file-reader/SKILL.md) | PPTX/XLSX/DOCX/PDF/Bilder aus SharePoint/OneDrive lesen |
+| [`skill-sharepoint`](.agents/skills/skill-sharepoint/SKILL.md) | SharePoint per REST API (Listen, Dokumentbibliotheken, Suche, Pages) via Playwright-SSO |
 | [`skill-m365-mail-agent`](.agents/skills/skill-m365-mail-agent/SKILL.md) | Agentische Analyse eines Mail-Falls (Seed-Mail + Iteration) |
 | [`skill-m365-graph-scope-probe`](.agents/skills/skill-m365-graph-scope-probe/SKILL.md) | Diagnose fehlender Graph-Scopes (401/403) |
 | [`skill-outlook`](.agents/skills/skill-outlook/SKILL.md) | Lokales Outlook (COM): Suche, Thread-Sicht, verwandte Mails |
@@ -149,6 +150,7 @@ Konfiguriert in `.vscode/mcp.json`:
 | [`skill-chatgpt-research`](.agents/skills/skill-chatgpt-research/SKILL.md) | Frage an ChatGPT via Playwright, Antwort als Markdown |
 | [`skill-browse-intranet`](.agents/skills/skill-browse-intranet/SKILL.md) | Intranet-Seiten per Playwright (Navigation, Extraktion, Screenshots) |
 | **Utilities** ||
+| [`skill-excel-io`](.agents/skills/skill-excel-io/SKILL.md) | `.xlsx` lesen/schreiben/bearbeiten per CLI (info/read/edit/write, Styling, Batch) |
 | [`skill-file-converter`](.agents/skills/skill-file-converter/SKILL.md) | Lokale Dateien nach PDF (Office COM) oder Markdown (lightrag) |
 | [`skill-hibernate`](.agents/skills/skill-hibernate/SKILL.md) | Rechner zu bestimmter Uhrzeit in den Ruhezustand versetzen |
 
