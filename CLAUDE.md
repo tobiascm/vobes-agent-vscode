@@ -92,6 +92,8 @@
   → PFLICHT: Skill `$skill-file-converter` laden und befolgen. Konvertiert lokale Dateien nach PDF (Office COM) oder Markdown (lightrag LLM-Pipeline). Mit `--clipboard` auch direkt aus der Zwischenablage.
 - SharePoint-Liste lesen | Listen-Eintraege abrufen | SharePoint Items filtern | Listendaten extrahieren | SharePoint REST API | DispForm-Daten lesen | SharePoint-Listen durchsuchen | SharePoint-Ordner auflisten | SharePoint-Suche | Site-Metadaten | SharePoint Dokumentbibliothek | SharePoint Pages  
   → PFLICHT: Skill `$skill-sharepoint` laden und befolgen. Liest SharePoint-Daten per REST API ueber die Playwright-Browser-Session (SSO-Auth). Listen (Items, Filter, Paging), Dokumentbibliotheken, Suche, Site Pages, Benutzer.
+- Excel lesen | xlsx lesen | Excel schreiben | Excel bearbeiten | Zelle aendern | Zelle formatieren | Tabellenblatt auslesen | Sheet extrahieren | Excel-Bereich kopieren | Excel Formatierung (bold, Border, Farbe, Number-Format)  
+  → PFLICHT: Skill `$skill-excel-io` laden und befolgen. CLI-Tool `excel_cli.py` fuer `info`/`read`/`edit`/`write` auf `.xlsx` — token-schonend (Markdown/JSON/CSV auf stdout), Styling via Flags oder `--batch`.
 
 # Tool-Prioritaet
 
