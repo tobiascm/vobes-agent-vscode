@@ -470,6 +470,7 @@ RE_USERKEY = re.compile(r"@\[userkey:([^\]]+)\]")
 RE_PAGE_LINK = re.compile(r"\[\[([^\]]+)\]\]")
 RE_TIME = re.compile(r"\(bis (\d{4}-\d{2}-\d{2})\)")
 RE_MD_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+RE_MD_IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 RE_BOLD = re.compile(r"\*\*(.+?)\*\*")
 RE_ITALIC = re.compile(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)")
 
@@ -506,6 +507,12 @@ def _inline_to_xhtml(text: str) -> str:
     def _time_repl(m):
         return f'<time datetime="{m.group(1)}"></time>'
     result = RE_TIME.sub(_time_repl, result)
+
+    # Markdown images → ac:image with ri:attachment (basename only)
+    def _img_repl(m):
+        fname = m.group(2).rsplit("/", 1)[-1]
+        return f'<ac:image ac:width="800"><ri:attachment ri:filename="{_escape_html(fname)}" /></ac:image>'
+    result = RE_MD_IMAGE.sub(_img_repl, result)
 
     # Markdown links
     def _link_repl(m):

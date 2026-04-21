@@ -1,6 +1,6 @@
 ---
 name: skill-protokoll-confluence
-description: Protokollseiten fuer Regeltermine erstellen, ueberarbeiten und in Confluence speichern. Gilt fuer alle Termine mit Sammlerseite im Space VOBES oder EKEK1.
+description: Protokollseiten fuer Regeltermine erstellen, ueberarbeiten und in Confluence speichern. Gilt fuer alle Termine mit Sammlerseite im Space VOBES oder EKEK1. Kann Transkripte aus OneDrive Recordings (Teams-Aufzeichnungen) und Audioaufzeichnungen (manuell aufgenommen) automatisch laden, wenn der User sagt "Bitte Protokoll erstellen", "Mache das Protokoll vom letzten Termin", "Protokoll vom Meeting XY erstellen" oder "Protokoll aus Recording bauen".
 ---
 
 ## Zweck
@@ -256,3 +256,44 @@ Vor jedem Confluence-Write MUSS der Diff-Review-Workflow durchlaufen werden. Das
 - **Planung 2026**: Keine datumsbasierten Protokollseiten. Hier wird direkt auf bestehenden Seiten gearbeitet (Update-Workflow).
 - **Neuer Regeltermin ohne Eintrag**: Falls der User einen Termin nennt, der nicht in der Tabelle steht, nachfragen und ggf. die Sammlerseite und Namenskonvention klaeren bevor eine Seite erstellt wird.
 - **Mehrere Protokolle am selben Tag**: Falls bereits ein Protokoll mit identischem Datum existiert, ist das ein Hinweis, dass der Update-Workflow genutzt werden soll. Kein Duplikat erzeugen!
+
+## Workflow B: Protokoll aus Teams-Recording oder Audioaufzeichnung
+
+Trigger: User sagt z.B. *"Bitte Protokoll erstellen"*, *"Mache das Protokoll vom letzten Termin"*, *"Protokoll vom Meeting XY"* oder *"Protokoll aus Recording bauen"*.
+
+Quellen (Kaskade, beide werden gelesen und chronologisch zusammengefuehrt):
+1. OneDrive `Recordings/` — Teams-Aufzeichnungen, Dateiname `{Title}-YYYYMMDD_HHMMSS-Besprechungstranskript.mp4`. VTT via SharePoint REST `/media/transcripts`.
+2. OneDrive `Dokumente/Audioaufzeichnungen/` — manuell aufgenommene Audios, Dateiname `meeting_YYYYMMDD_HHMM-HHMM.md` (Start- und Endzeit). `.mp3` und Altformate werden ignoriert. Titel kommt aus Outlook-Kalender (Graph `calendarView`, exaktes Zeitfenster).
+3. **Screenshots** (automatisch): `fetch` sammelt Bilder aus `~/OneDrive - Volkswagen AG/Bilder/Screenshots/` deren Aufnahmezeit im Meeting-Fenster liegt (Recording: Start bis Ende des letzten VTT-Cues; Audio: Start bis Ende+1 Min). Dateien werden nach `userdata/sessions/{slug}/screenshots/` kopiert und in `meta.json["screenshots"]` mit `filename`, `takenAt`, `offsetSeconds`, `title` erfasst.
+
+### Ablauf
+
+1. `python .agents/skills/skill-protokoll-confluence/scripts/recordings.py list-recent --limit 5`
+   → Markdown-Tabelle mit Source, Name, Start/Ende, Item-ID, Regel-Match und Ziel-Confluence-Seite.
+2. Neuesten Eintrag dem User als Vorschlag formulieren:
+   > *"Meinst Du das Protokoll **{Name|Kalendertermin}** vom **{Datum} {Uhrzeit}**? Soll ich es in die Confluence-Seite **{Titel}** (parent `{parent_id}`, Space `{space}`) integrieren?"*
+   - Bei Audio-Fallback: Name kommt aus `calendarSubject` (Outlook), nicht aus dem Dateinamen.
+3. Bei **Bestaetigung**:
+   - a. `recordings.py fetch <item-id>` → Recording: `transcript.vtt`; Audio: `transcript.md`/`.txt`. Ablage in `userdata/sessions/{YYYYMMDD_HHMM}_{slug}/` + `meta.json`.
+   - b. `recordings.py suggest-page <item-id>` → JSON `{matched, title, parent_id, space, calendarSubject}`.
+   - c. Transkript lesen, Protokoll-Markdown bauen (Themen / Diskussion / Beschluesse / Massnahmen — identisch zu Workflow A, Wiki-Markup oder Storage-Format).
+     - Screenshots aus `meta.json["screenshots"]` thematisch einsortieren: pro Eintrag anhand `offsetSeconds` (Recording) bzw. `takenAt` (Audio) den passenden Agendapunkt finden und als `![{title}](screenshots/{filename})` einfuegen. `confluence_md_bridge.py` konvertiert diese Markdown-Images automatisch in `<ac:image ac:width="800"><ri:attachment ri:filename="..." /></ac:image>`.
+   - d. **Update** (bestehende Kindseite mit gleichem Titel vorhanden) → Skill `$skill-update-confluence-page` mit `confluence_md_bridge.py prepare/finalize`. **Vor** dem `update_page` die Screenshots mit `mcp_mcp-atlassian_confluence_upload_attachments` (`content_id=page_id`, `file_paths`=Komma-Liste der Absolutpfade aus `screenshots/`) hochladen — sonst rendern die `<ac:image>`-Tags als "broken attachment".
+   - d. **Create** (kein Treffer) → `mcp_mcp-atlassian_confluence_create_page` mit `parent_id` + `space_key` aus `suggest-page`. Direkt nach Create: `mcp_mcp-atlassian_confluence_upload_attachments` mit `content_id={page_id}` und allen Screenshot-Pfaden.
+4. Bei **kein Match** (weder Recording-Prefix noch Kalender-Subject trifft eine Regel):
+   - Protokoll-Markdown lokal in `userdata/sessions/{YYYYMMDD_HHMM}_{slug}/protokoll.md` speichern.
+   - Hinweis an User: *"Nicht in Confluence integriert, da kein bekannter Regeltermin. Lokal unter `userdata/sessions/…` archiviert."*
+5. Bei **mehreren Kandidaten** oder wenn User "letzter Termin" nicht = #1: Top-5 listen und auswaehlen lassen.
+
+### Voraussetzungen fuer Workflow B
+
+- Teams-Token im Cache (`userdata/tmp/.graph_token_cache_teams.json`) mit Scope `Calendars.Read` + `Files.ReadWrite.All`.
+- Refresh-Token im Teams-LocalStorage (Script refresht SharePoint-Token automatisch ueber `m365_mail_search_token`).
+- Confluence-MCP `mcp-atlassian` verfuegbar (nur wenn Push gewuenscht).
+
+## Hinweis
+
+Alternativ kann das Protokoll auch über den skill skill-m365-copilot-chat mit dem prompt in
+m365_copilot_protokoll_prompt.md
+erzeugt werden.
+Bitte im Prompt in <Termin> den Titel und Datum + Startzeit einsetzen und in <content> den aktuellen Inhalt der Seite als Markdown.

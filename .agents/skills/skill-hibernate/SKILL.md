@@ -20,6 +20,18 @@ Plant einen Windows Scheduled Task, der den Rechner zu einer bestimmten Uhrzeit 
 - **Trigger:** Einmalig (`-Once`) zur gewaehlten Uhrzeit
 - Falls die Uhrzeit heute schon vorbei ist, wird automatisch der naechste Tag genommen
 
+## ⚠️ Zeitzone beachten
+
+Das `<current_datetime>`-Tag liefert immer **UTC-Zeit**. Der Rechner laeuft aber in einer lokalen Zeitzone (z.B. CEST = UTC+2).
+
+**Pflicht vor dem Planen:** Immer zuerst die lokale Systemzeit per PowerShell abfragen:
+
+```powershell
+Get-Date
+```
+
+Die Ausgabe von `Get-Date` ist immer **Lokalzeit** — diese fuer `-Hour` und `-Minute` verwenden, nie den UTC-Timestamp aus `<current_datetime>`.
+
 ## CLI-Script (fuer Agent)
 
 Alle Aktionen laufen ueber ein einziges Script mit Parametern — **ein Einzeiler-Aufruf genuegt**:
