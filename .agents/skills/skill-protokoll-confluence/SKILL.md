@@ -262,9 +262,9 @@ Vor jedem Confluence-Write MUSS der Diff-Review-Workflow durchlaufen werden. Das
 Trigger: User sagt z.B. *"Bitte Protokoll erstellen"*, *"Mache das Protokoll vom letzten Termin"*, *"Protokoll vom Meeting XY"* oder *"Protokoll aus Recording bauen"*.
 
 Quellen (Kaskade, beide werden gelesen und chronologisch zusammengefuehrt):
-1. OneDrive `Recordings/` — Teams-Aufzeichnungen, Dateiname `{Title}-YYYYMMDD_HHMMSS-Besprechungstranskript.mp4`. VTT via SharePoint REST `/media/transcripts`.
-2. OneDrive `Dokumente/Audioaufzeichnungen/` — manuell aufgenommene Audios, Dateiname `meeting_YYYYMMDD_HHMM-HHMM.md` (Start- und Endzeit). `.mp3` und Altformate werden ignoriert. Titel kommt aus Outlook-Kalender (Graph `calendarView`, exaktes Zeitfenster).
-3. **Screenshots** (automatisch): `fetch` sammelt Bilder aus `~/OneDrive - Volkswagen AG/Bilder/Screenshots/` deren Aufnahmezeit im Meeting-Fenster liegt (Recording: Start bis Ende des letzten VTT-Cues; Audio: Start bis Ende+1 Min). Dateien werden nach `userdata/sessions/{slug}/screenshots/` kopiert und in `meta.json["screenshots"]` mit `filename`, `takenAt`, `offsetSeconds`, `title` erfasst.
+1. OneDrive `Recordings/` — Teams-Aufzeichnungen, Dateiname `{Title}-YYYYMMDD_HHMMSS-Besprechungstranskript.mp4`. **Graph-Token** fuer Listing, **SharePoint-Token** fuer VTT via `/media/transcripts`. (VTT wird nicht mit OneDrive synchronisiert.)
+2. OneDrive `Dokumente/Audioaufzeichnungen/` — manuell aufgenommene Audios, Dateiname `meeting_YYYYMMDD_HHMM-HHMM.md` (Start- und Endzeit). **Wird lokal gelesen** (OneDrive-Sync), kein Token fuer Listing und Fetch. `.mp3` und Altformate werden ignoriert. Titel kommt aus Outlook-Kalender (Graph `calendarView`, exaktes Zeitfenster — Token-pflichtig).
+3. **Screenshots** (automatisch): `fetch` sammelt Bilder aus `~/OneDrive - Volkswagen AG/Desktop/Screenshots/` (lokal) deren Aufnahmezeit im Meeting-Fenster liegt (Recording: Start bis Ende des letzten VTT-Cues; Audio: Start bis Ende+1 Min). Dateien werden nach `userdata/sessions/{slug}/screenshots/` kopiert und in `meta.json["screenshots"]` mit `filename`, `takenAt`, `offsetSeconds`, `title` erfasst.
 
 ### Ablauf
 
@@ -287,8 +287,9 @@ Quellen (Kaskade, beide werden gelesen und chronologisch zusammengefuehrt):
 
 ### Voraussetzungen fuer Workflow B
 
-- Teams-Token im Cache (`userdata/tmp/.graph_token_cache_teams.json`) mit Scope `Calendars.Read` + `Files.ReadWrite.All`.
-- Refresh-Token im Teams-LocalStorage (Script refresht SharePoint-Token automatisch ueber `m365_mail_search_token`).
+- **Audio + Screenshots**: OneDrive-Sync der Ordner `Dokumente/Audioaufzeichnungen/` und `Desktop/Screenshots/`. Kein Token noetig.
+- **Recordings**: Teams-Token im Cache (`userdata/tmp/.graph_token_cache_teams.json`) mit Scope `Calendars.Read` + `Files.ReadWrite.All`. Refresh-Token im Teams-LocalStorage (Script refresht SharePoint-Token automatisch ueber `m365_mail_search_token`).
+- **Kalender-Subject-Lookup fuer Audio**: Graph-Token (Scope `Calendars.Read`). Faellt ohne Token auf Filename-Stem zurueck.
 - Confluence-MCP `mcp-atlassian` verfuegbar (nur wenn Push gewuenscht).
 
 ## Hinweis

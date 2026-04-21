@@ -171,8 +171,13 @@ DOM_STATE_JS = r"""
       testid: btn.getAttribute('data-testid') || '',
     }))
     .filter((btn) => /send|senden/i.test([btn.aria, btn.text, btn.testid].join(' ')));
-  const activeThinking = !!document.querySelector('button.__composer-pill-remove[aria-label*="Nachdenken"]')
-    || buttons.some((btn) => (btn.innerText || '').includes('Entfernen') && (btn.innerText || '').includes('Nachdenken'));
+  const thinkingRe = /nachdenken|l(ä|ae)nger|longer|thinking|extended/i;
+  const pills = [...document.querySelectorAll('button.__composer-pill, button[class*="composer-pill"]')];
+  const activeThinking = pills.some((pill) => thinkingRe.test((pill.getAttribute('aria-label') || '') + ' ' + (pill.innerText || '')))
+    || !!document.querySelector('button.__composer-pill-remove[aria-label*="Nachdenken" i]')
+    || !!document.querySelector('button.__composer-pill-remove[aria-label*="länger" i]')
+    || !!document.querySelector('button.__composer-pill-remove[aria-label*="longer" i]')
+    || buttons.some((btn) => /entfernen|remove/i.test(btn.innerText || '') && thinkingRe.test(btn.innerText || ''));
   const stopHints = [
     'Generieren beenden',
     'Stop generating',
@@ -1335,10 +1340,11 @@ def _set_thinking_mode(client: McpStdioClient) -> bool:
         r"""
 {
   const trySelectors = async () => {
+    const thinkingRe = /L(ä|ae)ngeres Nachdenken|L(ä|ae)nger|Think longer|Longer thinking|Extended thinking/i;
     const buttons = [
-      page.locator('button.__composer-pill', { hasText: 'Längeres Nachdenken' }),
-      page.getByRole('button', { name: /Längeres Nachdenken/i }),
-      page.locator('button').filter({ hasText: 'Längeres Nachdenken' }),
+      page.locator('button.__composer-pill').filter({ hasText: thinkingRe }),
+      page.getByRole('button', { name: thinkingRe }),
+      page.locator('button').filter({ hasText: thinkingRe }),
     ];
     for (const button of buttons) {
       if (await button.count() > 0) {

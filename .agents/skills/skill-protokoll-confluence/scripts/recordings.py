@@ -29,7 +29,7 @@ SP_HOST = "volkswagengroup-my.sharepoint.com"
 GRAPH_TOKEN_CACHE = REPO_ROOT / "userdata" / "tmp" / ".graph_token_cache_teams.json"
 SESSIONS_DIR = REPO_ROOT / "userdata" / "sessions"
 RECORDINGS_PATH = "Recordings"
-AUDIO_PATH = "Dokumente/Audioaufzeichnungen"
+AUDIO_DIR = Path.home() / "OneDrive - Volkswagen AG" / "Dokumente" / "Audioaufzeichnungen"
 
 RULES = [
     ("KC Vibe Coding",                      "6932124640", "EKEK1", "KC Vibe Coding - {date}"),
@@ -115,15 +115,15 @@ def _parse_recording(raw: dict) -> Item | None:
     )
 
 
-def _parse_audio(raw: dict) -> Item | None:
-    m = AUDIO_RE.match(raw["name"])
+def _parse_audio_local(p: Path) -> Item | None:
+    m = AUDIO_RE.match(p.name)
     if not m:
         return None
     return Item(
-        source="audio", item_id=raw["id"], name=raw["name"],
+        source="audio", item_id=p.name, name=p.name,
         started_at=_parse_dt(m["date"], m["start"]),
         ended_at=_parse_dt(m["date"], m["end"]),
-        web_url=raw.get("webUrl", ""), ext="md",
+        web_url=p.as_uri(), ext="md",
     )
 
 
@@ -138,23 +138,33 @@ def _list_folder(hdr: dict[str, str], path: str) -> list[dict]:
     return r.json().get("value", [])
 
 
-def _collect(hdr: dict[str, str]) -> list[Item]:
-    items: list[Item] = []
-    for raw in _list_folder(hdr, RECORDINGS_PATH):
-        parsed = _parse_recording(raw)
-        if parsed:
-            items.append(parsed)
-    for raw in _list_folder(hdr, AUDIO_PATH):
-        parsed = _parse_audio(raw)
-        if parsed:
-            items.append(parsed)
+def _list_audio_local() -> list[Item]:
+    if not AUDIO_DIR.is_dir():
+        return []
+    return [it for p in AUDIO_DIR.iterdir() if (it := _parse_audio_local(p))]
+
+
+def _collect(hdr: dict[str, str] | None) -> list[Item]:
+    items: list[Item] = _list_audio_local()
+    if hdr is not None:
+        try:
+            for raw in _list_folder(hdr, RECORDINGS_PATH):
+                if (parsed := _parse_recording(raw)):
+                    items.append(parsed)
+        except Exception as exc:
+            print(f"# warn: Recordings-Listing fehlgeschlagen ({exc}) — nur lokale Audios.", file=sys.stderr)
     items.sort(key=lambda x: x.started_at or datetime.min, reverse=True)
     return items
 
 
-def _find(hdr: dict[str, str], item_id: str) -> Item:
-    for it in _collect(hdr):
-        if it.item_id == item_id:
+def _find(item_id: str) -> Item:
+    if AUDIO_RE.match(item_id):
+        p = AUDIO_DIR / item_id
+        if p.is_file() and (it := _parse_audio_local(p)):
+            return it
+    hdr = {"Authorization": f"Bearer {graph_token()}"}
+    for raw in _list_folder(hdr, RECORDINGS_PATH):
+        if (it := _parse_recording(raw)) and it.item_id == item_id:
             return it
     raise ValueError(f"Item {item_id} nicht gefunden in Recordings/Audioaufzeichnungen.")
 
@@ -238,16 +248,18 @@ def _download_recording(it: Item, hdr: dict[str, str], out: Path) -> Path:
     return dst
 
 
-def _download_audio(it: Item, hdr: dict[str, str], out: Path) -> Path:
-    r = requests.get(f"{GRAPH}/me/drive/items/{it.item_id}/content", headers=hdr, timeout=60)
-    r.raise_for_status()
+def _download_audio(it: Item, out: Path) -> Path:
     dst = out / f"transcript.{it.ext}"
-    dst.write_bytes(r.content)
+    shutil.copy2(AUDIO_DIR / it.name, dst)
     return dst
 
 
 def cmd_list_recent(limit: int) -> int:
-    hdr = {"Authorization": f"Bearer {graph_token()}"}
+    try:
+        hdr: dict[str, str] | None = {"Authorization": f"Bearer {graph_token()}"}
+    except Exception as exc:
+        print(f"# warn: kein Graph-Token ({exc}) — nur lokale Audios.", file=sys.stderr)
+        hdr = None
     items = _collect(hdr)[:limit]
     if not items:
         print("Keine Eintraege gefunden.")
@@ -268,13 +280,21 @@ def cmd_list_recent(limit: int) -> int:
 
 
 def cmd_fetch(item_id: str) -> int:
-    hdr = {"Authorization": f"Bearer {graph_token()}"}
-    it = _find(hdr, item_id)
-    subject = _lookup_subject(hdr, it) if it.source == "audio" else None
+    it = _find(item_id)
+    subject = None
+    if it.source == "audio":
+        try:
+            subject = _lookup_subject({"Authorization": f"Bearer {graph_token()}"}, it)
+        except Exception:
+            subject = None
     hint = subject or (it.rule[0] if it.rule else Path(it.name).stem)
     out = SESSIONS_DIR / f"{it.slug_date}_{_slug(hint)}"
     out.mkdir(parents=True, exist_ok=True)
-    transcript = _download_recording(it, hdr, out) if it.source == "recording" else _download_audio(it, hdr, out)
+    if it.source == "recording":
+        hdr = {"Authorization": f"Bearer {graph_token()}"}
+        transcript = _download_recording(it, hdr, out)
+    else:
+        transcript = _download_audio(it, out)
     if it.source == "audio" and subject:
         it.rule = _match_rule(subject)
     start = it.started_at
@@ -316,9 +336,13 @@ def cmd_fetch(item_id: str) -> int:
 
 
 def cmd_suggest_page(item_id: str) -> int:
-    hdr = {"Authorization": f"Bearer {graph_token()}"}
-    it = _find(hdr, item_id)
-    subject = _lookup_subject(hdr, it) if it.source == "audio" else None
+    it = _find(item_id)
+    subject = None
+    if it.source == "audio":
+        try:
+            subject = _lookup_subject({"Authorization": f"Bearer {graph_token()}"}, it)
+        except Exception:
+            subject = None
     if it.source == "audio" and subject and not it.rule:
         it.rule = _match_rule(subject)
     date_str = it.started_at.strftime("%Y-%m-%d") if it.started_at else ""
