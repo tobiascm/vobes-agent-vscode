@@ -42,6 +42,7 @@ def _write_rules(path: Path, *, cap: int = 0) -> None:
                 "stage2_min_new_order_amount;10000",
                 "stage2_repeat_quarter_penalty;200",
                 "stage2_stop_penalty;500",
+                "stage2_large_order_penalty;0",
                 "stage2_existing_small_amount_penalty;10000",
                 "stage2_soft_target_penalty;10",
                 f"stage2_active_ea_cap_per_quarter;{cap}",
@@ -60,18 +61,18 @@ def _write_rules(path: Path, *, cap: int = 0) -> None:
 def _seed_basic_case(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
-        INSERT INTO plan_company_targets (year, company, gewerk, quarter, target_value, annual_target, step_value)
+        INSERT INTO plan_company_targets (year, company, quarter, target_value, annual_target, step_value)
         VALUES
-            (2026, 'Firma A', 'GW', 'Q1', 100, 200, 50),
-            (2026, 'Firma A', 'GW', 'Q2', 100, 200, 50)
+            (2026, 'Firma A', 'Q1', 100, 200, 50),
+            (2026, 'Firma A', 'Q2', 100, 200, 50)
         """
     )
     conn.execute(
         """
-        INSERT INTO plan_stage1_results (run_id, year, gewerk, ea_number, target_value, reference_score, is_hard, note)
+        INSERT INTO plan_stage1_results (run_id, year, ea_number, target_value, reference_score, is_hard, note)
         VALUES
-            ('stage1', 2026, 'GW', 'EA1', 100, 1.0, 0, NULL),
-            ('stage1', 2026, 'GW', 'EA2', 100, 1.0, 0, NULL)
+            ('stage1', 2026, 'EA1', 100, 1.0, 0, NULL),
+            ('stage1', 2026, 'EA2', 100, 1.0, 0, NULL)
         """
     )
     conn.commit()
@@ -93,6 +94,7 @@ def test_execute_planning_runs_solver_and_materializes_btl_opt(tmp_path, monkeyp
 
     monkeypatch.setattr(core, "DB_PATH", db_path)
     monkeypatch.setattr(core, "DEFAULT_RULES_CSV", rules_path)
+    monkeypatch.setattr(core, "_load_target_csv_data", lambda: ({}, {}, None))
 
     with core.connect() as conn:
         core.init_planning_schema(conn)
@@ -121,7 +123,46 @@ def test_execute_planning_runs_solver_and_materializes_btl_opt(tmp_path, monkeyp
     assert {row["target_date"] for row in rows} == {"2026-03-31", "2026-06-30"}
 
 
-def test_ensure_special_company_targets_adds_voitas_rulechecker_zero_scope(tmp_path, monkeypatch):
+def test_bootstrap_existing_orders_populates_live_btl_rows(tmp_path, monkeypatch):
+    db_path = tmp_path / "budget.db"
+    monkeypatch.setattr(core, "DB_PATH", db_path)
+
+    with core.connect() as conn:
+        core.init_planning_schema(conn)
+        conn.execute(f"CREATE TABLE btl ({core.BTL_COLUMNS_SQL})")
+        conn.execute(
+            "INSERT INTO plan_company_targets (year, company, quarter, target_value, annual_target, step_value) "
+            "VALUES (2026, 'Firma A', 'Q2', 100, 100, 1)"
+        )
+        conn.execute(
+            """
+            INSERT INTO btl (
+                concept, ea, title, status, planned_value, org_unit, company, creator,
+                bm_number, az_number, projektfamilie, dev_order, bm_text, last_updated,
+                category, cost_type, quantity, unit, supplier_number,
+                first_signature, second_signature, target_date, invoices
+            )
+            VALUES (
+                'C1','EA1','EA1','07_In Planen-BM: Bestellt',50,'EKEK/1','Firma A','T',
+                NULL,NULL,NULL,'EA1','BM','2026-01-01','TEST',NULL,NULL,NULL,NULL,
+                NULL,NULL,'2026-06-30',NULL
+            )
+            """
+        )
+        conn.commit()
+        core._bootstrap_existing_orders_from_btl(conn, 2026)
+        rows = conn.execute(
+            "SELECT company, quarter, ea_number, amount, note FROM plan_existing_orders"
+        ).fetchall()
+
+    assert len(rows) == 1
+    assert rows[0]["company"] == "Firma A"
+    assert rows[0]["quarter"] == "Q2"
+    assert rows[0]["amount"] == 50
+    assert rows[0]["note"] == "auto:07_In Planen-BM: Bestellt"
+
+
+def test_ensure_special_company_targets_adds_voitas_zero_scope(tmp_path, monkeypatch):
     db_path = tmp_path / "budget.db"
     monkeypatch.setattr(core, "DB_PATH", db_path)
 
@@ -130,8 +171,8 @@ def test_ensure_special_company_targets_adds_voitas_rulechecker_zero_scope(tmp_p
         conn.execute(f"CREATE TABLE btl ({core.BTL_COLUMNS_SQL})")
         conn.executemany(
             """
-            INSERT INTO plan_company_targets (year, company, gewerk, quarter, target_value, annual_target, step_value)
-            VALUES (2026, '4SOFT GMBH MUENCHEN', 'RuleChecker (4soft, ex Voitas)', ?, 60000, 120000, 10000)
+            INSERT INTO plan_company_targets (year, company, quarter, target_value, annual_target, step_value)
+            VALUES (2026, '4SOFT GMBH MUENCHEN', ?, 60000, 120000, 10000)
             """,
             [("Q3",), ("Q4",)],
         )
@@ -154,14 +195,12 @@ def test_ensure_special_company_targets_adds_voitas_rulechecker_zero_scope(tmp_p
         core._ensure_special_company_targets(conn, 2026)
         rows = conn.execute(
             """
-            SELECT company, gewerk, quarter, target_value, annual_target, step_value
+            SELECT company, quarter, target_value, annual_target, step_value
             FROM plan_company_targets
-            WHERE year = 2026
-              AND company = ?
-              AND gewerk = ?
+            WHERE year = 2026 AND company = ?
             ORDER BY quarter
             """,
-            (core.VOITAS_RULECHECKER_COMPANY, core.VOITAS_RULECHECKER_GEWERK),
+            (core.VOITAS_RULECHECKER_COMPANY,),
         ).fetchall()
 
     assert [(row["quarter"], row["target_value"], row["annual_target"], row["step_value"]) for row in rows] == [
@@ -199,16 +238,16 @@ def test_materialize_btl_opt_preserves_live_statuses_in_priority(tmp_path, monke
         conn.execute(
             """
             INSERT INTO plan_stage2_results
-                (run_id, year, company, gewerk, quarter, ea_number, amount, source, is_locked, note)
+                (run_id, year, company, quarter, ea_number, amount, source, is_locked, note)
             VALUES
-                ('run1', 2026, 'Firma A', 'GW', 'Q1', 'EA1', 150, 'highs', 0, NULL)
+                ('run1', 2026, 'Firma A', 'Q1', 'EA1', 150, 'highs', 0, NULL)
             """
         )
         conn.executemany(
             """
             INSERT INTO plan_existing_orders
-                (year, company, gewerk, quarter, ea_number, amount, is_fixed, can_stop, note)
-            VALUES (2026, 'Firma A', 'GW', 'Q1', 'EA1', ?, 0, ?, ?)
+                (year, company, quarter, ea_number, amount, is_fixed, can_stop, note)
+            VALUES (2026, 'Firma A', 'Q1', 'EA1', ?, 0, ?, ?)
             """,
             [
                 (50, 0, "auto:07_In Planen-BM: Bestellt"),
@@ -225,7 +264,7 @@ def test_materialize_btl_opt_preserves_live_statuses_in_priority(tmp_path, monke
         ).fetchall()
 
     assert [(row["status"], row["planned_value"]) for row in rows] == [
-        ("01_In Erstellung", 50),
+        (core.CURRENT_QUARTER_TODO_STATUS, 50),
         ("06_In Bearbeitung BM-Team", 50),
         ("07_In Planen-BM: Bestellt", 50),
     ]
@@ -241,10 +280,10 @@ def test_materialize_btl_opt_suppresses_passthrough_for_explicit_zero_stage2_row
         conn.execute(
             """
             INSERT INTO plan_stage2_results
-                (run_id, year, company, gewerk, quarter, ea_number, amount, source, is_locked, note)
+                (run_id, year, company, quarter, ea_number, amount, source, is_locked, note)
             VALUES
-                ('run1', 2026, 'Firma A', 'GW', 'Q1', 'EA_DROP', 0, 'highs', 0, NULL),
-                ('run1', 2026, 'Firma A', 'GW', 'Q1', 'EA_KEEP', 100, 'highs', 0, NULL)
+                ('run1', 2026, 'Firma A', 'Q1', 'EA_DROP', 0, 'highs', 0, NULL),
+                ('run1', 2026, 'Firma A', 'Q1', 'EA_KEEP', 100, 'highs', 0, NULL)
             """
         )
         conn.execute(
@@ -290,9 +329,9 @@ def test_materialize_btl_opt_marks_new_current_quarter_rows_as_early_durchlauf(t
         conn.execute(
             """
             INSERT INTO plan_stage2_results
-                (run_id, year, company, gewerk, quarter, ea_number, amount, source, is_locked, note)
+                (run_id, year, company, quarter, ea_number, amount, source, is_locked, note)
             VALUES
-                ('run1', 2026, 'Firma A', 'GW', 'Q2', 'EA_Q2', 100, 'highs', 0, NULL)
+                ('run1', 2026, 'Firma A', 'Q2', 'EA_Q2', 100, 'highs', 0, NULL)
             """
         )
         conn.commit()
@@ -326,16 +365,16 @@ def test_materialize_btl_opt_merges_existing_and_new_concept_amounts_with_same_s
         conn.execute(
             """
             INSERT INTO plan_stage2_results
-                (run_id, year, company, gewerk, quarter, ea_number, amount, source, is_locked, note)
+                (run_id, year, company, quarter, ea_number, amount, source, is_locked, note)
             VALUES
-                ('run1', 2026, 'Firma A', 'GW', 'Q4', 'EA1', 10000, 'highs', 0, NULL)
+                ('run1', 2026, 'Firma A', 'Q4', 'EA1', 10000, 'highs', 0, NULL)
             """
         )
         conn.execute(
             """
             INSERT INTO plan_existing_orders
-                (year, company, gewerk, quarter, ea_number, amount, is_fixed, can_stop, note)
-            VALUES (2026, 'Firma A', 'GW', 'Q4', 'EA1', 1, 0, 1, 'auto:01_In Erstellung')
+                (year, company, quarter, ea_number, amount, is_fixed, can_stop, note)
+            VALUES (2026, 'Firma A', 'Q4', 'EA1', 1, 0, 1, 'auto:01_In Erstellung')
             """
         )
         conn.execute(
@@ -364,3 +403,52 @@ def test_materialize_btl_opt_merges_existing_and_new_concept_amounts_with_same_s
     assert [(row["status"], row["planned_value"]) for row in rows] == [
         ("01_In Erstellung", 10000)
     ]
+
+
+def test_materialize_btl_opt_past_quarter_rows_get_durchlauf_status(tmp_path, monkeypatch):
+    """Solver rows for past quarters (Q1 when current=Q2) must get Durchlauf status."""
+    db_path = tmp_path / "budget.db"
+    monkeypatch.setattr(core, "DB_PATH", db_path)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 4, 18, 12, 0, 0)
+
+    monkeypatch.setattr(core, "datetime", FixedDateTime)
+
+    with core.connect() as conn:
+        core.init_planning_schema(conn)
+        conn.execute(f"CREATE TABLE btl ({core.BTL_COLUMNS_SQL})")
+        conn.execute(
+            """
+            INSERT INTO plan_stage2_results
+                (run_id, year, company, quarter, ea_number, amount, source, is_locked, note)
+            VALUES
+                ('run1', 2026, 'Firma A', 'Q1', 'EA_Q1', 200, 'highs', 0, NULL)
+            """
+        )
+        conn.commit()
+        core._materialize_btl_opt(conn, 2026)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT ea, planned_value, status FROM btl_opt").fetchall()
+
+    assert [(row["ea"], row["planned_value"], row["status"]) for row in rows] == [
+        ("EA_Q1", 200, core.CURRENT_QUARTER_TODO_STATUS)
+    ]
+
+
+def test_compute_company_annual_targets_uses_overrides():
+    """EDAG and Bertrandt targets come directly from company_overrides."""
+    target = {
+        "Vorentwicklung (4soft)": 370,
+    }
+    overrides = {
+        "BERTRANDT": {"target_te": 905},
+        "EDAG": {"target_te": 1088},
+    }
+    result = core.compute_company_annual_targets(target, overrides)
+    assert result[core.EDAG_COMPANY] == 1_088_000
+    assert result[core.BERTRANDT_COMPANY] == 905_000

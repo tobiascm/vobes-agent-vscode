@@ -18,6 +18,7 @@
 - SYS-Flow: entfällt ab 2026 (war PEC)
 - Voitas: Ende 2025 raus → RuleChecker geht ab Q3/2026 an 4soft (Soll Q1-2 = 0)
 - Restpositionen von VOITAS in BPLUS bleiben als Rohdaten bestehen, werden für Soll/Ist/Maßnahmen in der Firmenübersicht aber **4soft** zugeschlagen.
+- EA 33517 (BIB+China Audi): **EDAG prio 1**, andere Firmen/Dienstleister dürfen sekundär buchen (z.B. Positionen die bei anderen EAs abgelehnt werden). EA-Target bleibt unverändert.
 
 ### Referenzwerte
 - 2025-Werte: aus Vorjahresplanung (fest, siehe `userdata/budget/vorgaben/target.csv`)

@@ -236,11 +236,11 @@ def test_write_xlsx_report_marks_btl_opt_notice_red_and_bold(tmp_path):
     assert overview["A2"].font.color.rgb == "FFC00000"
 
 
-def test_reporting_company_maps_voitas_rulechecker_to_4soft():
+def test_reporting_company_maps_voitas_to_4soft():
     mod = load_module()
 
-    assert mod._reporting_company("RuleChecker (4soft, ex Voitas)", "VOITAS ENGINEERING GMBH") == "4SOFT GMBH MUENCHEN"
-    assert mod._reporting_company("Vorentwicklung (4soft)", "4SOFT GMBH MUENCHEN") == "4SOFT GMBH MUENCHEN"
+    assert mod._reporting_company("VOITAS ENGINEERING GMBH GEISENFELD") == "4SOFT GMBH MUENCHEN"
+    assert mod._reporting_company("4SOFT GMBH MUENCHEN") == "4SOFT GMBH MUENCHEN"
 
 
 def test_firm_period_value_eur_uses_global_ordered_and_future_quarter_concept_only():
@@ -269,7 +269,6 @@ def test_load_reporting_company_targets_prefers_plan_company_targets(tmp_path, m
             CREATE TABLE plan_company_targets (
                 year INTEGER NOT NULL,
                 company TEXT NOT NULL,
-                gewerk TEXT NOT NULL DEFAULT '',
                 quarter TEXT NOT NULL,
                 target_value INTEGER NOT NULL,
                 annual_target INTEGER,
@@ -281,16 +280,16 @@ def test_load_reporting_company_targets_prefers_plan_company_targets(tmp_path, m
         conn.executemany(
             """
             INSERT INTO plan_company_targets
-                (year, company, gewerk, quarter, target_value, annual_target, step_value)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (year, company, quarter, target_value, annual_target, step_value)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             [
-                (2026, "4SOFT GMBH MUENCHEN", "Vorentwicklung (4soft)", "Q1", 100_000, 400_000, 100_000),
-                (2026, "4SOFT GMBH MUENCHEN", "Vorentwicklung (4soft)", "Q2", 120_000, 400_000, 100_000),
-                (2026, "4SOFT GMBH MUENCHEN", "Vorentwicklung (4soft)", "Q3", 80_000, 400_000, 100_000),
-                (2026, "4SOFT GMBH MUENCHEN", "Vorentwicklung (4soft)", "Q4", 100_000, 400_000, 100_000),
-                (2026, "EDAG ENGINEERING GMBH WOLFSBURG", "Systemschaltpläne und Bibl. (EDAG, Bertrandt)", "Q1", 200_000, 1_088_000, 100_000),
-                (2026, "EDAG ENGINEERING GMBH WOLFSBURG", "Systemschaltpläne und Bibl. (EDAG, Bertrandt)", "Q2", 300_000, 1_088_000, 100_000),
+                (2026, "4SOFT GMBH MUENCHEN", "Q1", 100_000, 400_000, 100_000),
+                (2026, "4SOFT GMBH MUENCHEN", "Q2", 120_000, 400_000, 100_000),
+                (2026, "4SOFT GMBH MUENCHEN", "Q3", 80_000, 400_000, 100_000),
+                (2026, "4SOFT GMBH MUENCHEN", "Q4", 100_000, 400_000, 100_000),
+                (2026, "EDAG ENGINEERING GMBH WOLFSBURG", "Q1", 200_000, 1_088_000, 100_000),
+                (2026, "EDAG ENGINEERING GMBH WOLFSBURG", "Q2", 300_000, 1_088_000, 100_000),
             ],
         )
         conn.commit()

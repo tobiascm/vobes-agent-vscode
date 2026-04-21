@@ -41,97 +41,107 @@ PLANNING_SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts", "budget")
 if PLANNING_SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, PLANNING_SCRIPTS_DIR)
 
+COMPANY_ALIAS_FALLBACKS = {
+    "4SOFT": "4SOFT GMBH MUENCHEN",
+    "THIESEN": "THIESEN HARDWARE SOFTW. GMBH WARTENBERG",
+    "FES": "FES GMBH ZWICKAU/00",
+    "SUMITOMO": "SUMITOMO ELECTRIC BORDNETZE SE WOLFSBURG",
+    "BERTRANDT": "BERTRANDT INGENIEURBUERO GMBH TAPPENBECK",
+    "EDAG": "EDAG ENGINEERING GMBH WOLFSBURG",
+    "VOLKSWAGEN": "VOLKSWAGEN GROUP SERVICES GMBH WOLFSBURG",
+}
+
 try:
     from beauftragungsplanung_core import (  # noqa: E402
         CURRENT_QUARTER_TODO_STATUS,
-        COMPANY_ALIAS_FALLBACKS,
-        _detect_special_cadence,
-        _extract_allowed_company_tokens,
-        _extract_priority_tokens,
-        _quarter_for_date,
-        _resolve_company_tokens,
+        COMPANY_AREA_MAP,
+        SYSTEMS_AREA,
+        EDAG_COMPANY,
+        BERTRANDT_COMPANY,
+        status_label_for_raw_status as _core_status_label,
     )
 except ImportError:  # pragma: no cover - fallback for missing planning core in local workspace
     CURRENT_QUARTER_TODO_STATUS = "02_Freigabe Kostenstelle"
-    COMPANY_ALIAS_FALLBACKS = {
-        "4SOFT": "4SOFT GMBH MUENCHEN",
-        "THIESEN": "THIESEN HARDWARE SOFTW. GMBH WARTENBERG",
-        "FES": "FES GMBH ZWICKAU/00",
-        "SUMITOMO": "SUMITOMO ELECTRIC BORDNETZE SE WOLFSBURG",
-        "BERTRANDT": "BERTRANDT INGENIEURBUERO GMBH TAPPENBECK",
-        "EDAG": "EDAG ENGINEERING GMBH WOLFSBURG",
-        "VOLKSWAGEN": "VOLKSWAGEN GROUP SERVICES GMBH WOLFSBURG",
-    }
+    COMPANY_AREA_MAP: dict[str, list[str]] = {}
+    SYSTEMS_AREA = "Systemschaltpläne und Bibl. (EDAG, Bertrandt)"
+    EDAG_COMPANY = "EDAG ENGINEERING GMBH WOLFSBURG"
+    BERTRANDT_COMPANY = "BERTRANDT INGENIEURBUERO GMBH TAPPENBECK"
+    _core_status_label = None  # type: ignore[assignment]
 
-    def _detect_special_cadence(display_name: str, remark: str, notes: str) -> str:
-        blob = " ".join(part for part in [display_name, remark, notes] if part).lower()
-        if "nur el" in blob or "keine fl" in blob:
-            return "fl_forbidden"
-        if (
-            (re.search(r"\b1\.?\s*hj\b", blob) or "erstes halbjahr" in blob)
-            and ("beauftragt" in blob or "freigegeben" in blob or "noch kein budget" in blob)
-        ):
-            return "first_half_exact"
-        if "pro halbjahr" in blob:
-            return "semiannual_tranche_exact"
-        if "pro quartal" in blob:
-            return "quarterly_tranche_exact"
-        if "quartalsweise" in blob:
-            return "quarterly_split_annual"
-        return "annual_exact"
 
-    def _extract_allowed_company_tokens(notes: str) -> list[str]:
-        def _clean(value: str) -> str:
-            return re.sub(r"\s+in genau dieser priorität\.?$", "", value.strip(), flags=re.IGNORECASE)
-        match = re.search(r"nur für\s+([^\n.!]+)", notes, re.IGNORECASE)
-        if match:
-            return [_clean(token) for token in re.split(r"[,/]| und ", match.group(1)) if _clean(token)]
-        match = re.search(r"folgende firmen .*?buchen:\s*([^\n.!]+)", notes, re.IGNORECASE)
-        if match:
-            return [_clean(token) for token in re.split(r",| und ", match.group(1)) if _clean(token)]
+def _detect_special_cadence(display_name: str, remark: str, notes: str) -> str:
+    blob = " ".join(part for part in [display_name, remark, notes] if part).lower()
+    if "nur el" in blob or "keine fl" in blob:
+        return "fl_forbidden"
+    if (
+        (re.search(r"\b1\.?\s*hj\b", blob) or "erstes halbjahr" in blob)
+        and ("beauftragt" in blob or "freigegeben" in blob or "noch kein budget" in blob)
+    ):
+        return "first_half_exact"
+    if "pro halbjahr" in blob:
+        return "semiannual_tranche_exact"
+    if "pro quartal" in blob:
+        return "quarterly_tranche_exact"
+    if "quartalsweise" in blob:
+        return "quarterly_split_annual"
+    return "annual_exact"
+
+
+def _extract_allowed_company_tokens(notes: str) -> list[str]:
+    def _clean(value: str) -> str:
+        return re.sub(r"\s+in genau dieser priorität\.?$", "", value.strip(), flags=re.IGNORECASE)
+    match = re.search(r"nur für\s+([^\n.!]+)", notes, re.IGNORECASE)
+    if match:
+        return [_clean(token) for token in re.split(r"[,/]| und ", match.group(1)) if _clean(token)]
+    match = re.search(r"folgende firmen .*?buchen:\s*([^\n.!]+)", notes, re.IGNORECASE)
+    if match:
+        return [_clean(token) for token in re.split(r",| und ", match.group(1)) if _clean(token)]
+    return []
+
+
+def _extract_priority_tokens(notes: str) -> list[str]:
+    match = re.search(r"folgende firmen .*?buchen:\s*([^\n.!]+)", notes, re.IGNORECASE)
+    if not match:
         return []
+    return [re.sub(r"\s+in genau dieser priorität\.?$", "", token.strip(), flags=re.IGNORECASE) for token in re.split(r",| und ", match.group(1)) if re.sub(r"\s+in genau dieser priorität\.?$", "", token.strip(), flags=re.IGNORECASE)]
 
-    def _extract_priority_tokens(notes: str) -> list[str]:
-        match = re.search(r"folgende firmen .*?buchen:\s*([^\n.!]+)", notes, re.IGNORECASE)
-        if not match:
-            return []
-        return [re.sub(r"\s+in genau dieser priorität\.?$", "", token.strip(), flags=re.IGNORECASE) for token in re.split(r",| und ", match.group(1)) if re.sub(r"\s+in genau dieser priorität\.?$", "", token.strip(), flags=re.IGNORECASE)]
 
-    def _resolve_company_tokens(tokens: list[str], known_companies: list[str]) -> tuple[list[str], list[str]]:
-        resolved: list[str] = []
-        unresolved: list[str] = []
-        for token in tokens:
-            upper = token.upper()
-            chosen = None
-            if upper in COMPANY_ALIAS_FALLBACKS:
-                fallback = COMPANY_ALIAS_FALLBACKS[upper]
-                if fallback in known_companies:
-                    chosen = fallback
-            if chosen is None:
-                for company in known_companies:
-                    if upper in company.upper():
-                        chosen = company
-                        break
-            if chosen is None:
-                unresolved.append(token)
-                continue
-            if chosen not in resolved:
-                resolved.append(chosen)
-        return resolved, unresolved
+def _resolve_company_tokens(tokens: list[str], known_companies: list[str]) -> tuple[list[str], list[str]]:
+    resolved: list[str] = []
+    unresolved: list[str] = []
+    for token in tokens:
+        upper = token.upper()
+        chosen = None
+        if upper in COMPANY_ALIAS_FALLBACKS:
+            fallback = COMPANY_ALIAS_FALLBACKS[upper]
+            if fallback in known_companies:
+                chosen = fallback
+        if chosen is None:
+            for company in known_companies:
+                if upper in company.upper():
+                    chosen = company
+                    break
+        if chosen is None:
+            unresolved.append(token)
+            continue
+        if chosen not in resolved:
+            resolved.append(chosen)
+    return resolved, unresolved
 
-    def _quarter_for_date(target_date: str | None, *, title: str = "", bm_text: str = "") -> str | None:
-        text = str(target_date or "").strip()
-        match = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
-        if not match:
-            return None
-        month = int(match.group(2))
-        if month <= 3:
-            return "Q1"
-        if month <= 6:
-            return "Q2"
-        if month <= 9:
-            return "Q3"
-        return "Q4"
+
+def _quarter_for_date(target_date: str | None, *, title: str = "", bm_text: str = "") -> str | None:
+    text = str(target_date or "").strip()
+    match = re.search(r"(\d{4})-(\d{2})-(\d{2})", text)
+    if not match:
+        return None
+    month = int(match.group(2))
+    if month <= 3:
+        return "Q1"
+    if month <= 6:
+        return "Q2"
+    if month <= 9:
+        return "Q3"
+    return "Q4"
 
 PDF_CSS = """
 body {
@@ -492,7 +502,7 @@ def _io_text(value: bool | None) -> str:
     return "IO" if value else "nIO"
 
 
-def _diff_band_status(actual: float, target: float | None, *, warn_ratio: float = 0.10, ok_ratio: float = 0.01) -> str:
+def _diff_band_status(actual: float, target: float | None, *, warn_ratio: float = 0.10, ok_ratio: float = 0.025) -> str:
     if target is None:
         return "-"
     if abs(target) <= 0.1:
@@ -663,7 +673,9 @@ def build_special_rule_section(
         title = row.get("title", "")
         bm_text = row.get("bm_text", "")
         status_label = status_map.get(row.get("status", ""), "")
-        reporting_company = _reporting_company(classify_bm(company, title, bm_text), company)
+        if not status_label and _core_status_label is not None:
+            status_label = _core_status_label(row.get("status", ""))
+        reporting_company = _reporting_company(company)
         ea_budget_rows[ea_key].append(
             {
                 "planned_value": pv,
@@ -1388,9 +1400,8 @@ def _hide_from_firm_overview(company: str) -> bool:
     return "VOITAS" in company.upper()
 
 
-def _reporting_company(area: str, company: str) -> str:
-    upper = company.upper()
-    if area == "RuleChecker (4soft, ex Voitas)" and "VOITAS" in upper:
+def _reporting_company(company: str) -> str:
+    if "VOITAS" in company.upper():
         return "4SOFT GMBH MUENCHEN"
     return company
 
@@ -1474,11 +1485,13 @@ def _budget_entry_from_row(
     status = str(row.get("status", "") or "")
     bm_text = str(row.get("bm_text", "") or "")
     status_label = status_map.get(status, "")
+    if not status_label and _core_status_label is not None:
+        status_label = _core_status_label(status)
     if _exclude_from_budget(status_label):
         return None
     quarter = _quarter_for_date(row.get("target_date"), title=title, bm_text=bm_text)
     area = classify_bm(company, title, bm_text)
-    reporting_company = _reporting_company(area, company)
+    reporting_company = _reporting_company(company)
     return {
         "concept": row.get("concept", ""),
         "ea": ea,
@@ -1529,10 +1542,10 @@ def _load_reporting_company_targets(year: int) -> tuple[dict[str, int], dict[str
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """
-                SELECT company, gewerk, quarter, SUM(target_value) AS target_value
+                SELECT company, quarter, SUM(target_value) AS target_value
                 FROM plan_company_targets
                 WHERE year = ?
-                GROUP BY company, gewerk, quarter
+                GROUP BY company, quarter
                 """,
                 (year,),
             ).fetchall()
@@ -1545,7 +1558,7 @@ def _load_reporting_company_targets(year: int) -> tuple[dict[str, int], dict[str
         quarter = str(row["quarter"] or "").strip().upper()
         if quarter not in QUARTERS:
             continue
-        reporting_company = _reporting_company(str(row["gewerk"] or ""), str(row["company"] or ""))
+        reporting_company = _reporting_company(str(row["company"] or ""))
         target_value = int(row["target_value"] or 0)
         annual_targets[reporting_company] += target_value
         quarter_targets[reporting_company][quarter] += target_value
@@ -2228,6 +2241,19 @@ def generate_report(
     firm_area_ist: dict[str, dict[str, int]] = {}
     actual_quarter_eur = {quarter: 0 for quarter in QUARTERS}
 
+    # Pre-load btl keys so OPT-rows replacing existing orders are not shown as "Neu"
+    _actual_btl_keys: set[tuple[str, str, str]] = set()
+    _actual_entries_cache: list[dict[str, Any]] | None = None
+    if _normalize_source_table(source_table) == "btl_opt":
+        _actual_entries_cache = [
+            e for e in (_budget_entry_from_row(r, status_map, ea_title_by_number) for r in run_sql(_budget_source_sql("btl"), year))
+            if e is not None
+        ]
+        _actual_btl_keys = {
+            (str(e["source_company"]), str(e["quarter"]), str(e["ea_number"]))
+            for e in _actual_entries_cache
+        }
+
     for row in rows:
         entry = _budget_entry_from_row(row, status_map, ea_title_by_number)
         if entry is None:
@@ -2268,7 +2294,7 @@ def generate_report(
             firm_bms[reporting_company].append(bm_entry)
             if _normalize_source_table(source_table) == "btl_opt" and quarter in QUARTERS:
                 include_current = quarter == f"Q{num_q}" and status == CURRENT_QUARTER_TODO_STATUS
-                include_future = _quarter_index(quarter) > num_q and benennung == "Konzept"
+                include_future = _quarter_index(quarter) > num_q and benennung == "Konzept" and (company, quarter, str(entry["ea_number"])) not in _actual_btl_keys
                 if include_current or include_future:
                     quarter_todo_bms[quarter].append(
                         {
@@ -2290,7 +2316,7 @@ def generate_report(
             firm_area_ist[reporting_company][area] = firm_area_ist[reporting_company].get(area, 0) + pv
 
     if _normalize_source_table(source_table) == "btl_opt":
-        actual_entries = [
+        actual_entries = _actual_entries_cache if _actual_entries_cache is not None else [
             entry
             for entry in (_budget_entry_from_row(row, status_map, ea_title_by_number) for row in run_sql(_budget_source_sql("btl"), year))
             if entry is not None
@@ -2368,6 +2394,35 @@ def generate_report(
             soll_q += round(area_soll * a_q_ratio)
         firm_soll[firm] = soll
         firm_soll_q[firm] = soll_q
+
+    # --- Phase A2: COMPANY_AREA_MAP fallback for areas without BMs ---
+    # The proportional loop above only distributes targets for areas that
+    # already have BMs in firm_area_ist.  If a firm is mapped to additional
+    # areas in COMPANY_AREA_MAP that have no BMs yet (e.g. RuleChecker before
+    # Q3), those area-targets are lost.  Add them here as sole-firm targets.
+    if COMPANY_AREA_MAP:
+        for map_company, map_areas in COMPANY_AREA_MAP.items():
+            if map_company in manual_company_soll:
+                continue
+            existing_areas = set(firm_area_ist.get(map_company, {}).keys())
+            missing_areas = [a for a in map_areas if a not in existing_areas]
+            if not missing_areas:
+                continue
+            extra_soll = 0
+            extra_soll_q = 0
+            for area in missing_areas:
+                target = soll_targets.get(area, 0) * 1000 - override_target_by_area.get(area, 0)
+                target = max(target, 0)
+                extra_soll += target
+                sq = START_Q.get(area, 1)
+                if num_q < sq:
+                    a_q_ratio = 0.0
+                else:
+                    a_q_ratio = (num_q - sq + 1) / (4 - sq + 1)
+                extra_soll_q += round(target * a_q_ratio)
+            firm_soll[map_company] = firm_soll.get(map_company, 0) + extra_soll
+            firm_soll_q[map_company] = firm_soll_q.get(map_company, 0) + extra_soll_q
+
     firm_soll_q = _scale_distribution_to_target(firm_soll_q, _quarter_split_period_target_eur(quarter_split, num_q))
     _plan_firm_soll, plan_firm_targets_by_quarter = _load_reporting_company_targets(year)
     if plan_firm_targets_by_quarter:
@@ -2504,6 +2559,9 @@ def generate_report(
             massnahmen_parts.append(f"Jahreswert zu gering: {fmt(abs(diff_planung))} einplanen")
         massnahmen = "; ".join(massnahmen_parts)
 
+        year_band = _diff_band_status(ist, soll) if soll else "-"
+        q_band = _diff_band_status(period_ist, soll_q) if soll_q else "-"
+
         firm_rows.append(
             TableRow(
                 [
@@ -2519,7 +2577,11 @@ def generate_report(
                     fmt(storniert),
                     delta_fmt(diff_q),
                     massnahmen,
-                ]
+                ],
+                cell_statuses={
+                    "DIFF Ges.": year_band,
+                    f"DIFF {q_label}": q_band,
+                },
             )
         )
         firm_total += ist

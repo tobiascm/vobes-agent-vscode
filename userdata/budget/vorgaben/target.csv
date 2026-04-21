@@ -1,16 +1,16 @@
-Aufgabenbereich;2025;Target_2026;Start_Q;Bertrandt_Target_2026
-Systemschaltpläne und Bibl. (EDAG, Bertrandt);1736;1649;1;905
-CATIA-Bibl. (GroupServices);281;281;1;
-Projektbüro / Prüfbüro (FES, B&W);635;478;1;
-SYS-Flow (PEC);22;0;1;
-Bordnetz Support, RollOut (Thiesen);288;288;1;
-BordnetzGPT;77;0;1;
-Vorentwicklung (4soft);406;370;1;
-RuleChecker (4soft, ex Voitas);150;120;3;
-Spez. und Test VOBES2025 (Thiesen);263;263;1;
-Pilot und Anwendertest VOBES2025 (SEBN);195;156;1;
-SW-Entwicklung VOBES2025 (4soft);568;484;1;
-AUDI - Bibliotheksarbeiten (Audi);0;344;1;
+Aufgabenbereich;2025;Target_2026;Start_Q;Bertrandt_Target_2026;EDAG_Target_2026
+Systemschaltpläne und Bibl. (EDAG, Bertrandt);1736;1649;1;905;1088
+CATIA-Bibl. (GroupServices);281;281;1;;
+Projektbüro / Prüfbüro (FES, B&W);635;478;1;;
+SYS-Flow (PEC);22;0;1;;
+Bordnetz Support, RollOut (Thiesen);288;288;1;;
+BordnetzGPT;77;0;1;;
+Vorentwicklung (4soft);406;370;1;;
+RuleChecker (4soft, ex Voitas);150;120;3;;
+Spez. und Test VOBES2025 (Thiesen);263;263;1;;
+Pilot und Anwendertest VOBES2025 (SEBN);195;156;1;;
+SW-Entwicklung VOBES2025 (4soft);568;484;1;;
+AUDI - Bibliotheksarbeiten (Audi);0;344;1;;
 
 Jahr/Quartal;2026;Q1;Q2;Q3;Q4
 Summe;4433;1200,75;1200,75;1015,75;1015,75

@@ -26,7 +26,57 @@ QUARTERS = ("Q1", "Q2", "Q3", "Q4")
 QUARTER_ENDINGS = {"Q1": "03-31", "Q2": "06-30", "Q3": "09-30", "Q4": "12-31"}
 CURRENT_QUARTER_TODO_STATUS = "02_Freigabe Kostenstelle"
 VOITAS_RULECHECKER_COMPANY = "VOITAS ENGINEERING GMBH GEISENFELD"
-VOITAS_RULECHECKER_GEWERK = "RuleChecker (4soft, ex Voitas)"
+COMPANY_AREA_MAP: dict[str, list[str]] = {
+    "4SOFT GMBH MUENCHEN": [
+        "Vorentwicklung (4soft)",
+        "RuleChecker (4soft, ex Voitas)",
+        "SW-Entwicklung VOBES2025 (4soft)",
+    ],
+    "VOLKSWAGEN GROUP SERVICES GMBH WOLFSBURG": ["CATIA-Bibl. (GroupServices)"],
+    "FES GMBH ZWICKAU/00": ["Projektbüro / Prüfbüro (FES, B&W)"],
+    "THIESEN HARDWARE SOFTW. GMBH WARTENBERG": [
+        "Bordnetz Support, RollOut (Thiesen)",
+        "Spez. und Test VOBES2025 (Thiesen)",
+    ],
+    "SUMITOMO ELECTRIC BORDNETZE SE WOLFSBURG": ["Pilot und Anwendertest VOBES2025 (SEBN)"],
+}
+SYSTEMS_AREA = "Systemschaltpläne und Bibl. (EDAG, Bertrandt)"
+EDAG_COMPANY = "EDAG ENGINEERING GMBH WOLFSBURG"
+BERTRANDT_COMPANY = "BERTRANDT INGENIEURBUERO GMBH TAPPENBECK"
+
+
+def compute_company_annual_targets(
+    target_2026: dict[str, int],
+    company_overrides: dict[str, dict[str, int | str]],
+) -> dict[str, int]:
+    """Firmenjahrestargets (€) aus target.csv-Daten. Einheitliche Quelle."""
+    result = {
+        c: sum(int(target_2026.get(a, 0)) * 1000 for a in areas)
+        for c, areas in COMPANY_AREA_MAP.items()
+    }
+    result = {c: v for c, v in result.items() if v > 0}
+    for key, company in (("BERTRANDT", BERTRANDT_COMPANY), ("EDAG", EDAG_COMPANY)):
+        override = int((company_overrides.get(key) or {}).get("target_te", 0)) * 1000
+        if override > 0:
+            result[company] = override
+    return result
+
+
+def _load_target_csv_data() -> tuple[dict[str, int], dict[str, dict[str, int | str]], dict[str, Any] | None]:
+    """Lädt (target_2026, company_overrides, quarter_split) aus report_massnahmenplan.py."""
+    import importlib.util
+
+    report_py = (
+        Path(__file__).resolve().parents[2]
+        / ".agents" / "skills" / "skill-budget-target-ist-analyse" / "report_massnahmenplan.py"
+    )
+    spec = importlib.util.spec_from_file_location("report_massnahmenplan", report_py)
+    if not spec or not spec.loader:
+        return {}, {}, None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _ref, target_2026, _order, _start_q, company_overrides, quarter_split = module.load_targets()
+    return target_2026, company_overrides, quarter_split
 DEFAULT_RULE_ROWS = [
     ("stage2_source", "plan_stage2_results"),
     ("stage2_solver", "highs"),
@@ -35,12 +85,15 @@ DEFAULT_RULE_ROWS = [
     ("stage2_min_new_order_amount", "10000"),
     ("stage2_repeat_quarter_penalty", "200"),
     ("stage2_stop_penalty", "500"),
+    ("stage2_large_order_penalty", "700"),
+    ("stage2_large_order_threshold", "40000"),
     ("stage2_existing_small_amount_penalty", "10000"),
-    ("stage2_soft_target_penalty", "10"),
+    ("stage2_soft_target_penalty", "100"),
     ("stage2_active_ea_cap_per_quarter", "0"),
     ("stage2_hard_need_bonus", "50"),
     ("stage2_throughlauf_change_penalty", "2500"),
     ("stage2_special_rule_priority_penalty_step", "25"),
+    ("stage2_exact_rule_tolerance", "10000"),
     ("stage2_time_limit_seconds", "120"),
     ("enforce_company_annual_target_consistency", "true"),
     ("btl_opt_refresh", "replace"),
@@ -132,26 +185,43 @@ def status_label_from_note(note: str | None) -> str:
     return status_label_for_raw_status(raw_status_from_note(note))
 
 
+def _migrate_drop_gewerk_tables(conn: sqlite3.Connection) -> None:
+    """Löscht alte Planungstabellen mit gewerk-Spalte, damit sie neu angelegt werden."""
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(plan_company_targets)").fetchall()}
+    if "gewerk" not in cols:
+        return
+    conn.executescript(
+        """
+        DROP TABLE IF EXISTS plan_company_targets;
+        DROP TABLE IF EXISTS plan_existing_orders;
+        DROP TABLE IF EXISTS plan_reference_orders;
+        DROP TABLE IF EXISTS plan_ea_metadata;
+        DROP TABLE IF EXISTS plan_stage1_results;
+        DROP TABLE IF EXISTS plan_stage2_results;
+        """
+    )
+    conn.commit()
+
+
 def init_planning_schema(conn: sqlite3.Connection) -> None:
+    _migrate_drop_gewerk_tables(conn)
     conn.executescript(
         f"""
         CREATE TABLE IF NOT EXISTS plan_company_targets (
             year INTEGER NOT NULL,
             company TEXT NOT NULL,
-            gewerk TEXT NOT NULL DEFAULT '',
             quarter TEXT NOT NULL,
             target_value INTEGER NOT NULL,
             annual_target INTEGER,
             quarter_cap INTEGER,
             step_value INTEGER NOT NULL DEFAULT 1,
-            PRIMARY KEY (year, company, gewerk, quarter)
+            PRIMARY KEY (year, company, quarter)
         );
 
         CREATE TABLE IF NOT EXISTS plan_existing_orders (
             order_id INTEGER PRIMARY KEY AUTOINCREMENT,
             year INTEGER NOT NULL,
             company TEXT NOT NULL,
-            gewerk TEXT NOT NULL DEFAULT '',
             quarter TEXT NOT NULL,
             ea_number TEXT NOT NULL,
             amount INTEGER NOT NULL,
@@ -167,7 +237,6 @@ def init_planning_schema(conn: sqlite3.Connection) -> None:
             reference_value INTEGER,
             reference_count INTEGER,
             source_company TEXT,
-            gewerk TEXT,
             note TEXT
         );
 
@@ -195,7 +264,6 @@ def init_planning_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS plan_ea_metadata (
             year INTEGER NOT NULL,
             ea_number TEXT NOT NULL,
-            gewerk TEXT,
             project_group TEXT,
             is_active INTEGER NOT NULL DEFAULT 1,
             note TEXT,
@@ -205,13 +273,12 @@ def init_planning_schema(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS plan_stage1_results (
             run_id TEXT NOT NULL,
             year INTEGER NOT NULL,
-            gewerk TEXT NOT NULL DEFAULT '',
             ea_number TEXT NOT NULL,
             target_value INTEGER NOT NULL,
             reference_score REAL NOT NULL DEFAULT 0,
             is_hard INTEGER NOT NULL DEFAULT 0,
             note TEXT,
-            PRIMARY KEY (run_id, year, gewerk, ea_number)
+            PRIMARY KEY (run_id, year, ea_number)
         );
 
         CREATE TABLE IF NOT EXISTS plan_stage2_results (
@@ -219,7 +286,6 @@ def init_planning_schema(conn: sqlite3.Connection) -> None:
             run_id TEXT NOT NULL,
             year INTEGER NOT NULL,
             company TEXT NOT NULL,
-            gewerk TEXT NOT NULL DEFAULT '',
             quarter TEXT NOT NULL,
             ea_number TEXT NOT NULL,
             amount INTEGER NOT NULL,
@@ -273,31 +339,24 @@ def _ensure_special_company_targets(conn: sqlite3.Connection, year: int) -> None
         """
         SELECT step_value
         FROM plan_company_targets
-        WHERE year = ?
-          AND company = '4SOFT GMBH MUENCHEN'
-          AND gewerk = ?
+        WHERE year = ? AND company = '4SOFT GMBH MUENCHEN'
         ORDER BY quarter
         LIMIT 1
         """,
-        (year, VOITAS_RULECHECKER_GEWERK),
+        (year,),
     ).fetchone()
     step = max(1, int(row["step_value"] if row is not None else 1))
     conn.executemany(
         """
-        INSERT INTO plan_company_targets (
-            year, company, gewerk, quarter, target_value, annual_target, quarter_cap, step_value
-        )
-        VALUES (?, ?, ?, ?, 0, 0, NULL, ?)
-        ON CONFLICT(year, company, gewerk, quarter) DO UPDATE SET
+        INSERT INTO plan_company_targets (year, company, quarter, target_value, annual_target, quarter_cap, step_value)
+        VALUES (?, ?, ?, 0, 0, NULL, ?)
+        ON CONFLICT(year, company, quarter) DO UPDATE SET
             target_value = excluded.target_value,
             annual_target = excluded.annual_target,
             quarter_cap = excluded.quarter_cap,
             step_value = excluded.step_value
         """,
-        [
-            (year, VOITAS_RULECHECKER_COMPANY, VOITAS_RULECHECKER_GEWERK, quarter, step)
-            for quarter in QUARTERS
-        ],
+        [(year, VOITAS_RULECHECKER_COMPANY, quarter, step) for quarter in QUARTERS],
     )
     conn.commit()
 
@@ -327,38 +386,12 @@ def _quarter_for_date(target_date: str | None) -> str | None:
 
 def _status_for_new_planned_row(year: int, quarter: str) -> str:
     now = datetime.now()
-    if year == now.year and quarter == f"Q{_current_quarter(now)}":
+    current_q = _current_quarter(now)
+    q_num = int(quarter[1]) if len(quarter) == 2 and quarter[0] == "Q" else 0
+    if year == now.year and q_num <= current_q:
         return CURRENT_QUARTER_TODO_STATUS
     return "01_In Erstellung"
 
-
-def _btl_title(company: str, gewerk: str, ea_number: str) -> str:
-    upper_company = company.upper()
-    upper_gewerk = gewerk.upper()
-    if "4SOFT" in upper_company and "RULECHECKER" in upper_gewerk:
-        return f"RuleChecker {ea_number}"
-    if "4SOFT" in upper_company and "SW-ENTWICKLUNG" in upper_gewerk:
-        return f"TE-PMT {ea_number}"
-    return f"{gewerk} {ea_number}".strip()
-
-
-def _btl_company(company: str, gewerk: str) -> str:
-    upper_company = company.upper()
-    upper_gewerk = gewerk.upper()
-    if "4SOFT" in upper_company and "RULECHECKER" in upper_gewerk:
-        return "VOITAS"
-    return company
-
-
-def _btl_bm_text(company: str, gewerk: str) -> str:
-    upper_company = company.upper()
-    upper_gewerk = gewerk.upper()
-    if "THIESEN" in upper_company:
-        if "SPEZ." in upper_gewerk or "SPEZIF" in upper_gewerk:
-            return "Gewerk #2"
-        if "BORDNETZ SUPPORT" in upper_gewerk or "ROLLOUT" in upper_gewerk:
-            return "Gewerk #1,#2,#3,#5"
-    return gewerk
 
 
 def _latest_run_id(conn: sqlite3.Connection, table: str, year: int) -> str | None:
@@ -384,12 +417,12 @@ def _load_stage2_rows(conn: sqlite3.Connection, year: int, *, include_zero: bool
     amount_filter = "" if include_zero else "AND amount <> 0"
     rows = conn.execute(
         f"""
-        SELECT year, company, gewerk, quarter, ea_number, amount, note, run_id
+        SELECT year, company, quarter, ea_number, amount, note, run_id
         FROM plan_stage2_results
         WHERE year = ?
           AND run_id = ?
           {amount_filter}
-        ORDER BY company, gewerk, quarter, ea_number
+        ORDER BY company, quarter, ea_number
         """,
         (year, run_id),
     ).fetchall()
@@ -464,7 +497,6 @@ def _build_btl_insert_row_from_sample(
     sample_row: sqlite3.Row | None,
     ea_number: str,
     company: str,
-    gewerk: str,
     quarter: str,
     timestamp: str,
 ) -> tuple[Any, ...]:
@@ -472,7 +504,7 @@ def _build_btl_insert_row_from_sample(
         return (
             concept,
             str(sample_row["ea"] or ea_number),
-            str(sample_row["title"] or _btl_title(company, gewerk, ea_number)),
+            str(sample_row["title"] or ea_number),
             status,
             planned_value,
             str(sample_row["org_unit"] or "EKEK/1"),
@@ -482,7 +514,7 @@ def _build_btl_insert_row_from_sample(
             sample_row["az_number"],
             sample_row["projektfamilie"],
             str(sample_row["dev_order"] or ea_number),
-            str(sample_row["bm_text"] or _btl_bm_text(company, gewerk)),
+            str(sample_row["bm_text"] or ""),
             timestamp,
             str(sample_row["category"] or "OPTIMIERUNG"),
             sample_row["cost_type"],
@@ -497,11 +529,11 @@ def _build_btl_insert_row_from_sample(
     return _build_btl_insert_row(
         concept=concept,
         ea_number=ea_number,
-        title=_btl_title(company, gewerk, ea_number),
+        title=ea_number,
         status=status,
         planned_value=planned_value,
         company=company,
-        bm_text=_btl_bm_text(company, gewerk),
+        bm_text="",
         target_date=_quarter_target_date(year, quarter),
         timestamp=timestamp,
     )
@@ -512,10 +544,10 @@ def _materialize_btl_opt(conn: sqlite3.Connection, year: int) -> list[sqlite3.Ro
     stage2_rows_all = _load_stage2_rows(conn, year, include_zero=True)
     existing_rows = conn.execute(
         """
-        SELECT company, gewerk, quarter, ea_number, amount, note
+        SELECT company, quarter, ea_number, amount, note
         FROM plan_existing_orders
         WHERE year = ?
-        ORDER BY company, gewerk, quarter, ea_number, note
+        ORDER BY company, quarter, ea_number, note
         """,
         (year,),
     ).fetchall()
@@ -549,11 +581,10 @@ def _materialize_btl_opt(conn: sqlite3.Connection, year: int) -> list[sqlite3.Ro
         source_by_bare_key.setdefault(bare_key, source_row)
         source_by_bare_key_status.setdefault(bare_key + (str(source_row["status"]),), source_row)
 
-    status_amounts: dict[tuple[str, str, str, str], dict[tuple[str, str], int]] = {}
+    status_amounts: dict[tuple[str, str, str], dict[tuple[str, str], int]] = {}
     for existing_row in existing_rows:
         key = (
             str(existing_row["company"]),
-            str(existing_row["gewerk"]),
             str(existing_row["quarter"]).upper(),
             str(existing_row["ea_number"]),
         )
@@ -568,15 +599,11 @@ def _materialize_btl_opt(conn: sqlite3.Connection, year: int) -> list[sqlite3.Ro
         amount = int(row["amount"])
         if amount <= 0:
             continue
-        key = (
-            str(row["company"]),
-            str(row["gewerk"]),
-            str(row["quarter"]).upper(),
-            str(row["ea_number"]),
-        )
-        company = _btl_company(key[0], key[1])
-        quarter = key[2]
-        bare_key = (key[0], quarter, key[3])
+        company = str(row["company"])
+        quarter = str(row["quarter"]).upper()
+        ea_number = str(row["ea_number"])
+        key = (company, quarter, ea_number)
+        bare_key = key
 
         bucket_rows = sorted(
             (
@@ -589,7 +616,7 @@ def _materialize_btl_opt(conn: sqlite3.Connection, year: int) -> list[sqlite3.Ro
         ordered_total = sum(bucket_amount for _raw_status, label, bucket_amount in bucket_rows if label == "bestellt")
         if amount < ordered_total:
             raise PlanningError(
-                f"Optimierung verletzt bestellt-Bestand fuer {key[0]} / {key[1]} / {key[2]} / {key[3]}: {amount} < {ordered_total}."
+                f"Optimierung verletzt bestellt-Bestand fuer {company} / {quarter} / {ea_number}: {amount} < {ordered_total}."
             )
 
         remaining = amount
@@ -623,9 +650,8 @@ def _materialize_btl_opt(conn: sqlite3.Connection, year: int) -> list[sqlite3.Ro
                     status=raw_status,
                     planned_value=keep_amount,
                     sample_row=sample_row,
-                    ea_number=key[3],
+                    ea_number=ea_number,
                     company=company,
-                    gewerk=key[1],
                     quarter=quarter,
                     timestamp=timestamp,
                 )
@@ -641,9 +667,8 @@ def _materialize_btl_opt(conn: sqlite3.Connection, year: int) -> list[sqlite3.Ro
                     status=new_status,
                     planned_value=remaining,
                     sample_row=sample_row,
-                    ea_number=key[3],
+                    ea_number=ea_number,
                     company=company,
-                    gewerk=key[1],
                     quarter=quarter,
                     timestamp=timestamp,
                 )
@@ -729,6 +754,129 @@ def _write_planning_report(
     return report
 
 
+def _bootstrap_company_targets(conn: sqlite3.Connection, year: int) -> None:
+    """Befüllt/aktualisiert plan_company_targets aus target.csv (immer frisch)."""
+    target_2026, company_overrides, quarter_split = _load_target_csv_data()
+    company_annual = compute_company_annual_targets(target_2026, company_overrides)
+    if not company_annual:
+        return
+
+    if quarter_split and float(quarter_split.get("annual_te", 0)) > 0:
+        annual_te = float(quarter_split["annual_te"])
+        ratios = {q: float(quarter_split["quarters_te"][q]) / annual_te for q in QUARTERS}
+    else:
+        ratios = {q: 0.25 for q in QUARTERS}
+
+    insert_rows = []
+    for company, annual in company_annual.items():
+        qvals = {q: int(round(annual * ratios[q])) for q in QUARTERS}
+        qvals[QUARTERS[-1]] += annual - sum(qvals.values())
+        for q in QUARTERS:
+            insert_rows.append((year, company, q, qvals[q], annual, None, 1))
+
+    conn.executemany(
+        """
+        INSERT INTO plan_company_targets
+            (year, company, quarter, target_value, annual_target, quarter_cap, step_value)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(year, company, quarter)
+        DO UPDATE SET target_value=excluded.target_value,
+                      annual_target=excluded.annual_target,
+                      step_value=excluded.step_value
+        """,
+        insert_rows,
+    )
+    conn.commit()
+
+
+def _bootstrap_existing_orders_from_btl(conn: sqlite3.Connection, year: int) -> None:
+    """Befüllt plan_existing_orders aus BTL wenn leer: live-Statuses."""
+    has = conn.execute(
+        "SELECT 1 FROM plan_existing_orders WHERE year=? LIMIT 1", (year,)
+    ).fetchone()
+    if has:
+        return
+    try:
+        source = conn.execute(
+            """
+            SELECT company, status, planned_value, target_date, dev_order, ea
+            FROM btl
+            WHERE substr(COALESCE(target_date, ''), 1, 4) = ?
+            """,
+            (str(year),),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return
+    known = {
+        str(row["company"])
+        for row in conn.execute(
+            "SELECT DISTINCT company FROM plan_company_targets WHERE year=?", (year,)
+        ).fetchall()
+    }
+    rows = []
+    for row in source:
+        company = str(row["company"])
+        if company not in known:
+            continue
+        quarter = _quarter_for_date(row["target_date"])
+        if not quarter:
+            continue
+        ea = str(row["dev_order"] or row["ea"] or "").strip()
+        if not ea:
+            continue
+        raw = str(row["status"] or "").strip()
+        if status_label_for_raw_status(raw) not in {"bestellt", "im Durchlauf", "Konzept"}:
+            continue
+        amount = int(row["planned_value"] or 0)
+        if amount <= 0:
+            continue
+        can_stop = 0 if status_label_for_raw_status(raw) == "im Durchlauf" else 1
+        rows.append((year, company, quarter, ea, amount, 0, can_stop, f"auto:{raw}"))
+    if rows:
+        conn.executemany(
+            """
+            INSERT INTO plan_existing_orders
+                (year, company, quarter, ea_number, amount, is_fixed, can_stop, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.commit()
+
+
+def _bootstrap_stage1_from_btl(conn: sqlite3.Connection, year: int) -> None:
+    """Befüllt plan_stage1_results aus BTL wenn leer: EA-Jahressumme als weiche Ziele."""
+    has = conn.execute("SELECT 1 FROM plan_stage1_results WHERE year = ? LIMIT 1", (year,)).fetchone()
+    if has:
+        return
+    try:
+        rows = conn.execute(
+            """
+            SELECT dev_order, SUM(planned_value) AS total
+            FROM btl
+            WHERE substr(COALESCE(target_date, ''), 1, 4) = ?
+              AND COALESCE(dev_order, '') <> ''
+              AND COALESCE(planned_value, 0) > 0
+            GROUP BY dev_order
+            HAVING total > 0
+            """,
+            (str(year),),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return
+    if not rows:
+        return
+    run_id = f"auto_{year}"
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO plan_stage1_results (run_id, year, ea_number, target_value, reference_score, is_hard)
+        VALUES (?, ?, ?, ?, 0.0, 0)
+        """,
+        [(run_id, year, str(row["dev_order"]), int(row["total"])) for row in rows],
+    )
+    conn.commit()
+
+
 def execute_planning(
     *,
     year: int,
@@ -747,7 +895,10 @@ def execute_planning(
 
     with connect() as conn:
         init_planning_schema(conn)
+        _bootstrap_company_targets(conn, year)
         _ensure_special_company_targets(conn, year)
+        _bootstrap_stage1_from_btl(conn, year)
+        _bootstrap_existing_orders_from_btl(conn, year)
         solution = solve_stage2(
             conn,
             year=year,
