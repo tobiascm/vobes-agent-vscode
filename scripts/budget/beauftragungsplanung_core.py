@@ -78,25 +78,28 @@ def _load_target_csv_data() -> tuple[dict[str, int], dict[str, dict[str, int | s
     _ref, target_2026, _order, _start_q, company_overrides, quarter_split = module.load_targets()
     return target_2026, company_overrides, quarter_split
 DEFAULT_RULE_ROWS = [
-    ("stage2_source", "plan_stage2_results"),
-    ("stage2_solver", "highs"),
-    ("stage2_activation_penalty", "100"),
-    ("stage2_quarter_activation_penalty", "50"),
-    ("stage2_min_new_order_amount", "10000"),
-    ("stage2_repeat_quarter_penalty", "200"),
-    ("stage2_stop_penalty", "500"),
-    ("stage2_large_order_penalty", "700"),
-    ("stage2_large_order_threshold", "40000"),
-    ("stage2_existing_small_amount_penalty", "10000"),
-    ("stage2_soft_target_penalty", "100"),
-    ("stage2_active_ea_cap_per_quarter", "0"),
-    ("stage2_hard_need_bonus", "50"),
-    ("stage2_throughlauf_change_penalty", "2500"),
-    ("stage2_special_rule_priority_penalty_step", "25"),
-    ("stage2_exact_rule_tolerance", "10000"),
-    ("stage2_time_limit_seconds", "120"),
-    ("enforce_company_annual_target_consistency", "true"),
-    ("btl_opt_refresh", "replace"),
+    ("stage2_source", "plan_stage2_results", "Quelltabelle fuer Stage-2-Ergebnisse. Nicht aendern."),
+    ("stage2_solver", "highs", "Solver-Engine. Nur 'highs' wird unterstuetzt."),
+    ("stage2_activation_penalty", "100", "Strafkosten pro EA die ueberhaupt genutzt wird (jaehrlich). Hoeher = weniger verschiedene EAs im Plan."),
+    ("stage2_quarter_activation_penalty", "50", "Zusaetzliche Strafe pro EA pro Quartal. Hoeher = weniger Einzelbeauftragungen."),
+    ("stage2_min_new_order_amount", "10000", "Mindestbetrag (EUR) fuer neue Beauftragungen. Kleinere Betraege werden vermieden."),
+    ("stage2_repeat_quarter_penalty", "200", "Strafe wenn dieselbe EA in mehreren Quartalen beauftragt wird. Hoeher = EA-Rotation zwischen Quartalen."),
+    ("stage2_stop_penalty", "500", "Strafe fuer das Stoppen einer bestehenden Konzept-Position. Hoeher = bestehende Auftraege werden eher beibehalten."),
+    ("stage2_large_order_penalty", "700", "Strafe fuer Einzelbeauftragungen ueber dem Schwellenwert. Hoeher = gleichmaessigere Verteilung."),
+    ("stage2_large_order_threshold", "40000", "Schwellenwert (EUR) ab dem large_order_penalty greift."),
+    ("stage2_existing_small_amount_penalty", "10000", "Strafe fuer Kleinstbetraege unter min_new_order_amount bei bestehenden Konzepten. Hoeher = Kleinstpositionen werden eher gestoppt."),
+    ("stage2_soft_target_penalty", "100", "Strafe pro EUR Abweichung wenn eine Firma WENIGER als ihr Quartalsziel bekommt (Unterplanung). Hoeher = Unterplanung wird staerker vermieden."),
+    ("stage2_active_ea_cap_per_quarter", "0", "Max. Anzahl aktiver EAs pro Firma und Quartal. 0 = kein Limit."),
+    ("stage2_hard_need_bonus", "50", "Bonus (Kostenreduktion) fuer EAs die als 'hart benoetigt' markiert sind. Hoeher = harte EAs werden bevorzugt."),
+    ("stage2_throughlauf_change_penalty", "2500", "Strafe pro EUR Reduktion bei Positionen die bereits im Durchlauf sind. Hoeher = laufende Positionen werden weniger gekuerzt."),
+    ("stage2_special_rule_priority_penalty_step", "25", "Strafkosten-Stufe pro Rang bei Sondervorgaben-Firmenprioritaet. Hoeher = priorisierte Firmen werden staerker bevorzugt."),
+    ("stage2_special_rule_annual_penalty", "500", "Strafe pro EUR Abweichung vom Jahres-/Periodenziel einer Sondervorgabe. Hoeher = Sondervorgaben werden exakter eingehalten."),
+    ("stage2_global_quarter_undershoot_penalty", "500", "Strafe pro EUR wenn ein Quartal insgesamt UNTER dem Gesamtplan liegt. Hoeher = keine Unterplanung im Quartal."),
+    ("stage2_global_quarter_overshoot_penalty", "5", "Strafe pro EUR wenn ein Quartal insgesamt UEBER dem Gesamtplan liegt. Hoeher = weniger Ueberplanung im Quartal."),
+    ("stage2_soft_target_overshoot_penalty", "10", "Strafe pro EUR Abweichung wenn eine Firma MEHR als ihr Quartalsziel bekommt (Ueberplanung). Hoeher = Ueberplanung wird staerker vermieden."),
+    ("stage2_time_limit_seconds", "120", "Maximale Rechenzeit des Solvers in Sekunden. Bei Timeout wird die beste Zwischenloesung verwendet."),
+    ("enforce_company_annual_target_consistency", "true", "Prueft ob Quartalssummen zum Jahresziel passen. true = Abbruch bei Inkonsistenz."),
+    ("btl_opt_refresh", "replace", "Modus fuer btl_opt-Aktualisierung. 'replace' loescht und schreibt neu."),
 ]
 
 
@@ -117,7 +120,7 @@ def ensure_default_rules_csv(path: Path) -> Path:
         return path
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle, delimiter=";")
-        writer.writerow(["rule", "value"])
+        writer.writerow(["rule", "value", "description"])
         writer.writerows(DEFAULT_RULE_ROWS)
     return path
 
@@ -126,9 +129,9 @@ def _read_rules_csv(path: Path) -> dict[str, str]:
     with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle, delimiter=";")
         fieldnames = [str(name or "").strip() for name in reader.fieldnames or []]
-        if fieldnames != ["rule", "value"]:
+        if fieldnames[:2] != ["rule", "value"]:
             raise PlanningError(
-                f"Ungueltiges Rules-Format in {path}. Erwartet wird exakt 'rule;value'."
+                f"Ungueltiges Rules-Format in {path}. Erwartet werden mindestens die Spalten 'rule;value'."
             )
         rules = {
             str(row["rule"]).strip(): str(row["value"] or "").strip()
@@ -560,6 +563,7 @@ def _materialize_btl_opt(conn: sqlite3.Connection, year: int) -> list[sqlite3.Ro
         (str(row["company"]), str(row["quarter"]).upper(), str(row["ea_number"]))
         for row in stage2_rows_all
     }
+    _passthrough_exclude = {"storniert", "abgelehnt"}
     for source_row in source_rows:
         bare_key = (
             str(source_row["company"]),
@@ -567,6 +571,8 @@ def _materialize_btl_opt(conn: sqlite3.Connection, year: int) -> list[sqlite3.Ro
             str(source_row["dev_order"] or source_row["ea"] or "").strip(),
         )
         if bare_key in planned_bare_keys:
+            continue
+        if status_label_for_raw_status(str(source_row["status"] or "")) in _passthrough_exclude:
             continue
         insert_rows.append(tuple(source_row))
 
@@ -830,7 +836,7 @@ def _bootstrap_existing_orders_from_btl(conn: sqlite3.Connection, year: int) -> 
         amount = int(row["planned_value"] or 0)
         if amount <= 0:
             continue
-        can_stop = 0 if status_label_for_raw_status(raw) == "im Durchlauf" else 1
+        can_stop = 0 if status_label_for_raw_status(raw) in {"bestellt", "im Durchlauf"} else 1
         rows.append((year, company, quarter, ea, amount, 0, can_stop, f"auto:{raw}"))
     if rows:
         conn.executemany(

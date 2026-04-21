@@ -452,3 +452,94 @@ def test_compute_company_annual_targets_uses_overrides():
     result = core.compute_company_annual_targets(target, overrides)
     assert result[core.EDAG_COMPANY] == 1_088_000
     assert result[core.BERTRANDT_COMPANY] == 905_000
+
+
+def test_bootstrap_sets_can_stop_zero_for_bestellt_and_durchlauf(tmp_path, monkeypatch):
+    """bestellt and im Durchlauf rows must get can_stop=0; Konzept gets can_stop=1."""
+    db_path = tmp_path / "budget.db"
+    monkeypatch.setattr(core, "DB_PATH", db_path)
+
+    with core.connect() as conn:
+        core.init_planning_schema(conn)
+        conn.execute(f"CREATE TABLE btl ({core.BTL_COLUMNS_SQL})")
+        conn.execute(
+            "INSERT INTO plan_company_targets (year, company, quarter, target_value, annual_target, step_value) "
+            "VALUES (2026, 'Firma A', 'Q2', 100, 100, 1)"
+        )
+        for status, ea in [
+            ("07_In Planen-BM: Bestellt", "EA1"),
+            ("06_In Bearbeitung BM-Team", "EA2"),
+            ("01_In Erstellung", "EA3"),
+        ]:
+            conn.execute(
+                f"""
+                INSERT INTO btl (
+                    concept, ea, title, status, planned_value, org_unit, company, creator,
+                    bm_number, az_number, projektfamilie, dev_order, bm_text, last_updated,
+                    category, cost_type, quantity, unit, supplier_number,
+                    first_signature, second_signature, target_date, invoices
+                )
+                VALUES (
+                    'C1','{ea}','{ea}','{status}',50,'EKEK/1','Firma A','T',
+                    NULL,NULL,NULL,'{ea}','BM','2026-01-01','TEST',NULL,NULL,NULL,NULL,
+                    NULL,NULL,'2026-06-30',NULL
+                )
+                """
+            )
+        conn.commit()
+        core._bootstrap_existing_orders_from_btl(conn, 2026)
+        rows = {
+            row["ea_number"]: row["can_stop"]
+            for row in conn.execute("SELECT ea_number, can_stop FROM plan_existing_orders").fetchall()
+        }
+    assert rows["EA1"] == 0  # bestellt
+    assert rows["EA2"] == 0  # im Durchlauf
+    assert rows["EA3"] == 1  # Konzept
+
+
+def test_materialize_btl_opt_excludes_storniert_passthrough(tmp_path, monkeypatch):
+    """storniert/abgelehnt BTL rows must NOT pass through to btl_opt."""
+    db_path = tmp_path / "budget.db"
+    monkeypatch.setattr(core, "DB_PATH", db_path)
+
+    with core.connect() as conn:
+        core.init_planning_schema(conn)
+        conn.execute(f"CREATE TABLE btl ({core.BTL_COLUMNS_SQL})")
+        conn.execute(
+            """
+            INSERT INTO plan_stage2_results
+                (run_id, year, company, quarter, ea_number, amount, source, is_locked, note)
+            VALUES ('run1', 2026, 'Firma A', 'Q1', 'EA_KEEP', 100, 'highs', 0, NULL)
+            """
+        )
+        for status, ea in [
+            ("09_Storniert", "EA_STORNO"),
+            ("10_Abgelehnt", "EA_REJECT"),
+            ("01_In Erstellung", "EA_OK"),
+        ]:
+            conn.execute(
+                f"""
+                INSERT INTO btl (
+                    concept, ea, title, status, planned_value, org_unit, company, creator,
+                    bm_number, az_number, projektfamilie, dev_order, bm_text, last_updated,
+                    category, cost_type, quantity, unit, supplier_number,
+                    first_signature, second_signature, target_date, invoices
+                )
+                VALUES (
+                    'C1','{ea}','{ea}','{status}',50,'EKEK/1','Firma A','T',
+                    NULL,NULL,NULL,'{ea}','BM','2026-01-01','TEST',NULL,NULL,NULL,NULL,
+                    NULL,NULL,'2026-03-31',NULL
+                )
+                """
+            )
+        conn.commit()
+        core._materialize_btl_opt(conn, 2026)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        eas = sorted(row["ea"] for row in conn.execute("SELECT ea FROM btl_opt").fetchall())
+
+    assert "EA_STORNO" not in eas
+    assert "EA_REJECT" not in eas
+    assert "EA_OK" in eas
+    assert "EA_KEEP" in eas

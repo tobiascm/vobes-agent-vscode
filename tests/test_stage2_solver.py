@@ -25,7 +25,7 @@ def _conn() -> sqlite3.Connection:
 
 
 def _config(*, cap: int = 0) -> solver.SolverConfig:
-    return solver.SolverConfig(active_ea_cap_per_quarter=cap, exact_rule_tolerance=0, min_new_order_amount=0)
+    return solver.SolverConfig(active_ea_cap_per_quarter=cap, min_new_order_amount=0)
 
 
 def _insert_stage1(conn: sqlite3.Connection, rows: list[tuple[str, int, int]]) -> None:
@@ -306,7 +306,7 @@ def test_special_rule_annual_targets_are_enforced(monkeypatch):
         ],
     )
 
-    cfg = solver.SolverConfig(min_new_order_amount=0, exact_rule_tolerance=0)
+    cfg = solver.SolverConfig(min_new_order_amount=0)
     solver.solve_stage2(conn, year=2026, config=cfg, planning_start_quarter=1)
 
     total = conn.execute(
@@ -379,7 +379,7 @@ def test_special_rule_can_create_canonical_ea_without_existing_variant(monkeypat
         ],
     )
 
-    cfg = solver.SolverConfig(min_new_order_amount=0, exact_rule_tolerance=0)
+    cfg = solver.SolverConfig(min_new_order_amount=0)
     solver.solve_stage2(conn, year=2026, config=cfg, planning_start_quarter=1)
 
     rows = _rows_by_key(conn)
@@ -641,7 +641,6 @@ def test_existing_konzept_rows_prefer_stop_over_small_residuals():
         year=2026,
         config=solver.SolverConfig(
             min_new_order_amount=10000,
-            existing_small_amount_penalty=10000,
         ),
         planning_start_quarter=1,
     )
@@ -650,7 +649,7 @@ def test_existing_konzept_rows_prefer_stop_over_small_residuals():
     assert rows[("Firma A", "Q1", "EA1")] == 0
 
 
-def test_existing_small_amount_penalty_stays_soft_when_small_value_is_unavoidable():
+def test_existing_small_amount_stays_when_target_requires_it():
     conn = _conn()
     conn.execute(
         """
@@ -672,7 +671,6 @@ def test_existing_small_amount_penalty_stays_soft_when_small_value_is_unavoidabl
         year=2026,
         config=solver.SolverConfig(
             min_new_order_amount=10000,
-            existing_small_amount_penalty=10000,
         ),
         planning_start_quarter=1,
     )
@@ -824,3 +822,30 @@ def test_large_order_penalty_zero_allows_double_step():
     allocated = {k: v for k, v in rows.items() if v > 0}
     assert len(allocated) == 1
     assert list(allocated.values())[0] == 100
+
+
+def test_current_period_actuals_truncate_sum_not_per_row():
+    """Step truncation must happen on the aggregate sum, not per individual row."""
+    conn = _conn()
+    # Two orders of 7500 each; step=10000 → sum=15000, truncated=10000
+    existing = [
+        {"company": "Firma A", "amount": 7500, "note": "auto:07_In Planen-BM: Bestellt"},
+        {"company": "Firma A", "amount": 7500, "note": "auto:07_In Planen-BM: Bestellt"},
+    ]
+    targets = [{"company": "Firma A", "step_value": 10000}]
+    result = solver._current_period_company_actuals(existing, targets)
+    assert result["Firma A"] == 10000  # sum-then-truncate, not 0+0
+
+
+def test_load_solver_config_reads_csv_values():
+    """CSV rules override dataclass defaults."""
+    rules = {
+        "stage2_solver": "highs",
+        "stage2_activation_penalty": "600",
+        "stage2_quarter_activation_penalty": "300",
+        "stage2_min_new_order_amount": "5000",
+    }
+    cfg = solver.load_solver_config(rules)
+    assert cfg.activation_penalty == 600.0
+    assert cfg.quarter_activation_penalty == 300.0
+    assert cfg.min_new_order_amount == 5000

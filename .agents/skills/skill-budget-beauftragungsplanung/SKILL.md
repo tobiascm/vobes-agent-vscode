@@ -200,20 +200,31 @@ Die erzeugte Datei `userdata/budget/planning/beauftragungsplanung_rules.csv` ent
 - `stage2_solver`
 - `stage2_activation_penalty`
 - `stage2_quarter_activation_penalty`
+- `stage2_min_new_order_amount`
 - `stage2_repeat_quarter_penalty`
 - `stage2_stop_penalty`
+- `stage2_large_order_penalty`
+- `stage2_large_order_threshold`
+- `stage2_existing_small_amount_penalty` (reserviert, derzeit nicht aktiv)
 - `stage2_soft_target_penalty`
 - `stage2_active_ea_cap_per_quarter`
-- `enforce_company_annual_target_consistency`
-- `stage1_reference_count_weight`
 - `stage2_hard_need_bonus`
+- `stage2_throughlauf_change_penalty`
+- `stage2_special_rule_priority_penalty_step`
+- `stage2_special_rule_annual_penalty`
+- `stage2_global_quarter_undershoot_penalty`
+- `stage2_global_quarter_overshoot_penalty`
+- `stage2_soft_target_overshoot_penalty`
+- `stage2_time_limit_seconds`
+- `enforce_company_annual_target_consistency`
+- `btl_opt_refresh`
 
 ## Wichtige Grenzen / Ehrlichkeit
 
 - Wenn `target_value` nicht durch `step_value` teilbar ist, bricht der Lauf mit Fehler ab
 - Wenn harte bestehende Beauftragungen ein Quartalsziel bereits ueberfuellen, wird das offen gemeldet
 - Wenn `plan_stage1_results` fuer das Jahr leer ist, bricht der Lauf mit Fehler ab
-- Die Regeldatei verwendet ausschliesslich das Format `rule;value`
+- Die Regeldatei verwendet das Format `rule;value;description` (3-spaltig mit Semikolon)
 
 ## Beispiele fuer Eingabe-Fragen
 

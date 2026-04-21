@@ -31,17 +31,16 @@ class SolverConfig:
     stop_penalty: float = 500.0
     large_order_penalty: float = 700.0
     large_order_threshold: int = 40000
-    existing_small_amount_penalty: float = 500.0
+    existing_small_amount_penalty: float = 10000.0  # reserved, currently unused
     soft_target_penalty: float = 100.0
-    soft_target_undershoot_penalty: float = 10.0
+    soft_target_overshoot_penalty: float = 10.0
     active_ea_cap_per_quarter: int = 0
     hard_need_bonus: float = 50.0
     throughlauf_change_penalty: float = 2500.0
     special_rule_priority_penalty_step: float = 25.0
-    exact_rule_tolerance: int = 10000
     special_rule_annual_penalty: float = 500.0
-    global_quarter_overshoot_penalty: float = 500.0
-    global_quarter_undershoot_penalty: float = 5.0
+    global_quarter_undershoot_penalty: float = 500.0
+    global_quarter_overshoot_penalty: float = 5.0
     enforce_annual_consistency: bool = True
     time_limit_seconds: float = 120.0
 
@@ -84,18 +83,21 @@ def load_solver_config(rules: dict[str, str]) -> SolverConfig:
     return SolverConfig(
         activation_penalty=_as_float(rules, "stage2_activation_penalty", 100.0),
         quarter_activation_penalty=_as_float(rules, "stage2_quarter_activation_penalty", 50.0),
-        min_new_order_amount=_as_int(rules, "stage2_min_new_order_amount", 0),
+        min_new_order_amount=_as_int(rules, "stage2_min_new_order_amount", 10000),
         repeat_quarter_penalty=_as_float(rules, "stage2_repeat_quarter_penalty", 200.0),
         stop_penalty=_as_float(rules, "stage2_stop_penalty", 500.0),
         large_order_penalty=_as_float(rules, "stage2_large_order_penalty", 700.0),
         large_order_threshold=_as_int(rules, "stage2_large_order_threshold", 40000),
-        existing_small_amount_penalty=_as_float(rules, "stage2_existing_small_amount_penalty", 0.0),
+        existing_small_amount_penalty=_as_float(rules, "stage2_existing_small_amount_penalty", 10000.0),
         soft_target_penalty=_as_float(rules, "stage2_soft_target_penalty", 100.0),
         active_ea_cap_per_quarter=_as_int(rules, "stage2_active_ea_cap_per_quarter", 0),
         hard_need_bonus=_as_float(rules, "stage2_hard_need_bonus", 50.0),
         throughlauf_change_penalty=_as_float(rules, "stage2_throughlauf_change_penalty", 2500.0),
         special_rule_priority_penalty_step=_as_float(rules, "stage2_special_rule_priority_penalty_step", 25.0),
-        exact_rule_tolerance=_as_int(rules, "stage2_exact_rule_tolerance", 2000),
+        special_rule_annual_penalty=_as_float(rules, "stage2_special_rule_annual_penalty", 500.0),
+        global_quarter_undershoot_penalty=_as_float(rules, "stage2_global_quarter_undershoot_penalty", 500.0),
+        global_quarter_overshoot_penalty=_as_float(rules, "stage2_global_quarter_overshoot_penalty", 5.0),
+        soft_target_overshoot_penalty=_as_float(rules, "stage2_soft_target_overshoot_penalty", 10.0),
         enforce_annual_consistency=_as_bool(rules, "enforce_company_annual_target_consistency", True),
         time_limit_seconds=_as_float(rules, "stage2_time_limit_seconds", 120.0),
     )
@@ -327,19 +329,14 @@ def _current_period_company_actuals(
     actuals: dict[str, int] = defaultdict(int)
     for row in existing_rows:
         company = str(row["company"])
-        step = step_by_company.get(company, 1)
         amount = int(row["amount"] or 0)
         if status_label_for_raw_status(raw_status_from_note(row["note"])) in {"bestellt", "im Durchlauf"}:
-            actuals[company] += (amount // step) * step
-    return dict(actuals)
+            actuals[company] += amount
+    return {c: (v // step_by_company.get(c, 1)) * step_by_company.get(c, 1) for c, v in actuals.items()}
 
 
 def _min_new_units(step: int, min_amount: int) -> int:
     return max(1, (max(0, min_amount) + step - 1) // step)
-
-
-def _small_amount_max_units(step: int, threshold_amount: int) -> int:
-    return max(0, (max(0, threshold_amount) - 1) // max(1, step))
 
 
 def _min_order_exempt_ea_norms(special_rules: list[dict[str, Any]]) -> set[str]:
@@ -416,7 +413,6 @@ def solve_stage2(
     non_stoppable_keys: set[tuple[str, str, str]] = set()
     ordered_units_by_key: dict[tuple[str, str, str], int] = defaultdict(int)
     live_units_by_key: dict[tuple[str, str, str], int] = defaultdict(int)
-    small_amount_penalty_eligible_keys: set[tuple[str, str, str]] = set()
     for row in existing_rows:
         key = (str(row["company"]), str(row["quarter"]).upper(), str(row["ea_number"]))
         amount = int(row["amount"])
@@ -438,8 +434,6 @@ def solve_stage2(
             live_units_by_key[key] += units
         elif status_label == "im Durchlauf":
             live_units_by_key[key] += units
-        if status_label in {"Konzept", "im Durchlauf"} and not int(row["is_fixed"] or 0) and int(row["can_stop"] or 0):
-            small_amount_penalty_eligible_keys.add(key)
 
     effective_targets, step_by_company = _effective_targets(
         target_rows,
@@ -590,7 +584,7 @@ def solve_stage2(
             name=f"scope_soft_pos__{company}__{quarter}",
         )
         neg = model.addVariable(
-            lb=0.0, obj=config.soft_target_undershoot_penalty,
+            lb=0.0, obj=config.soft_target_overshoot_penalty,
             name=f"scope_soft_neg__{company}__{quarter}",
         )
         model.addConstr(expr + pos - neg == _target_value)
@@ -605,8 +599,8 @@ def solve_stage2(
             global_q_expr[quarter] += step * n_vars[(company, quarter, ea_number)]
         global_q_target[quarter] += tv
     for quarter in sorted(global_q_expr):
-        g_pos = model.addVariable(lb=0.0, obj=config.global_quarter_overshoot_penalty, name=f"global_q_pos__{quarter}")
-        g_neg = model.addVariable(lb=0.0, obj=config.global_quarter_undershoot_penalty, name=f"global_q_neg__{quarter}")
+        g_pos = model.addVariable(lb=0.0, obj=config.global_quarter_undershoot_penalty, name=f"global_q_pos__{quarter}")
+        g_neg = model.addVariable(lb=0.0, obj=config.global_quarter_overshoot_penalty, name=f"global_q_neg__{quarter}")
         model.addConstr(global_q_expr[quarter] + g_pos - g_neg == global_q_target[quarter])
         soft_constraints += 1
 
@@ -662,33 +656,6 @@ def solve_stage2(
             )
             model.addConstr(y_vars[key] + stop_var >= 1)
             soft_constraints += 1
-
-    if config.existing_small_amount_penalty > 0 and config.min_new_order_amount > 0:
-        for key in sorted(small_amount_penalty_eligible_keys):
-            company, quarter, ea_number = key
-            if key not in n_vars:
-                continue
-            if key in fixed_keys or key in non_stoppable_keys or ordered_units_by_key.get(key, 0) > 0:
-                continue
-            if company_year_totals[company] < config.min_new_order_amount:
-                continue
-            if _normalize_ea_number(ea_number) in min_order_exempt_ea_norms:
-                continue
-            if _quarter_index(quarter) >= planning_start_quarter:
-                continue  # hard min constraint already enforces >= min_new_order or 0
-            step = step_by_company[company]
-            max_units = max(0, hard_company_annual_targets.get(company, 0) // step)
-            small_max_units = _small_amount_max_units(step, config.min_new_order_amount)
-            if small_max_units < 1:
-                continue
-            small_amount_var = model.addBinary(
-                obj=config.existing_small_amount_penalty,
-                name=f"small_existing__{company}__{quarter}__{ea_number}",
-            )
-            model.addConstr(small_amount_var <= y_vars[key])
-            model.addConstr(n_vars[key] <= small_max_units + max_units * (1 - small_amount_var))
-            model.addConstr(n_vars[key] >= (small_max_units + 1) * (y_vars[key] - small_amount_var))
-            soft_constraints += 3
 
     if config.large_order_penalty > 0 and config.large_order_threshold > 0:
         for key, n_var in n_vars.items():
@@ -810,7 +777,6 @@ def solve_stage2(
                 f"Sondervorgabe {rule['topic']} nicht hart erzwungen: Ziel {rule['target_amount']} > Solver-Kapazitaet {annual_capacity}."
             )
             continue
-        tol = config.exact_rule_tolerance
         sr_pos = model.addVariable(lb=0.0, obj=config.special_rule_annual_penalty, name=f"sr_annual_pos__{rule['topic']}")
         sr_neg = model.addVariable(lb=0.0, obj=config.special_rule_annual_penalty, name=f"sr_annual_neg__{rule['topic']}")
         model.addConstr(expr + sr_pos - sr_neg == rule["target_amount"])
