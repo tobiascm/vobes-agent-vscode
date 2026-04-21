@@ -77,6 +77,8 @@
   → PFLICHT: Skill `$skill-m365-file-reader` laden und befolgen. Liest PPTX, XLSX, DOCX, PDF und Bilder ueber Graph API.
 - M365 Mail Search | Mail suchen | Outlook durchsuchen | finde Mail zu | habe ich eine Mail von | Mail-Suche | E-Mail finden | Postfach durchsuchen  
   → PFLICHT: Skill `$skill-m365-copilot-mail-search` laden und befolgen. Durchsucht Outlook-Mails ueber Graph Search API. Benoetigt Teams-Token mit Mail.Read Scope.
+- Teams-Nachricht senden | Teams Chat | schicke Nachricht an | Teams Message | schreib in Teams | Teams 1:1 Chat  
+  → PFLICHT: Skill `$skill-teams-chat` laden und befolgen. Sendet 1:1 Chat-Nachrichten ueber Teams Chat Service API. Empfaenger-Email aufloesen: **zuerst** Adress-Cache (`outlook_address_cache.py` → `lookup_cached_addresses()`), nur bei Cache-Miss auf `$skill-personensuche-groupfind` zurueckfallen.
 - Namen | Gremien | wichtige Websites | Confluence-Seiten | Orga-Infos im `EKEK/1`-/`EKEK`-/`VOBES`-Kontext  
   → PFLICHT: Skill `$skill-orga-ekek1` laden und befolgen. Zentrale Nachschlagequelle fuer Personen, Rollen, Regeltermine, Standardseiten und organisatorische Einordnung.
 - Mail-Fall | Mail-Agent im `EKEK/1`-/`EKEK`-/`VOBES`-Kontext mit Personen-, Meeting-, Website- oder Seitenbezug  
@@ -86,9 +88,11 @@
   → PFLICHT: Skill `$skill-m365-graph-scope-probe` laden und befolgen. Diagnose fuer Graph-Token, fehlende Scopes und 401/403 bei M365-Skills.
 - Outlook Mail suchen | Mail-Thread | verwandte Mails | Mail vollstaendig lesen | Mail-Body | alle Empfaenger | Outlook Suche | wer hat noch ueber X geschrieben | Mail nachladen  
   → PFLICHT: Skill `$skill-outlook` laden und befolgen. Durchsucht lokales Outlook per COM (Suche, Thread-Sicht, verwandte Mails, einzelne Mail vollstaendig lesen).
+- Mail schreiben | Mail erstellen | Entwurf erstellen | Draft erstellen | Mail beantworten | Reply schreiben | neue Mail  
+  → PFLICHT: Skill `$skill-outlook` laden und `compose`-Befehl verwenden. NIEMALS manuell per PowerShell/COM eine Mail erstellen — immer ueber das Script. Empfaenger-Email aufloesen: **zuerst** Adress-Cache (`outlook_address_cache.py` → `lookup_cached_addresses()`), nur bei Cache-Miss auf `$skill-personensuche-groupfind` zurueckfallen. Neue Mail: `--signature lang` (Default). Antwort/Reply: `--signature kurz`. Kein Gruss/Abschied im Body — Signatur enthaelt bereits Grussformel + Name + Kontaktdaten.
 - ChatGPT Research | frage ChatGPT | ChatGPT antworten lassen | was sagt ChatGPT zu | schicke Frage an ChatGPT  
   → PFLICHT: Skill `$skill-chatgpt-research` laden und befolgen. Stellt Frage an ChatGPT via Playwright CDP und speichert Antwort als Markdown.
-- Datei konvertieren | lokale Datei nach PDF | PPTX nach PDF | Word nach PDF | Excel nach PDF | Datei nach Markdown | Dokument in Markdown umwandeln | Clipboard-Bild nach Markdown | Zwischenablage nach Markdown | Screenshot konvertieren  
+- Datei konvertieren| lokale Datei nach PDF | PPTX nach PDF | Word nach PDF | Excel nach PDF | Datei nach Markdown | Dokument in Markdown umwandeln | Clipboard-Bild nach Markdown | Zwischenablage nach Markdown | Screenshot konvertieren  
   → PFLICHT: Skill `$skill-file-converter` laden und befolgen. Konvertiert lokale Dateien nach PDF (Office COM) oder Markdown (lightrag LLM-Pipeline). Mit `--clipboard` auch direkt aus der Zwischenablage.
 - SharePoint-Liste lesen | Listen-Eintraege abrufen | SharePoint Items filtern | Listendaten extrahieren | SharePoint REST API | DispForm-Daten lesen | SharePoint-Listen durchsuchen | SharePoint-Ordner auflisten | SharePoint-Suche | Site-Metadaten | SharePoint Dokumentbibliothek | SharePoint Pages  
   → PFLICHT: Skill `$skill-sharepoint` laden und befolgen. Liest SharePoint-Daten per REST API ueber die Playwright-Browser-Session (SSO-Auth). Listen (Items, Filter, Paging), Dokumentbibliotheken, Suche, Site Pages, Benutzer.
