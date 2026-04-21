@@ -231,17 +231,22 @@ def _collect_screenshots(start: datetime, end: datetime) -> list[dict]:
 
 
 def _download_recording(it: Item, hdr: dict[str, str], out: Path) -> Path:
-    hdr_sp = {"Authorization": f"Bearer {sp_token()}", "Accept": "application/json"}
+    tok = sp_token()
     drive = _drive_id(hdr)
     r = requests.get(
         f"https://{SP_HOST}/_api/v2.1/drives/{drive}/items/{it.item_id}/media/transcripts",
-        headers=hdr_sp, timeout=30,
+        headers={"Authorization": f"Bearer {tok}", "Accept": "application/json"}, timeout=30,
     )
     r.raise_for_status()
     entries = r.json().get("value", [])
     if not entries:
         raise RuntimeError(f"Kein Transkript fuer {it.name} verfuegbar.")
-    dr = requests.get(entries[0]["temporaryDownloadUrl"], timeout=60)
+    tr_id = entries[0]["id"]
+    # applymediaedits=false ist Pflicht: Default-Variante (temporaryDownloadUrl) liefert
+    # ein "edited" VTT ohne <v Speaker>-Tags. Nur dieser Pfad gibt Sprecher zurueck.
+    url = (f"https://{SP_HOST}/_api/v2.1/drives/{drive}/items/{it.item_id}"
+           f"/media/transcripts/{tr_id}/streamContent?is=1&applymediaedits=false")
+    dr = requests.get(url, headers={"Authorization": f"Bearer {tok}"}, timeout=60)
     dr.raise_for_status()
     dst = out / "transcript.vtt"
     dst.write_bytes(dr.content)
