@@ -596,7 +596,7 @@ def create_appointment(
     local_start_tz = local_tz
     local_end_tz = local_tz
     item.Location = _coerce_text(location).strip()
-    item.Body = _coerce_text(body)
+    item.Body = _coerce_text(body).replace("\\n", "\n")
     if teams:
         item.IsOnlineMeeting = True
     _add_recipients(item, required_results, OL_REQUIRED)
@@ -665,7 +665,7 @@ def update_appointment(
         keep_draft = _coerce_text(_safe_get(item, "Subject", "")).lower().startswith(DRAFT_PREFIX.lower()) and send_mode != "send"
         item.Subject = _effective_subject(subject, draft=keep_draft)
     if body is not None:
-        item.Body = _coerce_text(body)
+        item.Body = _coerce_text(body).replace("\\n", "\n")
     if location is not None:
         item.Location = _coerce_text(location).strip()
     if teams is not None:

@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import re
 import sys
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 EXPLORER_SEARCH_SCOPES = {
@@ -1146,6 +1148,61 @@ def outlook_read_email(entry_id: str, store_id: str = "", *, include_body: bool 
     return payload
 
 
+# ---------------------------------------------------------------------------
+# compose – create a draft and open its inspector window
+# ---------------------------------------------------------------------------
+
+_SIGNATURES_DIR = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Signatures"
+
+
+def _load_signature_html(name: str) -> str:
+    """Load an Outlook signature HTM file by display name (prefix match)."""
+    for htm in sorted(_SIGNATURES_DIR.glob("*.htm")):
+        if htm.stem.lower().startswith(name.lower()):
+            return htm.read_text(encoding="utf-8", errors="replace")
+    raise FileNotFoundError(f"Signature '{name}' not found in {_SIGNATURES_DIR}")
+
+
+def _plain_to_html(text: str) -> str:
+    """Convert plain-text body to simple HTML paragraphs."""
+    import html as _html
+
+    paragraphs = text.split("\n\n")
+    parts: list[str] = []
+    for p in paragraphs:
+        lines = p.strip().splitlines()
+        parts.append('<p style="margin:0;">' + "<br>".join(_html.escape(l) for l in lines) + "</p>")
+    return '<div style="font-family:Calibri,sans-serif;font-size:11pt;">' + "".join(parts) + "</div>"
+
+
+def compose_draft(
+    to: str,
+    subject: str = "",
+    body: str = "",
+    cc: str = "",
+    signature: str = "lang",
+    display: bool = True,
+) -> dict[str, Any]:
+    """Create an Outlook draft with HTML signature and optionally open it."""
+    app, _, _ = _lazy_outlook_context()
+    mail = app.CreateItem(0)
+    mail.To = to
+    if cc:
+        mail.CC = cc
+    mail.Subject = subject
+
+    body_html = _plain_to_html(body) if body else ""
+    sig_html = _load_signature_html(signature) if signature else ""
+    mail.HTMLBody = body_html + ("<br>" + sig_html if sig_html else "")
+
+    if display:
+        mail.Display()
+    else:
+        mail.Save()
+
+    return {"status": "ok", "to": to, "subject": subject, "displayed": display}
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Classic Outlook search and diagnostics.",
@@ -1234,6 +1291,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "inspect-selection",
         help="Inspect the currently selected or open Outlook item, including EntryID/StoreID/folder path.",
     )
+
+    compose_parser = subparsers.add_parser("compose", help="Create a draft mail with signature and open it.")
+    compose_parser.add_argument("--to", required=True, help="Recipient(s), semicolon-separated.")
+    compose_parser.add_argument("--cc", default="", help="CC recipient(s), semicolon-separated.")
+    compose_parser.add_argument("--subject", default="", help="Mail subject.")
+    compose_parser.add_argument("--body", default="", help="Plain-text body (blank lines = paragraphs). No greeting/closing needed — signature covers that.")
+    compose_parser.add_argument("--body-file", default="", help="Read body from a text file instead of --body.")
+    compose_parser.add_argument("--signature", default="lang", help="Signature name prefix (default: 'lang'). Use '' to skip.")
+    compose_parser.add_argument("--no-display", action="store_true", help="Save as draft without opening the compose window.")
+
     return parser
 
 
@@ -1262,6 +1329,18 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.command == "inspect-selection":
         payload = inspect_selected_email()
+    elif args.command == "compose":
+        body = args.body
+        if args.body_file:
+            body = Path(args.body_file).read_text(encoding="utf-8")
+        payload = compose_draft(
+            to=args.to,
+            subject=args.subject,
+            body=body,
+            cc=args.cc,
+            signature=args.signature,
+            display=not args.no_display,
+        )
     else:
         payload = outlook_read_email(
             args.entry_id,

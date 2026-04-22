@@ -1,12 +1,19 @@
 ---
 name: skill-outlook
-description: "Outlook COM Skill: Mails suchen (freie Suche, Thread-Sicht, verwandte Mails), einzelne Mail vollstaendig lesen. Trigger: Mail suchen Outlook, verwandte Mails, Thread-Mails, Mail-Kontext, wer hat noch ueber X geschrieben, Outlook Suche, Mail vollstaendig lesen, Mail-Body anzeigen, alle Empfaenger, Mail nachladen."
+description: "Outlook COM Skill: Mails suchen (freie Suche, Thread-Sicht, verwandte Mails), einzelne Mail vollstaendig lesen, Mail-Entwurf erstellen und mit Signatur oeffnen. Trigger: Mail suchen Outlook, verwandte Mails, Thread-Mails, Mail-Kontext, wer hat noch ueber X geschrieben, Outlook Suche, Mail vollstaendig lesen, Mail-Body anzeigen, alle Empfaenger, Mail nachladen, Mail erstellen, Entwurf erstellen, Draft erstellen."
 ---
 
 # Skill: Outlook
 
 Outlook-Skill ueber **Outlook COM** (lokales Postfach).
-Deckt Suche, Thread-Sicht, verwandte Mails und vollstaendiges Lesen einzelner Mails ab.
+Deckt Suche, Thread-Sicht, verwandte Mails, vollstaendiges Lesen einzelner Mails und **Erstellen von Mail-Entwuerfen mit Signatur** ab.
+
+**Wichtig fuer compose:** Die Signatur enthaelt bereits Grussformel + Name + Kontaktdaten. Der Body-Text darf daher **kein** „Viele Gruesse", „Mit freundlichen Gruessen" o.ae. enthalten – das kommt automatisch ueber die Signatur.
+
+| Anlass | Signatur (`--signature`) |
+|--------|--------------------------|
+| **Neue Mail** | `lang` (Default) |
+| **Antwort / Reply** | `kurz` |
 
 Script: `.agents/skills/skill-outlook/scripts/outlook_search_tools.py`
 
@@ -106,6 +113,37 @@ python .agents/skills/skill-outlook/scripts/outlook_search_tools.py inspect-sele
 ```
 
 Liefert EntryID, StoreID, Folder-Pfad und Store-Details der aktuell in Outlook markierten Mail.
+
+### compose — Mail-Entwurf erstellen und oeffnen
+
+```bash
+python .agents/skills/skill-outlook/scripts/outlook_search_tools.py compose \
+  --to "vorname.nachname@volkswagen.de" \
+  --subject "Betreff hier" \
+  --body "Hallo Max,\n\nhier der Mailtext.\n\nBitte bis Freitag erledigen."
+```
+
+Oder Body aus Datei lesen:
+
+```bash
+python .agents/skills/skill-outlook/scripts/outlook_search_tools.py compose \
+  --to "a@vw.de; b@vw.de" --cc "c@vw.de" \
+  --subject "Betreff" \
+  --body-file "pfad/zur/body.txt" \
+  --signature "lang"
+```
+
+| Parameter | Beschreibung |
+|-----------|-------------|
+| `--to` | Empfaenger (Pflicht). Mehrere per Semikolon trennen |
+| `--cc` | CC-Empfaenger (optional) |
+| `--subject` | Betreff |
+| `--body` | Mailtext als Plain-Text. Leerzeilen = neue Absaetze. **Kein Gruss/Abschied noetig — Signatur enthaelt bereits Grussformel + Name + Kontaktdaten** |
+| `--body-file` | Body aus Textdatei lesen (statt `--body`) |
+| `--signature` | Signatur-Name (Default: `lang`). Leerer String = keine Signatur |
+| `--no-display` | Nur als Entwurf speichern, Fenster nicht oeffnen |
+
+**Wichtig:** Die Signatur `lang` enthaelt bereits die Grussformel („Mit freundlichen Gruessen" / „Viele Gruesse") und die Kontaktdaten. Der `--body`-Text soll daher **ohne** abschliessenden Gruss enden.
 
 ## Workflow
 
