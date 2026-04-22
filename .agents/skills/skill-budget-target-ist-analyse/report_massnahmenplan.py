@@ -1514,6 +1514,14 @@ _SUBGROUP_AREAS: dict[str, str] = {
 _CATCH_ALL_HINTS = ("WEITERE", "SONSTIGE", "OTHER")
 _MARKER_OVERRIDES: dict[str, str] = {"VWGS": "VOLKSWAGEN GROUP SERVICES"}
 _MATRIX_START_COL = 10
+_MATRIX_LABEL_COL = 9
+_IST_UNDER_90_FILL = PatternFill("solid", fgColor="F4B183")
+_IST_UNDER_75_FILL = PatternFill("solid", fgColor="FFC7CE")
+_IST_OVER_110_FILL = PatternFill("solid", fgColor="B4A7D6")
+
+
+def _current_quarter() -> str:
+    return f"Q{((datetime.date.today().month - 1) // 3) + 1}"
 
 
 def _matrix_marker_for_label(label: str) -> str:
@@ -1731,6 +1739,7 @@ def _build_ea_matrix(
     _annual_targets, quarter_targets = _load_reporting_company_targets(year)
     groups = _build_matrix_groups(entries, quarter_targets)
     ea_totals: dict[str, dict[str, Any]] = defaultdict(lambda: {"quarters": defaultdict(int), "total": 0, "status": {}})
+    open_values = {group: {q: 0 for q in QUARTERS} for group in groups}
 
     for entry in entries:
         ea_key = _normalize_ea_key(entry.get("ea_number") or entry.get("ea"))
@@ -1746,6 +1755,8 @@ def _build_ea_matrix(
         if prev is None or _STATUS_PRIORITY.get(label, 99) < _STATUS_PRIORITY.get(prev, 99):
             ea_totals[ea_key]["status"][key] = label
         ea_totals[ea_key]["total"] += value
+        if label != "bestellt":
+            open_values[group][quarter] += value
         if ea_key not in metadata:
             metadata[ea_key] = {
                 "ea": ea_key,
@@ -1802,7 +1813,7 @@ def _build_ea_matrix(
             grp = _matrix_group_for_entry(entry, groups)
             ist[grp][quarter] += int(entry.get("value") or 0)
 
-    return {"groups": groups, "rows": rows, "soll": soll, "ist": ist}
+    return {"groups": groups, "rows": rows, "soll": soll, "ist": ist, "open": open_values, "current_quarter": _current_quarter()}
 
 
 def _copy_cell_style(cell) -> dict[str, Any]:
@@ -1839,23 +1850,39 @@ def _apply_row_style(ws, row_idx: int, template: tuple[float | None, list[dict[s
         _apply_cell_style(ws.cell(row_idx, col_idx), style)
 
 
-def _copy_matrix_block_style(ws) -> dict[str, Any]:
+def _matrix_header_row(ws) -> int:
+    for row_idx in range(1, min(ws.max_row or 1, 12) + 1):
+        if _strip_markdown(str(ws.cell(row_idx, 1).value or "")).upper() == "EA":
+            return row_idx
+    return 4
+
+
+def _matrix_row_by_label(ws, label: str, default: int) -> int:
+    needle = label.upper()
+    for row_idx in range(1, min(ws.max_row or 1, 12) + 1):
+        if _strip_markdown(str(ws.cell(row_idx, _MATRIX_LABEL_COL).value or "")).upper() == needle:
+            return row_idx
+    return default
+
+
+def _copy_matrix_block_style(ws, header_row: int) -> dict[str, Any]:
+    widths = [
+        ws.column_dimensions[get_column_letter(_MATRIX_START_COL + offset)].width
+        for offset in range(len(QUARTERS))
+    ]
     return {
-        "widths": [
-            ws.column_dimensions[get_column_letter(_MATRIX_START_COL + offset)].width
-            for offset in range(len(QUARTERS))
-        ],
+        "quarter_width": min((width for width in widths if width is not None), default=None),
         "rows": {
             row_idx: [
                 _copy_cell_style(ws.cell(row_idx, _MATRIX_START_COL + offset))
                 for offset in range(len(QUARTERS))
             ]
-            for row_idx in range(1, 5)
+            for row_idx in range(1, header_row + 1)
         },
     }
 
 
-def _reset_matrix_columns(ws, groups: dict[str, tuple[int, str]], block_style: dict[str, Any]) -> None:
+def _reset_matrix_columns(ws, groups: dict[str, tuple[int, str]], block_style: dict[str, Any], header_row: int) -> None:
     for merged_range in list(ws.merged_cells.ranges):
         if merged_range.min_col >= _MATRIX_START_COL:
             ws.unmerge_cells(str(merged_range))
@@ -1865,14 +1892,26 @@ def _reset_matrix_columns(ws, groups: dict[str, tuple[int, str]], block_style: d
     for label, (start_col, _marker) in groups.items():
         for offset, quarter in enumerate(QUARTERS):
             col_idx = start_col + offset
-            width = block_style["widths"][offset]
+            width = block_style["quarter_width"]
             if width is not None:
                 ws.column_dimensions[get_column_letter(col_idx)].width = width
             for row_idx, row_styles in block_style["rows"].items():
                 _apply_cell_style(ws.cell(row_idx, col_idx), row_styles[offset])
-            ws.cell(4, col_idx).value = quarter
+            ws.cell(header_row, col_idx).value = quarter
         ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=start_col + len(QUARTERS) - 1)
         ws.cell(1, start_col).value = label
+
+
+def _apply_ist_deviation_fill(cell, ist: int, soll: int) -> None:
+    if soll <= 0:
+        return
+    ratio = ist / soll
+    if ratio < 0.75:
+        cell.fill = copy(_IST_UNDER_75_FILL)
+    elif ratio < 0.95:
+        cell.fill = copy(_IST_UNDER_90_FILL)
+    elif ratio > 1.05:
+        cell.fill = copy(_IST_OVER_110_FILL)
 
 
 def _write_ea_matrix(ws, matrix: dict[str, Any] | None) -> None:
@@ -1880,22 +1919,38 @@ def _write_ea_matrix(ws, matrix: dict[str, Any] | None) -> None:
         return
     groups = matrix.get("groups") or {}
     max_matrix_col = _MATRIX_START_COL - 1 + len(groups) * len(QUARTERS)
-    block_style = _copy_matrix_block_style(ws)
-    data_style = _copy_row_style(ws, 5)
-    category_style = _copy_row_style(ws, 7)
-    if ws.max_row >= 5:
-        ws.delete_rows(5, ws.max_row - 4)
-    _reset_matrix_columns(ws, groups, block_style)
-    ws.freeze_panes = "C5"
+    header_row = _matrix_header_row(ws)
+    soll_row = _matrix_row_by_label(ws, "Soll", 2)
+    ist_row = _matrix_row_by_label(ws, "Ist", 3)
+    open_row = _matrix_row_by_label(ws, "davon offen", 4)
+    data_start_row = header_row + 1
+    block_style = _copy_matrix_block_style(ws, header_row)
+    data_style = _copy_row_style(ws, data_start_row)
+    category_style = _copy_row_style(ws, data_start_row + 2)
+    if ws.max_row >= data_start_row:
+        ws.delete_rows(data_start_row, ws.max_row - header_row)
+    _reset_matrix_columns(ws, groups, block_style, header_row)
+    ws.freeze_panes = f"C{data_start_row}"
 
     ws["A2"] = f"Stand: {datetime.date.today().strftime('%d.%m.%Y')}"
+    current_quarter = str(matrix.get("current_quarter") or _current_quarter())
     for group, (start_col, _marker) in groups.items():
         for offset, quarter in enumerate(QUARTERS):
             col_idx = start_col + offset
-            ws.cell(2, col_idx).value = round(matrix["soll"].get(group, {}).get(quarter, 0) / 1000)
-            ws.cell(3, col_idx).value = round(matrix["ist"].get(group, {}).get(quarter, 0) / 1000)
+            soll = int(matrix["soll"].get(group, {}).get(quarter, 0))
+            ist = int(matrix["ist"].get(group, {}).get(quarter, 0))
+            ws.cell(soll_row, col_idx).value = round(soll / 1000)
+            ist_cell = ws.cell(ist_row, col_idx)
+            ist_cell.value = round(ist / 1000)
+            open_cell = ws.cell(open_row, col_idx)
+            open_value = round(matrix.get("open", {}).get(group, {}).get(quarter, 0) / 1000)
+            open_cell.value = open_value or None
+            open_cell.alignment = copy(ist_cell.alignment)
+            if open_value and quarter == current_quarter:
+                open_cell.fill = copy(_STATUS_FILL_MAP["im Durchlauf"])
+            _apply_ist_deviation_fill(ist_cell, ist, soll)
 
-    current_row = 5
+    current_row = data_start_row
     for category in EA_MATRIX_CATEGORIES:
         category_rows = [row for row in matrix["rows"] if row["category"] == category]
         if not category_rows:
@@ -1934,12 +1989,12 @@ def _write_ea_matrix(ws, matrix: dict[str, Any] | None) -> None:
             current_row += 1
 
     last = current_row - 1
-    if last >= 5:
+    if last >= data_start_row:
         pct_rule = ColorScaleRule(start_type="num", start_value=0, start_color="FFFFFF", end_type="num", end_value=0.05, end_color="00B050")
         num_rule = ColorScaleRule(start_type="num", start_value=0, start_color="FFFFFF", end_type="num", end_value=200, end_color="00B050")
         for col in ("E", "F", "H"):
-            ws.conditional_formatting.add(f"{col}5:{col}{last}", pct_rule)
-        ws.conditional_formatting.add(f"G5:G{last}", num_rule)
+            ws.conditional_formatting.add(f"{col}{data_start_row}:{col}{last}", pct_rule)
+        ws.conditional_formatting.add(f"G{data_start_row}:G{last}", num_rule)
 
 
 def _merge_quarter_todo_entries(

@@ -4,6 +4,7 @@ import importlib.util
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.utils import get_column_letter
 
 
 MODULE_PATH = (
@@ -190,6 +191,7 @@ def test_ea_matrix_groups_use_entries_and_target_only_companies(monkeypatch):
 
     assert list(matrix["groups"]) == ["Ist Firma GmbH", "ZIEL FIRMA GMBH"]
     assert matrix["ist"]["Ist Firma GmbH"]["Q1"] == 10_000
+    assert matrix["open"]["Ist Firma GmbH"]["Q1"] == 10_000
     assert matrix["soll"]["ZIEL FIRMA GMBH"]["Q1"] == 50_000
 
 
@@ -274,8 +276,25 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
         max_columns=1,
         ea_matrix={
             "groups": matrix_groups,
-            "soll": {**groups, "THIESEN Spez.": {"Q1": 100_000}, "THIESEN Support": {"Q1": 200_000}},
-            "ist": {**groups, "THIESEN Spez.": {"Q1": 22_000}, "THIESEN Support": {"Q2": 33_000}},
+            "soll": {
+                **groups,
+                "4SOFT": {"Q1": 100_000},
+                "THIESEN Spez.": {"Q1": 100_000},
+                "THIESEN Support": {"Q1": 200_000},
+            },
+            "ist": {
+                **groups,
+                "4SOFT": {"Q1": 111_000},
+                "THIESEN Spez.": {"Q1": 80_000},
+                "THIESEN Support": {"Q1": 140_000, "Q2": 33_000},
+            },
+            "open": {
+                **groups,
+                "4SOFT": {"Q1": 11_000},
+                "THIESEN Spez.": {"Q1": 22_000, "Q2": 0},
+                "THIESEN Support": {"Q1": 50_000, "Q2": 33_000},
+            },
+            "current_quarter": "Q2",
             "rows": [
                 {
                     "category": "Fahrzeugprojekte",
@@ -324,25 +343,43 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
         if ws.cell(1, col).value
     }
 
-    assert ws.freeze_panes == "C5"
+    assert ws.freeze_panes == "C6"
     assert starts == {"4SOFT": 10, "THIESEN Spez.": 14, "THIESEN Support": 18, "Weitere": 22}
     assert {str(rng) for rng in ws.merged_cells.ranges} >= {"J1:M1", "N1:Q1", "R1:U1", "V1:Y1"}
     assert ws.cell(2, starts["THIESEN Spez."]).value == 100
     assert ws.cell(2, starts["THIESEN Support"]).value == 200
-    assert ws.cell(3, starts["THIESEN Spez."]).value == 22
+    assert ws.cell(3, starts["4SOFT"]).value == 111
+    assert ws.cell(3, starts["THIESEN Spez."]).value == 80
+    assert ws.cell(3, starts["THIESEN Support"]).value == 140
     assert ws.cell(3, starts["THIESEN Support"] + 1).value == 33
-    assert [ws[f"B{row}"].value for row in (5, 7, 9)] == [
+    assert ws.cell(4, starts["4SOFT"]).value == 11
+    assert ws.cell(4, starts["THIESEN Spez."]).value == 22
+    assert ws.cell(4, starts["THIESEN Spez."] + 1).value is None
+    assert ws.cell(4, starts["THIESEN Support"]).value == 50
+    assert ws.cell(4, starts["THIESEN Support"] + 1).value == 33
+    assert ws.cell(4, starts["THIESEN Support"] + 1).alignment.horizontal == ws.cell(3, starts["THIESEN Support"] + 1).alignment.horizontal
+    assert ws.cell(4, starts["THIESEN Support"] + 1).fill.fgColor.rgb.endswith("FFC000")
+    assert ws.cell(3, starts["4SOFT"]).fill.fgColor.rgb.endswith("B4A7D6")
+    assert ws.cell(3, starts["THIESEN Spez."]).fill.fgColor.rgb.endswith("F4B183")
+    assert ws.cell(3, starts["THIESEN Support"]).fill.fgColor.rgb.endswith("FFC7CE")
+    quarter_widths = {
+        ws.column_dimensions[get_column_letter(col_idx)].width
+        for start_col in starts.values()
+        for col_idx in range(start_col, start_col + 4)
+    }
+    assert quarter_widths == {6.85546875}
+    assert [ws[f"B{row}"].value for row in (6, 8, 10)] == [
         "Sondervereinbarungen",
         "Serienbetreuung",
         "Fahrzeugprojekte",
     ]
-    assert ws["A6"].value == "43932"
-    assert ws.cell(6, starts["4SOFT"]).value == 11
-    assert ws["A8"].value == "1800"
-    assert ws.cell(8, starts["THIESEN Spez."]).value == 22
-    assert ws.cell(8, starts["THIESEN Support"] + 1).value == 33
-    assert ws["A10"].value == "999"
-    assert ws.cell(10, starts["Weitere"] + 3).value == 44
+    assert ws["A7"].value == "43932"
+    assert ws.cell(7, starts["4SOFT"]).value == 11
+    assert ws["A9"].value == "1800"
+    assert ws.cell(9, starts["THIESEN Spez."]).value == 22
+    assert ws.cell(9, starts["THIESEN Support"] + 1).value == 33
+    assert ws["A11"].value == "999"
+    assert ws.cell(11, starts["Weitere"] + 3).value == 44
 
 
 def test_write_xlsx_report_creates_neutral_tables_only_on_korrektur(tmp_path):
