@@ -276,7 +276,7 @@ def test_live_btl_rows_are_augmented_as_existing_orders_for_single_scope_company
     assert rows == {("Firma A", "Q1", "EA_LIVE"): 50}
 
 
-def test_special_rule_annual_targets_are_enforced(monkeypatch):
+def test_special_rule_annual_targets_are_enforced():
     conn = _conn()
     conn.execute(
         """
@@ -289,25 +289,21 @@ def test_special_rule_annual_targets_are_enforced(monkeypatch):
     _insert_stage1(conn, [("EA1", 100, 0), ("EA2", 100, 0)])
     conn.commit()
 
-    monkeypatch.setattr(
-        solver,
-        "_load_special_rule_constraints",
-        lambda known_companies, current_period_quarter: [
-            {
-                "topic": "Testregel",
-                "ea_keys": {"1"},
-                "candidate_eas": {"EA1"},
-                "allowed_companies": set(),
-                "priority_companies": [],
-                "target_amount": 100,
-                "period_target_amount": None,
-                "enforce_period_exact": False,
-            }
-        ],
-    )
+    rules = [
+        {
+            "topic": "Testregel",
+            "ea_keys": {"1"},
+            "candidate_eas": {"EA1"},
+            "allowed_companies": set(),
+            "priority_companies": [],
+            "target_amount": 100,
+            "period_target_amount": None,
+            "enforce_period_exact": False,
+        }
+    ]
 
     cfg = solver.SolverConfig(min_new_order_amount=0)
-    solver.solve_stage2(conn, year=2026, config=cfg, planning_start_quarter=1)
+    solver.solve_stage2(conn, year=2026, config=cfg, planning_start_quarter=1, special_rules=rules)
 
     total = conn.execute(
         "SELECT SUM(amount) AS total FROM plan_stage2_results WHERE ea_number = 'EA1'"
@@ -315,7 +311,7 @@ def test_special_rule_annual_targets_are_enforced(monkeypatch):
     assert total == 100
 
 
-def test_allowed_special_rule_company_gets_extra_candidate(monkeypatch):
+def test_allowed_special_rule_company_gets_extra_candidate():
     conn = _conn()
     conn.execute(
         """
@@ -328,30 +324,26 @@ def test_allowed_special_rule_company_gets_extra_candidate(monkeypatch):
     _insert_stage1(conn, [("EA1", 100, 0)])
     conn.commit()
 
-    monkeypatch.setattr(
-        solver,
-        "_load_special_rule_constraints",
-        lambda known_companies, current_period_quarter: [
-            {
-                "topic": "PMT",
-                "ea_keys": {"1"},
-                "candidate_eas": {"EA1"},
-                "allowed_companies": {"Firma B"},
-                "priority_companies": ["Firma A", "Firma B"],
-                "target_amount": 100,
-                "period_target_amount": 100,
-                "enforce_period_exact": True,
-            }
-        ],
-    )
+    rules = [
+        {
+            "topic": "PMT",
+            "ea_keys": {"1"},
+            "candidate_eas": {"EA1"},
+            "allowed_companies": {"Firma B"},
+            "priority_companies": ["Firma A", "Firma B"],
+            "target_amount": 100,
+            "period_target_amount": 100,
+            "enforce_period_exact": True,
+        }
+    ]
 
-    solver.solve_stage2(conn, year=2026, config=_config(), planning_start_quarter=1)
+    solver.solve_stage2(conn, year=2026, config=_config(), planning_start_quarter=1, special_rules=rules)
 
     rows = _rows_by_key(conn)
     assert rows == {("Firma B", "Q1", "EA1"): 100}
 
 
-def test_special_rule_can_create_canonical_ea_without_existing_variant(monkeypatch):
+def test_special_rule_can_create_canonical_ea_without_existing_variant():
     conn = _conn()
     conn.execute(
         """
@@ -362,25 +354,21 @@ def test_special_rule_can_create_canonical_ea_without_existing_variant(monkeypat
     _insert_stage1(conn, [("EA1", 100, 0)])
     conn.commit()
 
-    monkeypatch.setattr(
-        solver,
-        "_load_special_rule_constraints",
-        lambda known_companies, current_period_quarter: [
-            {
-                "topic": "KUE",
-                "ea_keys": {"93037"},
-                "candidate_eas": {"0093037"},
-                "allowed_companies": {"Firma B"},
-                "priority_companies": ["Firma B"],
-                "target_amount": 100,
-                "period_target_amount": None,
-                "enforce_period_exact": False,
-            }
-        ],
-    )
+    rules = [
+        {
+            "topic": "KUE",
+            "ea_keys": {"93037"},
+            "candidate_eas": {"0093037"},
+            "allowed_companies": {"Firma B"},
+            "priority_companies": ["Firma B"],
+            "target_amount": 100,
+            "period_target_amount": None,
+            "enforce_period_exact": False,
+        }
+    ]
 
     cfg = solver.SolverConfig(min_new_order_amount=0)
-    solver.solve_stage2(conn, year=2026, config=cfg, planning_start_quarter=1)
+    solver.solve_stage2(conn, year=2026, config=cfg, planning_start_quarter=1, special_rules=rules)
 
     rows = _rows_by_key(conn)
     assert rows == {("Firma B", "Q1", "0093037"): 100}
@@ -417,7 +405,7 @@ def test_hard_company_targets_keep_explicit_edag_target(monkeypatch):
     assert targets["BERTRANDT INGENIEURBUERO GMBH TAPPENBECK"] == 905000
 
 
-def test_pmt_period_target_is_enforced(monkeypatch):
+def test_pmt_period_target_is_enforced():
     conn = _conn()
     conn.execute(
         """
@@ -432,24 +420,20 @@ def test_pmt_period_target_is_enforced(monkeypatch):
     _insert_stage1(conn, [("EA1", 400, 0)])
     conn.commit()
 
-    monkeypatch.setattr(
-        solver,
-        "_load_special_rule_constraints",
-        lambda known_companies, current_period_quarter: [
-            {
-                "topic": "PMT",
-                "ea_keys": {"1"},
-                "candidate_eas": {"EA1"},
-                "allowed_companies": set(),
-                "priority_companies": [],
-                "target_amount": 400,
-                "period_target_amount": 200,
-                "enforce_period_exact": True,
-            }
-        ],
-    )
+    rules = [
+        {
+            "topic": "PMT",
+            "ea_keys": {"1"},
+            "candidate_eas": {"EA1"},
+            "allowed_companies": set(),
+            "priority_companies": [],
+            "target_amount": 400,
+            "period_target_amount": 200,
+            "enforce_period_exact": True,
+        }
+    ]
 
-    solver.solve_stage2(conn, year=2026, config=_config(), planning_start_quarter=2)
+    solver.solve_stage2(conn, year=2026, config=_config(), planning_start_quarter=2, special_rules=rules)
 
     totals = conn.execute(
         """
@@ -580,7 +564,7 @@ def test_new_orders_below_minimum_are_not_created():
     assert rows == {("Firma A", "Q1", "EA1"): 5000}
 
 
-def test_special_rules_can_override_minimum_amount_for_required_residuals(monkeypatch):
+def test_special_rules_can_override_minimum_amount_for_required_residuals():
     conn = _conn()
     conn.execute(
         """
@@ -591,28 +575,25 @@ def test_special_rules_can_override_minimum_amount_for_required_residuals(monkey
     _insert_stage1(conn, [("EA1", 5000, 0)])
     conn.commit()
 
-    monkeypatch.setattr(
-        solver,
-        "_load_special_rule_constraints",
-        lambda known_companies, current_period_quarter: [
-            {
-                "topic": "Sonderregel",
-                "ea_keys": {"1"},
-                "candidate_eas": {"EA1"},
-                "allowed_companies": {"Firma A"},
-                "priority_companies": ["Firma A"],
-                "target_amount": 5000,
-                "period_target_amount": None,
-                "enforce_period_exact": False,
-            }
-        ],
-    )
+    rules = [
+        {
+            "topic": "Sonderregel",
+            "ea_keys": {"1"},
+            "candidate_eas": {"EA1"},
+            "allowed_companies": {"Firma A"},
+            "priority_companies": ["Firma A"],
+            "target_amount": 5000,
+            "period_target_amount": None,
+            "enforce_period_exact": False,
+        }
+    ]
 
     solver.solve_stage2(
         conn,
         year=2026,
         config=solver.SolverConfig(min_new_order_amount=10000),
         planning_start_quarter=1,
+        special_rules=rules,
     )
 
     rows = _rows_by_key(conn)
@@ -679,7 +660,7 @@ def test_existing_small_amount_stays_when_target_requires_it():
     assert rows[("Firma A", "Q1", "EA1")] == 5000
 
 
-def test_non_pmt_period_target_is_enforced(monkeypatch):
+def test_non_pmt_period_target_is_enforced():
     """Period targets are enforced for ALL special rules with period_target, not just PMT."""
     conn = _conn()
     conn.execute(
@@ -695,24 +676,20 @@ def test_non_pmt_period_target_is_enforced(monkeypatch):
     _insert_stage1(conn, [("EA1", 400, 0)])
     conn.commit()
 
-    monkeypatch.setattr(
-        solver,
-        "_load_special_rule_constraints",
-        lambda known_companies, current_period_quarter: [
-            {
-                "topic": "Digi-budget",
-                "ea_keys": {"1"},
-                "candidate_eas": {"EA1"},
-                "allowed_companies": set(),
-                "priority_companies": [],
-                "target_amount": 400,
-                "period_target_amount": 200,
-                "enforce_period_exact": True,
-            }
-        ],
-    )
+    rules = [
+        {
+            "topic": "Digi-budget",
+            "ea_keys": {"1"},
+            "candidate_eas": {"EA1"},
+            "allowed_companies": set(),
+            "priority_companies": [],
+            "target_amount": 400,
+            "period_target_amount": 200,
+            "enforce_period_exact": True,
+        }
+    ]
 
-    solver.solve_stage2(conn, year=2026, config=_config(), planning_start_quarter=2)
+    solver.solve_stage2(conn, year=2026, config=_config(), planning_start_quarter=2, special_rules=rules)
 
     totals = conn.execute(
         """

@@ -16,6 +16,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import beauftragungsplanung_core as core  # noqa: E402
+import planning_config_io  # noqa: E402
 
 
 def _reload_wrapper():
@@ -29,33 +30,31 @@ def _reload_wrapper():
     return module
 
 
-def _write_rules(path: Path, *, cap: int = 0) -> None:
+def _write_config_excel(path: Path, *, cap: int = 0, company_targets: list | None = None) -> None:
+    """Create a minimal config Excel for tests."""
+    from openpyxl import Workbook
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        "\n".join(
-            [
-                "rule;value",
-                "stage2_source;plan_stage2_results",
-                "stage2_solver;highs",
-                "stage2_activation_penalty;100",
-                "stage2_quarter_activation_penalty;50",
-                "stage2_min_new_order_amount;10000",
-                "stage2_repeat_quarter_penalty;200",
-                "stage2_stop_penalty;500",
-                "stage2_large_order_penalty;0",
-                "stage2_existing_small_amount_penalty;10000",
-                "stage2_soft_target_penalty;10",
-                f"stage2_active_ea_cap_per_quarter;{cap}",
-                "stage2_hard_need_bonus;50",
-                "stage2_throughlauf_change_penalty;2500",
-                "stage2_special_rule_priority_penalty_step;25",
-                "stage2_time_limit_seconds;120",
-                "enforce_company_annual_target_consistency;true",
-                "btl_opt_refresh;replace",
-            ]
-        ),
-        encoding="utf-8",
-    )
+    wb = Workbook()
+    ws = wb.active
+    ws.title = planning_config_io.SHEET_SOLVER
+    ws.cell(1, 1, "Parameter")
+    ws.cell(1, 2, "Wert")
+    overrides = {"stage2_active_ea_cap_per_quarter": str(cap), "stage2_large_order_penalty": "0", "stage2_soft_target_penalty": "10"}
+    for i, (key, default, _) in enumerate(planning_config_io.DEFAULT_RULES, 2):
+        ws.cell(i, 1, key)
+        ws.cell(i, 2, overrides.get(key, default))
+    ws2 = wb.create_sheet(planning_config_io.SHEET_TARGETS)
+    ws2.cell(1, 1, "Firma")
+    ws2.cell(1, 2, "Jahresziel_TE")
+    ws2.cell(1, 3, "Schrittweite")
+    for i, ct in enumerate(company_targets or [], 2):
+        ws2.cell(i, 1, ct["company"])
+        ws2.cell(i, 2, ct["annual_te"])
+        ws2.cell(i, 3, ct.get("step", 1))
+    wb.create_sheet(planning_config_io.SHEET_SONDER)
+    wb.save(path)
+    wb.close()
 
 
 def _seed_basic_case(conn: sqlite3.Connection) -> None:
@@ -78,23 +77,13 @@ def _seed_basic_case(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def test_read_rules_csv_rejects_legacy_format(tmp_path):
-    path = tmp_path / "legacy.csv"
-    path.write_text("scope;key;value\nglobal;stage2_solver;highs\n", encoding="utf-8")
-
-    with pytest.raises(core.PlanningError, match="rule;value"):
-        core._read_rules_csv(path)
-
-
 def test_execute_planning_runs_solver_and_materializes_btl_opt(tmp_path, monkeypatch):
     db_path = tmp_path / "budget.db"
-    rules_path = tmp_path / "rules.csv"
+    config_path = tmp_path / "config.xlsx"
     report_path = tmp_path / "planung.md"
-    _write_rules(rules_path)
+    _write_config_excel(config_path)
 
     monkeypatch.setattr(core, "DB_PATH", db_path)
-    monkeypatch.setattr(core, "DEFAULT_RULES_CSV", rules_path)
-    monkeypatch.setattr(core, "_load_target_csv_data", lambda: ({}, {}, None))
 
     with core.connect() as conn:
         core.init_planning_schema(conn)
@@ -104,7 +93,7 @@ def test_execute_planning_runs_solver_and_materializes_btl_opt(tmp_path, monkeyp
 
     result, report = core.execute_planning(
         year=2026,
-        rules_csv=str(rules_path),
+        config_xlsx=str(config_path),
         output=str(report_path),
         planning_start_quarter=1,
     )
@@ -438,20 +427,6 @@ def test_materialize_btl_opt_past_quarter_rows_get_durchlauf_status(tmp_path, mo
     assert [(row["ea"], row["planned_value"], row["status"]) for row in rows] == [
         ("EA_Q1", 200, core.CURRENT_QUARTER_TODO_STATUS)
     ]
-
-
-def test_compute_company_annual_targets_uses_overrides():
-    """EDAG and Bertrandt targets come directly from company_overrides."""
-    target = {
-        "Vorentwicklung (4soft)": 370,
-    }
-    overrides = {
-        "BERTRANDT": {"target_te": 905},
-        "EDAG": {"target_te": 1088},
-    }
-    result = core.compute_company_annual_targets(target, overrides)
-    assert result[core.EDAG_COMPANY] == 1_088_000
-    assert result[core.BERTRANDT_COMPANY] == 905_000
 
 
 def test_bootstrap_sets_can_stop_zero_for_bestellt_and_durchlauf(tmp_path, monkeypatch):

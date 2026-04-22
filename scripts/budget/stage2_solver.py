@@ -64,7 +64,10 @@ class Stage2Solution:
 
 def _as_float(rules: dict[str, str], key: str, default: float) -> float:
     value = rules.get(key, str(default)).strip()
-    return float(value.replace(",", "."))
+    try:
+        return float(value.replace(",", "."))
+    except (ValueError, TypeError):
+        raise PlanningError(f"Solver-Parameter '{key}' hat ungueltigen Wert: '{value}' (Zahl erwartet)")
 
 
 def _as_int(rules: dict[str, str], key: str, default: int) -> int:
@@ -126,53 +129,7 @@ def _normalize_ea_number(value: Any) -> str:
     return digits.lstrip("0") or "0" if digits else ""
 
 
-def _canonical_ea_number(value: Any) -> str:
-    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
-    return digits.zfill(7) if digits else str(value or "").strip()
 
-
-def _load_special_rule_constraints(
-    known_companies: list[str],
-    *,
-    current_period_quarter: int,
-) -> list[dict[str, Any]]:
-    repo_root = Path(__file__).resolve().parents[2]
-    report_path = repo_root / ".agents" / "skills" / "skill-budget-target-ist-analyse" / "report_massnahmenplan.py"
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("report_massnahmenplan", report_path)
-    if spec is None or spec.loader is None:
-        raise PlanningError(f"Sondervorgaben konnten nicht geladen werden: {report_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    rules = module.load_special_rule_rows(str(module.SPECIAL_RULES_XLSX), known_companies)
-    constraints: list[dict[str, Any]] = []
-    for rule in rules:
-        annual_target_te = module._annual_target_for_cadence(rule["fl_target_te"], rule["cadence_type"])
-        if annual_target_te is None:
-            continue
-        period_target_te = module._period_target_for_cadence(
-            rule["fl_target_te"],
-            rule["cadence_type"],
-            current_period_quarter,
-        )
-        ea_keys = {_normalize_ea_number(ea) for ea in rule["ea_keys"] if _normalize_ea_number(ea)}
-        if not ea_keys:
-            continue
-        constraints.append(
-            {
-                "topic": str(rule["topic"]),
-                "ea_keys": ea_keys,
-                "candidate_eas": {_canonical_ea_number(ea) for ea in rule["ea_keys"] if _normalize_ea_number(ea)},
-                "allowed_companies": set(rule["allowed_companies"]),
-                "priority_companies": list(rule["priority_companies"]),
-                "target_amount": int(round(float(annual_target_te) * 1000)),
-                "period_target_amount": int(round(float(period_target_te) * 1000)) if period_target_te is not None else None,
-                "enforce_period_exact": period_target_te is not None and float(period_target_te) > 0,
-            }
-        )
-    return constraints
 
 
 def _load_hard_company_annual_targets(target_rows: list[sqlite3.Row]) -> dict[str, int]:
@@ -358,6 +315,7 @@ def solve_stage2(
     planning_start_quarter: int = 1,
     sondervorgaben_mode: str = "catchup",
     run_id: str | None = None,
+    special_rules: list[dict[str, Any]] | None = None,
 ) -> Stage2Solution:
     if planning_start_quarter not in {1, 2, 3, 4}:
         raise PlanningError(f"Ungueltiges planning_start_quarter: {planning_start_quarter}")
@@ -400,10 +358,8 @@ def solve_stage2(
         (year,),
     ).fetchall()
     known_companies = sorted({str(row["company"]) for row in target_rows} | {str(row["company"]) for row in existing_rows})
-    special_rules = _load_special_rule_constraints(
-        known_companies,
-        current_period_quarter=planning_start_quarter,
-    )
+    if special_rules is None:
+        special_rules = []
     min_order_exempt_ea_norms = _min_order_exempt_ea_norms(special_rules)
     hard_company_annual_targets = _load_hard_company_annual_targets(target_rows)
 

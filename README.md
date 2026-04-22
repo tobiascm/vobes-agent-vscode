@@ -272,3 +272,47 @@ if (Test-Path .claude\skills) {
 
 New-Item -ItemType Junction -Path .claude\skills -Target (Resolve-Path .agents\skills).Path
 ```
+
+# Details
+
+## Skill-Matrix Zugriffe und Berechtigungen
+
+Legende Auth-Typ: **Browser-SSO** = Kerberos/NTLM ueber Playwright Browser-Session, **Graph API** = Microsoft Graph mit Token, **NAA** = Nested App Auth (M365ChatClient), **COM** = lokales Outlook COM-Objekt, **lokal** = nur lokale Dateien/Prozesse.
+
+| Skill | Zugriffsarten | Auth-Typ | Berechtigungen | App-Reg? |
+|---|---|---|---|---|
+| skill-browse-intranet | Playwright MCP, Browser Extension | Browser-SSO | keine (nutzt aktive Browser-Session) | Nein |
+| skill-budget-beauftragungsplanung | SQLite, Excel-Config, Python Scripts | lokal + BPLUS Kerberos | BPLUS-Benutzerrechte | Nein |
+| skill-budget-bplus-export | BPLUS REST API, SQLite, Playwright (optional) | BPLUS Kerberos | BPLUS-Benutzerrechte (Lese-/Exportrechte) | Nein |
+| skill-budget-ea-uebersicht | BPLUS REST API, SQLite | BPLUS Kerberos | BPLUS-Benutzerrechte (`OrgUnit/GetAll`, `DevOrder/GetAll`) | Nein |
+| skill-budget-eigenleistung-el | BPLUS REST API, SQLite, Python Scripts | BPLUS Kerberos | BPLUS-Benutzerrechte (`el_planning` Endpunkt, Schreibzugriff) | Nein |
+| skill-budget-plausibilisierung | lokale Dateien (Markdown) | lokal | keine | Nein |
+| skill-budget-stundensaetze | BPLUS REST API, SQLite | BPLUS Kerberos | BPLUS-Benutzerrechte (`CostCenter/GetCostCenter2HourlyRates`) | Nein |
+| skill-budget-target-ist-analyse | BPLUS REST API, SQLite, Excel, Python Scripts | BPLUS Kerberos | BPLUS-Benutzerrechte (read-only) | Nein |
+| skill-budget-ua-leiter | BPLUS REST API, SQLite | BPLUS Kerberos | BPLUS-Benutzerrechte (`OrgUnit/GetAll` mit Mail-Feldern) | Nein |
+| skill-chatgpt-research | Playwright MCP, ChatGPT Web UI | Browser-SSO | keine (ChatGPT-Login ueber Browser-Session) | Nein |
+| skill-deep-research | Playwright MCP, mcp-atlassian | Browser-SSO + Confluence PAT | Confluence Lese-Berechtigung (Spaces VOBES, VSUP) | Nein |
+| skill-excel-io | lokale .xlsx Dateien, openpyxl/CLI | lokal | keine | Nein |
+| skill-file-converter | Office COM, lightrag LLM-Pipeline | lokal (COM) | keine (lokale Office-Installation) | Nein |
+| skill-hibernate | PowerShell, Windows Task Scheduler | lokal | keine (lokale Admin-/Benutzerrechte) | Nein |
+| skill-important-pages-links-and-urls | Referenzdokumente (Markdown) | lokal | keine | Nein |
+| skill-jira-sys-flow | mcp-atlassian (Jira) | Jira PAT | Jira Lese-Berechtigung (Projekt SYS-FLOW) | Nein |
+| skill-knowledge-bordnetz-vobes | local_rag MCP, Python Scripts | lokal | keine (lokale Wissensdatenbank) | Nein |
+| skill-m365-copilot-chat | Playwright MCP, M365 Copilot Web | Browser-SSO | M365 Copilot Lizenz (kein Graph-Scope); bei API-Migration: `Mail.Read`, `Chat.Read`, `ChannelMessage.Read.All`, `People.Read.All`, `OnlineMeetingTranscript.Read.All`, `ExternalItem.Read.All`, `Sites.Read.All` | Nein (DOM); **Ja bei API** |
+| skill-m365-copilot-file-search | Graph Beta API, Playwright NAA-Token | NAA (AppID c0ab8ce9) | `/.default` via NAA — implizit `Files.Read.All`, `Sites.Read.All` | **Ja** |
+| skill-m365-copilot-mail-search | Graph Search API, Playwright Token | Graph API (Teams AppID 5e3ce6c0) | **`Mail.Read`**, `Calendars.Read` | **Ja** |
+| skill-m365-file-reader | Graph API, Python Scripts | NAA (Copilot-Token) | `Files.Read.All`, `Sites.Read.All` (implizit via NAA) | **Ja** |
+| skill-m365-graph-scope-probe | Graph API, lokale Token-Caches | bestehende Tokens | keine eigenen (diagnostisch, nutzt vorhandene Tokens) | Nein |
+| skill-m365-mail-agent | Graph Search API, Python Scripts, Outlook COM | Graph API (Teams-Token) + COM | **`Mail.Read`**, `Calendars.Read`, `Files.Read.All` | **Ja** |
+| skill-orga-ekek1 | Referenzdokumente (Markdown) | lokal | keine | Nein |
+| skill-outlook | Outlook COM (Lesen, Suchen, **Senden**) | COM | Mail-Versand ueber lokale Outlook-Sitzung; bei Graph-Migration: `Mail.Send`, `Mail.ReadWrite` | Nein (COM) |  
+| skill-outlook-termin | Outlook COM (Erstellen, **Senden**, Absagen) | COM | Termin-/Meeting-Versand ueber lokale Outlook-Sitzung; bei Graph-Migration: `Calendars.ReadWrite` | Nein (COM) |
+| skill-personensuche-groupfind | GroupFind GraphQL API, Playwright MCP | Browser-SSO (Keycloak) | GroupFind Lesezugriff (VW-Netz-Konto) | Nein |
+| skill-protokoll-confluence | mcp-atlassian, Playwright (optional) | Confluence PAT | Confluence Lese-/Schreibberechtigung (Spaces VOBES, EKEK1) | Nein |
+| skill-sharepoint | SharePoint REST API, Playwright Browser-Session | Browser-SSO | SharePoint-Berechtigungen auf Ziel-Site (via Browser-Session) | Nein |
+| skill-te-regelwerk | Playwright MCP, iProject Web, PDF-Extraktion | Browser-SSO | iProject Lesezugriff (VW-Netz-Konto) | Nein |
+| skill-teams-chat | Teams Chat Service API, Graph API | Graph API (Teams-Token) | **`ic3.teams.office.com/.default`**, `graph.microsoft.com/.default` — implizit `Chat.ReadWrite`, `User.Read` | **Ja** |
+| skill-update-confluence-page | mcp-atlassian (Confluence) | Confluence PAT | Confluence Schreibberechtigung auf Zielseite | Nein |
+| git-commit | Git CLI, lokale Dateien | lokal | keine | Nein |
+| git-push | Git CLI, SSH | SSH | SSH-Key-Passphrase via GIT_PKI_PASS | Nein |
+| specify-memory-sync-skill | lokale Markdown-Dateien (.specify/memory) | lokal | keine | Nein |

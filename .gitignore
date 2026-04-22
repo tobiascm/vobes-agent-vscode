@@ -1,4 +1,5 @@
 userdata/*
+!userdata/budget/planning/beauftragungsplanung_config.xlsx
 .claude/skills*
 .playwright-mcp/*
 .agents/userdata/*

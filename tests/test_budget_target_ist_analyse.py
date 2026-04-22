@@ -15,6 +15,25 @@ MODULE_PATH = (
 )
 
 
+def _make_config_xlsx(path, sondervorgaben_rows: list[list] | None = None):
+    """Create a minimal beauftragungsplanung_config.xlsx for tests."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Solver-Parameter"
+    ws.append(["Parameter", "Wert", "Standard", "Beschreibung"])
+    ws.append(["stage2_source", "plan_stage2_results", "plan_stage2_results", ""])
+    wb.create_sheet("Firmenziele")
+    ws2 = wb["Firmenziele"]
+    ws2.append(["Firma", "Jahresziel_TE"])
+    ws3 = wb.create_sheet("Sondervorgaben")
+    ws3.append(["Thema", "EA", "EL", "FL", "Kadenz", "Bemerkung", "Erlaubte_Firmen", "Prioritaet_Firmen", "Hinweise"])
+    for row in (sondervorgaben_rows or []):
+        ws3.append(row)
+    wb.create_sheet("Praemissen")
+    wb.save(path)
+    return path
+
+
 def load_module():
     spec = importlib.util.spec_from_file_location("report_massnahmenplan", MODULE_PATH)
     assert spec and spec.loader
@@ -124,6 +143,19 @@ def test_thiesen_manual_soll_includes_both_thiesen_areas():
     assert result == (551000, 275500)
 
 
+def test_ea_matrix_group_splits_thiesen_by_existing_area_logic():
+    mod = load_module()
+
+    assert mod._matrix_group_for_entry({
+        "reporting_company": "THIESEN HARDWARE SOFTW. GMBH WARTENBERG",
+        "area": mod.THIESEN_SPEC_KEY,
+    }) == "THIESEN_SPEC"
+    assert mod._matrix_group_for_entry({
+        "reporting_company": "THIESEN HARDWARE SOFTW. GMBH WARTENBERG",
+        "area": mod.THIESEN_SUPPORT_KEY,
+    }) == "THIESEN_SUPPORT"
+
+
 def test_write_xlsx_report_writes_titles_and_summary_style(tmp_path):
     mod = load_module()
     report = sample_report(mod)
@@ -148,7 +180,7 @@ def test_write_xlsx_report_writes_titles_and_summary_style(tmp_path):
         if cell.value is not None
     }
 
-    assert workbook.sheetnames == ["Übersicht", "Korrektur"]
+    assert workbook.sheetnames == ["Übersicht", "Korrektur", "EA-Matrix"]
     assert overview["A1"].value == "Testreport"
     assert overview.row_dimensions[1].height and overview.row_dimensions[1].height >= 30
     assert overview["A1"].fill.fill_type is None
@@ -169,6 +201,80 @@ def test_write_xlsx_report_writes_titles_and_summary_style(tmp_path):
     assert correction["A1"].value == "Korrektur Überplanung"
     assert "Korrektur Überplanung" in correction_values
     assert "Lieferant A — Jahres-Korrektur: 50 T€ zu reduzieren" in correction_values
+
+
+def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
+    mod = load_module()
+    groups = {group: {quarter: 0 for quarter in mod.QUARTERS} for group in mod.EA_MATRIX_GROUPS}
+    report = mod.ReportDocument(
+        title="Testreport",
+        meta_lines=["Meta"],
+        sections=[],
+        max_columns=1,
+        ea_matrix={
+            "soll": {**groups, "THIESEN_SPEC": {"Q1": 100_000}, "THIESEN_SUPPORT": {"Q1": 200_000}},
+            "ist": {**groups, "THIESEN_SPEC": {"Q1": 22_000}, "THIESEN_SUPPORT": {"Q2": 33_000}},
+            "rows": [
+                {
+                    "category": "Fahrzeugprojekte",
+                    "ea": "999",
+                    "title": "Projekt",
+                    "family": "VW",
+                    "sop": None,
+                    "fl_te": 44,
+                    "fl_pct": 0.4,
+                    "el_te": None,
+                    "quarters": {("WEITERE", "Q4"): 44_000},
+                },
+                {
+                    "category": "Sondervereinbarungen",
+                    "ea": "43932",
+                    "title": "PMT",
+                    "family": "KEINE",
+                    "sop": None,
+                    "fl_te": 11,
+                    "fl_pct": 0.1,
+                    "el_te": 3,
+                    "quarters": {("4SOFT", "Q1"): 11_000},
+                },
+                {
+                    "category": "Serienbetreuung",
+                    "ea": "1800",
+                    "title": "SB VW4xx Hut",
+                    "family": "VW48X",
+                    "sop": None,
+                    "fl_te": 55,
+                    "fl_pct": 0.5,
+                    "el_te": None,
+                    "quarters": {("THIESEN_SPEC", "Q1"): 22_000, ("THIESEN_SUPPORT", "Q2"): 33_000},
+                },
+            ],
+        },
+    )
+    output = tmp_path / "matrix.xlsx"
+
+    mod.write_xlsx_report(report, str(output))
+
+    ws = load_workbook(output)["EA-Matrix"]
+
+    assert ws.freeze_panes == "C5"
+    assert "J1:M1" in {str(rng) for rng in ws.merged_cells.ranges}
+    assert ws["AH2"].value == 100
+    assert ws["AL2"].value == 200
+    assert ws["AH3"].value == 22
+    assert ws["AM3"].value == 33
+    assert [ws[f"B{row}"].value for row in (5, 7, 9)] == [
+        "Sondervereinbarungen",
+        "Serienbetreuung",
+        "Fahrzeugprojekte",
+    ]
+    assert ws["A6"].value == "43932"
+    assert ws["Z6"].value == 11
+    assert ws["A8"].value == "1800"
+    assert ws["AH8"].value == 22
+    assert ws["AM8"].value == 33
+    assert ws["A10"].value == "999"
+    assert ws["AS10"].value == 44
 
 
 def test_write_xlsx_report_creates_neutral_tables_only_on_korrektur(tmp_path):
@@ -584,29 +690,25 @@ def test_write_xlsx_report_inherits_notes_and_column_widths(tmp_path):
     assert out_correction.column_dimensions["J"].width == 88
 
 
-def test_load_special_rule_rows_reads_xlsx_and_resolves_companies(tmp_path):
+def test_load_sondervorgaben_reads_config_xlsx_and_resolves_companies(tmp_path):
     mod = load_module()
-    workbook = Workbook()
-    ws = workbook.active
-    ws["A1"] = "Sondervereinbarungen"
-    ws.append([])
-    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
-    ws.append([
-        "PMT",
-        "43932",
-        "8.449h",
-        1048,
-        "Hinweis",
-        "",
-        "EL und FL müssen exakt passen!\n"
-        "EL und FL dürfen nur Quartalsweise beauftragen und werden sehr genau beobachtet.\n"
-        "Folgende Firmen können auf PMT buchen: 4soft, Thiesen, FES, Sumitomo in genau dieser Priorität.",
+    config_path = tmp_path / "config.xlsx"
+    _make_config_xlsx(config_path, [
+        [
+            "PMT",
+            "43932",
+            "8.449h",
+            1048,
+            "quartalsweise",
+            "Hinweis",
+            "4soft, Thiesen, FES, Sumitomo",
+            "4soft, Thiesen, FES, Sumitomo",
+            "EL und FL müssen exakt passen!",
+        ],
     ])
-    path = tmp_path / "sondervereinbarungen.xlsx"
-    workbook.save(path)
 
-    rows = mod.load_special_rule_rows(
-        str(path),
+    rows = mod._load_sondervorgaben(
+        str(config_path),
         [
             "4SOFT GMBH MUENCHEN",
             "THIESEN HARDWARE SOFTW. GMBH WARTENBERG",
@@ -634,25 +736,17 @@ def test_load_special_rule_rows_reads_xlsx_and_resolves_companies(tmp_path):
 
 def test_build_special_rule_section_computes_status_columns(tmp_path, monkeypatch):
     mod = load_module()
-    workbook = Workbook()
-    ws = workbook.active
-    ws.append(["Sondervereinbarungen"])
-    ws.append([])
-    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
-    ws.append([
-        "PMT",
-        "43932",
-        "8.449h",
-        1048,
-        "Hinweis",
-        "",
-        "EL und FL müssen exakt passen!\n"
-        "EL und FL dürfen nur Quartalsweise beauftragen und werden sehr genau beobachtet.\n"
-        "Folgende Firmen können auf PMT buchen: 4soft, Thiesen, FES, Sumitomo in genau dieser Priorität.",
+    config_path = tmp_path / "config.xlsx"
+    _make_config_xlsx(config_path, [
+        [
+            "PMT", "43932", "8.449h", 1048, "quartalsweise", "Hinweis",
+            "4soft, Thiesen, FES, Sumitomo", "4soft, Thiesen, FES, Sumitomo",
+            "EL und FL müssen exakt passen!\n"
+            "EL und FL dürfen nur Quartalsweise beauftragen und werden sehr genau beobachtet.\n"
+            "Folgende Firmen können auf PMT buchen: 4soft, Thiesen, FES, Sumitomo in genau dieser Priorität.",
+        ],
     ])
-    special_path = tmp_path / "sondervereinbarungen.xlsx"
-    workbook.save(special_path)
-    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(mod, "CONFIG_XLSX", str(config_path))
     monkeypatch.setattr(
         mod,
         "_load_el_aggregates",
@@ -716,25 +810,17 @@ def test_build_special_rule_section_computes_status_columns(tmp_path, monkeypatc
 
 def test_build_special_rule_section_applies_diff_bands_to_el_and_quarter(tmp_path, monkeypatch):
     mod = load_module()
-    workbook = Workbook()
-    ws = workbook.active
-    ws.append(["Sondervereinbarungen"])
-    ws.append([])
-    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
-    ws.append([
-        "PMT",
-        "43932",
-        "8.449h",
-        1048,
-        "Hinweis",
-        "",
-        "EL und FL müssen exakt passen!\n"
-        "EL und FL dürfen nur Quartalsweise beauftragen und werden sehr genau beobachtet.\n"
-        "Folgende Firmen können auf PMT buchen: 4soft, Thiesen, FES, Sumitomo in genau dieser Priorität.",
+    config_path = tmp_path / "config.xlsx"
+    _make_config_xlsx(config_path, [
+        [
+            "PMT", "43932", "8.449h", 1048, "quartalsweise", "Hinweis",
+            "4soft, Thiesen, FES, Sumitomo", "4soft, Thiesen, FES, Sumitomo",
+            "EL und FL müssen exakt passen!\n"
+            "EL und FL dürfen nur Quartalsweise beauftragen und werden sehr genau beobachtet.\n"
+            "Folgende Firmen können auf PMT buchen: 4soft, Thiesen, FES, Sumitomo in genau dieser Priorität.",
+        ],
     ])
-    special_path = tmp_path / "sondervereinbarungen_warn.xlsx"
-    workbook.save(special_path)
-    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(mod, "CONFIG_XLSX", str(config_path))
     monkeypatch.setattr(
         mod,
         "_load_el_aggregates",
@@ -919,25 +1005,16 @@ def test_write_xlsx_report_styles_diff_ges_warn_yellow(tmp_path):
 def test_build_special_rule_section_digi_budget_el_kann_niedriger(tmp_path, monkeypatch):
     """Digi-budget: 'EL kann niedriger sein' checks only EL overshoot with IO/WARN/nIO."""
     mod = load_module()
-    workbook = Workbook()
-    ws = workbook.active
-    ws.append(["Sondervereinbarungen"])
-    ws.append([])
-    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
-    ws.append([
-        "Digi-budget",
-        "48040",
-        "-",
-        290,
-        "Bemerkung",
-        "",
-        "FL muss exakt passen!\n"
-        "EL kann niedriger sein, darf aber auf keinen Fall höher sein.\n"
-        "Werte für 1. HJ müssen auch wirklich im 1.HJ beauftragt werden.",
+    config_path = tmp_path / "config.xlsx"
+    _make_config_xlsx(config_path, [
+        [
+            "Digi-budget", "48040", "-", 290, "1. halbjahr", "Bemerkung", "", "",
+            "FL muss exakt passen!\n"
+            "EL kann niedriger sein, darf aber auf keinen Fall höher sein.\n"
+            "Werte für 1. HJ müssen auch wirklich im 1.HJ beauftragt werden.",
+        ],
     ])
-    special_path = tmp_path / "sondervereinbarungen_digi.xlsx"
-    workbook.save(special_path)
-    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(mod, "CONFIG_XLSX", str(config_path))
     monkeypatch.setattr(
         mod,
         "_load_el_aggregates",
@@ -976,23 +1053,16 @@ def test_build_special_rule_section_digi_budget_el_kann_niedriger(tmp_path, monk
 
 def test_build_special_rule_section_digi_budget_filters_budget_rows_by_title_and_bm_text(tmp_path, monkeypatch):
     mod = load_module()
-    workbook = Workbook()
-    ws = workbook.active
-    ws.append(["Sondervereinbarungen"])
-    ws.append([])
-    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
-    ws.append([
-        "Digi-budget",
-        "48040",
-        "-",
-        290,
-        "1. HJ DMU (170T€) + RuleChecker (120T€), aber mind. je 10T€ EL, 2. HJ noch kein Budget",
-        "",
-        "FL muss exakt passen!\nEL kann niedriger sein, darf aber auf keinen Fall höher sein.\nWerte für 1. HJ müssen auch wirklich im 1.HJ beauftragt werden.",
+    config_path = tmp_path / "config.xlsx"
+    _make_config_xlsx(config_path, [
+        [
+            "Digi-budget", "48040", "-", 290, "1. halbjahr",
+            "1. HJ DMU (170T€) + RuleChecker (120T€), aber mind. je 10T€ EL, 2. HJ noch kein Budget",
+            "", "",
+            "FL muss exakt passen!\nEL kann niedriger sein, darf aber auf keinen Fall höher sein.\nWerte für 1. HJ müssen auch wirklich im 1.HJ beauftragt werden.",
+        ],
     ])
-    special_path = tmp_path / "sondervereinbarungen_digi_filter.xlsx"
-    workbook.save(special_path)
-    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(mod, "CONFIG_XLSX", str(config_path))
     monkeypatch.setattr(
         mod,
         "_load_el_aggregates",
@@ -1064,16 +1134,10 @@ def test_build_special_rule_section_digi_budget_filters_budget_rows_by_title_and
     assert section.rows[2].values[13] == "IO"
 
 
-def test_detect_special_cadence_and_period_target_for_first_half_exact():
+def test_period_target_for_first_half_exact():
     mod = load_module()
 
-    cadence = mod._detect_special_cadence(
-        "Digi-budget",
-        "1. HJ DMU (170T€) + RuleChecker (120T€), 2. HJ noch kein Budget",
-        "Werte für 1. HJ müssen auch wirklich im 1.HJ beauftragt werden.",
-    )
-
-    assert cadence == "first_half_exact"
+    cadence = "first_half_exact"
     assert mod._period_target_for_cadence(290.0, cadence, 1) == 0.0
     assert mod._period_target_for_cadence(290.0, cadence, 2) == 290.0
     assert mod._period_target_for_cadence(290.0, cadence, 3) == 290.0
@@ -1098,23 +1162,15 @@ def test_period_target_for_quarterly_tranche_exact_is_year_share():
 
 def test_build_special_rule_section_pro_halbjahr_uses_half_year_target(tmp_path, monkeypatch):
     mod = load_module()
-    workbook = Workbook()
-    ws = workbook.active
-    ws.append(["Sondervereinbarungen"])
-    ws.append([])
-    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
-    ws.append([
-        "NE Space Crafter",
-        "22020",
-        "1,9",
-        150,
-        "Pro Halbjahr, EL: Armin, Donato, Afshin, TCM",
-        "",
-        "EL und FL müssen exakt passen!\nEL und FL müssen hier pro Halbjahr beauftragt werden!",
+    config_path = tmp_path / "config.xlsx"
+    _make_config_xlsx(config_path, [
+        [
+            "NE Space Crafter", "22020", "1,9", 150, "pro halbjahr",
+            "Pro Halbjahr, EL: Armin, Donato, Afshin, TCM", "", "",
+            "EL und FL müssen exakt passen!\nEL und FL müssen hier pro Halbjahr beauftragt werden!",
+        ],
     ])
-    special_path = tmp_path / "sondervereinbarungen_halbjahr.xlsx"
-    workbook.save(special_path)
-    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(mod, "CONFIG_XLSX", str(config_path))
     monkeypatch.setattr(
         mod,
         "_load_el_aggregates",
@@ -1154,23 +1210,15 @@ def test_build_special_rule_section_pro_halbjahr_uses_half_year_target(tmp_path,
 
 def test_build_special_rule_section_pro_quartal_uses_year_share_target(tmp_path, monkeypatch):
     mod = load_module()
-    workbook = Workbook()
-    ws = workbook.active
-    ws.append(["Sondervereinbarungen"])
-    ws.append([])
-    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
-    ws.append([
-        "NE ID Buzz AD",
-        "35566",
-        "2,9",
-        150,
-        "Pro Quartal, EL: Armin, Donato, Afshin, TCM",
-        "",
-        "EL und FL müssen exakt passen!\nEL und FL müssen hier pro por Quartal beauftragt werden!",
+    config_path = tmp_path / "config.xlsx"
+    _make_config_xlsx(config_path, [
+        [
+            "NE ID Buzz AD", "35566", "2,9", 150, "pro quartal",
+            "Pro Quartal, EL: Armin, Donato, Afshin, TCM", "", "",
+            "EL und FL müssen exakt passen!\nEL und FL müssen hier pro por Quartal beauftragt werden!",
+        ],
     ])
-    special_path = tmp_path / "sondervereinbarungen_quartal.xlsx"
-    workbook.save(special_path)
-    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(mod, "CONFIG_XLSX", str(config_path))
     monkeypatch.setattr(
         mod,
         "_load_el_aggregates",
@@ -1211,32 +1259,18 @@ def test_build_special_rule_section_pro_quartal_uses_year_share_target(tmp_path,
 def test_build_special_rule_section_nur_fl_und_nur_el(tmp_path, monkeypatch):
     """Test 'Hier nur FL buchen' and 'Nur EL. Keine FL.' rules."""
     mod = load_module()
-    workbook = Workbook()
-    ws = workbook.active
-    ws.append(["Sondervereinbarungen"])
-    ws.append([])
-    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
-    ws.append([
-        "VCTC (KÜE)",
-        "93037",
-        "",
-        45,
-        "KÜE",
-        "",
-        "Hier nur FL buchen.\nFL muss exakt passen.",
+    config_path = tmp_path / "config.xlsx"
+    _make_config_xlsx(config_path, [
+        [
+            "VCTC (KÜE)", "93037", "", 45, "jährlich", "KÜE", "", "",
+            "Hier nur FL buchen.\nFL muss exakt passen.",
+        ],
+        [
+            "Scania", "536", "15000", "", "keine fl", "Nur EL", "", "",
+            "Nur EL. Keine FL.",
+        ],
     ])
-    ws.append([
-        "Scania",
-        "536",
-        "15000",
-        "",
-        "Nur EL",
-        "",
-        "Nur EL. Keine FL.",
-    ])
-    special_path = tmp_path / "sondervereinbarungen_fl_el.xlsx"
-    workbook.save(special_path)
-    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(mod, "CONFIG_XLSX", str(config_path))
     monkeypatch.setattr(
         mod,
         "_load_el_aggregates",
@@ -1282,23 +1316,14 @@ def test_build_special_rule_section_nur_fl_und_nur_el(tmp_path, monkeypatch):
 def test_build_special_rule_section_nur_el_with_fl_is_nio(tmp_path, monkeypatch):
     """'Nur EL. Keine FL.' should be nIO when FL exists."""
     mod = load_module()
-    workbook = Workbook()
-    ws = workbook.active
-    ws.append(["Sondervereinbarungen"])
-    ws.append([])
-    ws.append(["Thema", "EA", "EL", "FL", "Bemerkung", "Link", "Hinweise für autom. Auslegung"])
-    ws.append([
-        "Scania",
-        "536",
-        "15000",
-        "",
-        "Nur EL",
-        "",
-        "Nur EL. Keine FL.",
+    config_path = tmp_path / "config.xlsx"
+    _make_config_xlsx(config_path, [
+        [
+            "Scania", "536", "15000", "", "keine fl", "Nur EL", "", "",
+            "Nur EL. Keine FL.",
+        ],
     ])
-    special_path = tmp_path / "sondervereinbarungen_nio.xlsx"
-    workbook.save(special_path)
-    monkeypatch.setattr(mod, "SPECIAL_RULES_XLSX", str(special_path))
+    monkeypatch.setattr(mod, "CONFIG_XLSX", str(config_path))
     monkeypatch.setattr(
         mod,
         "_load_el_aggregates",

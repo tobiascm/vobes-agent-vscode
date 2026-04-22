@@ -23,6 +23,7 @@ from typing import Any
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.formatting.rule import ColorScaleRule
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.utils import get_column_letter
 
@@ -36,7 +37,8 @@ TARGET_CSV = os.path.join(VORGABEN_DIR, "target.csv")
 STATUS_CSV = os.path.join(SCRIPT_DIR, "status_mapping.csv")
 PRAEMISSEN_MD = os.path.join(VORGABEN_DIR, "praemissen.md")
 TARGET_IMAGE = os.path.join(VORGABEN_DIR, "target.png")
-SPECIAL_RULES_XLSX = os.path.join(REPO_ROOT, "userdata", "budget", "planning", "budget_sondervereinbarungen_ekek1.xlsx")
+EA_MATRIX_TEMPLATE = os.path.join(VORGABEN_DIR, "budget_vorlage_ea_matrix.xlsx")
+CONFIG_XLSX = os.path.join(REPO_ROOT, "userdata", "budget", "planning", "beauftragungsplanung_config.xlsx")
 PLANNING_SCRIPTS_DIR = os.path.join(REPO_ROOT, "scripts", "budget")
 if PLANNING_SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, PLANNING_SCRIPTS_DIR)
@@ -67,66 +69,6 @@ except ImportError:  # pragma: no cover - fallback for missing planning core in 
     EDAG_COMPANY = "EDAG ENGINEERING GMBH WOLFSBURG"
     BERTRANDT_COMPANY = "BERTRANDT INGENIEURBUERO GMBH TAPPENBECK"
     _core_status_label = None  # type: ignore[assignment]
-
-
-def _detect_special_cadence(display_name: str, remark: str, notes: str) -> str:
-    blob = " ".join(part for part in [display_name, remark, notes] if part).lower()
-    if "nur el" in blob or "keine fl" in blob:
-        return "fl_forbidden"
-    if (
-        (re.search(r"\b1\.?\s*hj\b", blob) or "erstes halbjahr" in blob)
-        and ("beauftragt" in blob or "freigegeben" in blob or "noch kein budget" in blob)
-    ):
-        return "first_half_exact"
-    if "pro halbjahr" in blob:
-        return "semiannual_tranche_exact"
-    if "pro quartal" in blob:
-        return "quarterly_tranche_exact"
-    if "quartalsweise" in blob:
-        return "quarterly_split_annual"
-    return "annual_exact"
-
-
-def _extract_allowed_company_tokens(notes: str) -> list[str]:
-    def _clean(value: str) -> str:
-        return re.sub(r"\s+in genau dieser priorität\.?$", "", value.strip(), flags=re.IGNORECASE)
-    match = re.search(r"nur für\s+([^\n.!]+)", notes, re.IGNORECASE)
-    if match:
-        return [_clean(token) for token in re.split(r"[,/]| und ", match.group(1)) if _clean(token)]
-    match = re.search(r"folgende firmen .*?buchen:\s*([^\n.!]+)", notes, re.IGNORECASE)
-    if match:
-        return [_clean(token) for token in re.split(r",| und ", match.group(1)) if _clean(token)]
-    return []
-
-
-def _extract_priority_tokens(notes: str) -> list[str]:
-    match = re.search(r"folgende firmen .*?buchen:\s*([^\n.!]+)", notes, re.IGNORECASE)
-    if not match:
-        return []
-    return [re.sub(r"\s+in genau dieser priorität\.?$", "", token.strip(), flags=re.IGNORECASE) for token in re.split(r",| und ", match.group(1)) if re.sub(r"\s+in genau dieser priorität\.?$", "", token.strip(), flags=re.IGNORECASE)]
-
-
-def _resolve_company_tokens(tokens: list[str], known_companies: list[str]) -> tuple[list[str], list[str]]:
-    resolved: list[str] = []
-    unresolved: list[str] = []
-    for token in tokens:
-        upper = token.upper()
-        chosen = None
-        if upper in COMPANY_ALIAS_FALLBACKS:
-            fallback = COMPANY_ALIAS_FALLBACKS[upper]
-            if fallback in known_companies:
-                chosen = fallback
-        if chosen is None:
-            for company in known_companies:
-                if upper in company.upper():
-                    chosen = company
-                    break
-        if chosen is None:
-            unresolved.append(token)
-            continue
-        if chosen not in resolved:
-            resolved.append(chosen)
-    return resolved, unresolved
 
 
 def _quarter_for_date(target_date: str | None, *, title: str = "", bm_text: str = "") -> str | None:
@@ -403,63 +345,43 @@ def _parse_el_target(raw: Any) -> dict[str, Any]:
     return {"mode": "te", "value": te_value, "display": text}
 
 
-def load_special_rule_rows(path: str, known_companies: list[str]) -> list[dict[str, Any]]:
-    if not os.path.isfile(path):
+def _resolve_company_list(raw: str, known_companies: list[str]) -> list[str]:
+    if not raw:
         return []
-
-    workbook = load_workbook(path, data_only=True)
-    ws = workbook.active
-    required = {"Thema", "EA", "EL", "FL", "Bemerkung", "Hinweise für autom. Auslegung"}
-    header_row = None
-    header_map: dict[str, int] = {}
-
-    for row_idx in range(1, ws.max_row + 1):
-        values = {
-            str(ws.cell(row_idx, col_idx).value).strip(): col_idx
-            for col_idx in range(1, ws.max_column + 1)
-            if ws.cell(row_idx, col_idx).value is not None
-        }
-        if required.issubset(values):
-            header_row = row_idx
-            header_map = values
-            break
-
-    if header_row is None:
-        return []
-
-    rules: list[dict[str, Any]] = []
-    for row_idx in range(header_row + 1, ws.max_row + 1):
-        topic = str(ws.cell(row_idx, header_map["Thema"]).value or "").strip()
-        if not topic:
+    resolved: list[str] = []
+    for token in re.split(r"[,;]+", raw):
+        token = token.strip()
+        if not token:
             continue
-        raw_ea = ws.cell(row_idx, header_map["EA"]).value
-        raw_ea_text = str(raw_ea or "").strip()
-        ea_keys = [
-            key
-            for key in (_normalize_ea_key(part) for part in re.split(r"[\n,;]+", raw_ea_text))
-            if key
-        ]
-        remark = str(ws.cell(row_idx, header_map["Bemerkung"]).value or "").strip()
-        notes = str(ws.cell(row_idx, header_map["Hinweise für autom. Auslegung"]).value or "").strip()
-        cadence_type = _detect_special_cadence(topic, remark, notes)
-        allowed_companies, _ = _resolve_company_tokens(_extract_allowed_company_tokens(notes), known_companies)
-        priority_companies, _ = _resolve_company_tokens(_extract_priority_tokens(notes), known_companies)
-        rules.append(
-            {
-                "topic": topic,
-                "ea_display": ", ".join(
-                    part.strip() for part in re.split(r"[\n,;]+", raw_ea_text) if part.strip()
-                ) or raw_ea_text,
-                "ea_keys": ea_keys,
-                "fl_target_te": _parse_te_value(ws.cell(row_idx, header_map["FL"]).value),
-                "el_target": _parse_el_target(ws.cell(row_idx, header_map["EL"]).value),
-                "remark": remark,
-                "notes": notes,
-                "cadence_type": cadence_type,
-                "allowed_companies": allowed_companies,
-                "priority_companies": priority_companies,
-            }
-        )
+        upper = token.upper()
+        match = next((c for c in known_companies if upper in c.upper()), None)
+        if match and match not in resolved:
+            resolved.append(match)
+    return resolved
+
+
+def _load_sondervorgaben(config_path: str, known_companies: list[str]) -> list[dict[str, Any]]:
+    from pathlib import Path
+    from planning_config_io import read_config
+
+    if not os.path.isfile(config_path):
+        return []
+    raw_rules = read_config(Path(config_path)).sondervorgaben
+    rules: list[dict[str, Any]] = []
+    for rule in raw_rules:
+        ea_keys = [_normalize_ea_key(ea) for ea in rule.get("ea_keys", []) if _normalize_ea_key(ea)]
+        rules.append({
+            "topic": rule["topic"],
+            "ea_display": rule.get("ea_display", ", ".join(ea_keys)),
+            "ea_keys": ea_keys,
+            "fl_target_te": rule.get("fl_target_te"),
+            "el_target": _parse_el_target(rule.get("el_target")),
+            "remark": rule.get("remark", ""),
+            "notes": rule.get("notes", ""),
+            "cadence_type": rule.get("cadence_type", "annual_exact"),
+            "allowed_companies": _resolve_company_list(rule.get("allowed_companies_raw", ""), known_companies),
+            "priority_companies": _resolve_company_list(rule.get("priority_companies_raw", ""), known_companies),
+        })
     return rules
 
 
@@ -687,7 +609,7 @@ def build_special_rule_section(
         )
         known_companies.add(reporting_company)
 
-    special_rules = load_special_rule_rows(SPECIAL_RULES_XLSX, sorted(known_companies))
+    special_rules = _load_sondervorgaben(CONFIG_XLSX, sorted(known_companies))
     if not special_rules:
         return None
 
@@ -1041,6 +963,7 @@ class ReportDocument:
     sections: list[TextSection | TableSection]
     max_columns: int
     overview_quarter_block: dict[str, Any] | None = None
+    ea_matrix: dict[str, Any] | None = None
 
 
 def _cell_has_text(value) -> bool:
@@ -1576,6 +1499,358 @@ def _cumulative_company_targets(
     }
 
 
+_STATUS_PRIORITY = {"bestellt": 1, "im Durchlauf": 2, "Konzept": 3, "storniert": 4}
+_STATUS_FILL_MAP = {
+    "Konzept": PatternFill("solid", fgColor="BDD7EE"),
+    "im Durchlauf": PatternFill("solid", fgColor="FFC000"),
+    "bestellt": PatternFill("solid", fgColor="63BE7B"),
+    "storniert": PatternFill("solid", fgColor="FFC7CE"),
+}
+
+_SUBGROUP_AREAS: dict[str, str] = {
+    THIESEN_SPEC_KEY: "Spez",
+    THIESEN_SUPPORT_KEY: "Support",
+}
+_CATCH_ALL_HINTS = ("WEITERE", "SONSTIGE", "OTHER")
+_MARKER_OVERRIDES: dict[str, str] = {"VWGS": "VOLKSWAGEN GROUP SERVICES"}
+
+
+def _detect_matrix_groups() -> dict[str, tuple[int, str]]:
+    """Scan Row 1 of the EA-Matrix template to build {header: (start_col, MARKER)}."""
+    if not os.path.isfile(EA_MATRIX_TEMPLATE):
+        return {}
+    wb = load_workbook(EA_MATRIX_TEMPLATE, read_only=True, data_only=True)
+    ws = wb.active
+    groups: dict[str, tuple[int, str]] = {}
+    for c in range(10, (ws.max_column or 45) + 1, 4):
+        header = ws.cell(1, c).value
+        if not header or not str(header).strip():
+            continue
+        key = str(header).strip()
+        marker = "" if any(h in key.upper() for h in _CATCH_ALL_HINTS) else key.upper()
+        # Multi-word headers: use first word as marker (e.g. "THIESEN Spez." → "THIESEN")
+        parts = marker.split()
+        if len(parts) > 1:
+            marker = parts[0]
+        marker = _MARKER_OVERRIDES.get(marker, marker)
+        groups[key] = (c, marker)
+    wb.close()
+    return groups
+
+
+EA_MATRIX_GROUPS: dict[str, tuple[int, str]] = _detect_matrix_groups()
+EA_MATRIX_CATEGORIES = ("Sondervereinbarungen", "Serienbetreuung", "Fahrzeugprojekte")
+
+
+def _find_catch_all() -> str | None:
+    """Return the key of the catch-all group (empty marker)."""
+    return next((k for k, (_c, m) in EA_MATRIX_GROUPS.items() if not m), None)
+
+
+def _matrix_group_for_entry(entry: dict[str, Any]) -> str:
+    company = str(entry.get("reporting_company") or entry.get("source_company") or "").upper()
+    area = str(entry.get("area") or "")
+    matches = [k for k, (_c, m) in EA_MATRIX_GROUPS.items() if m and m in company]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        for area_key, hint in _SUBGROUP_AREAS.items():
+            if area == area_key:
+                return next((k for k in matches if hint.upper() in k.upper()), matches[0])
+        return next((k for k in matches if not any(h.upper() in k.upper() for h in _SUBGROUP_AREAS.values())), matches[0])
+    return _find_catch_all() or matches[0] if matches else list(EA_MATRIX_GROUPS)[-1]
+
+
+def _parse_iso_date(value: Any) -> datetime.date | Any:
+    if isinstance(value, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", value.strip()):
+        return datetime.date.fromisoformat(value.strip())
+    return value
+
+
+def _load_ea_metadata() -> dict[str, dict[str, Any]]:
+    if not os.path.isfile(DB_PATH):
+        return {}
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT ea_number, title, project_family, sop, hierarchy
+                FROM devorder
+                WHERE COALESCE(ea_number, '') <> ''
+                """
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {
+        _normalize_ea_key(row["ea_number"]): {
+            "ea": str(row["ea_number"] or ""),
+            "title": str(row["title"] or ""),
+            "family": str(row["project_family"] or ""),
+            "sop": _parse_iso_date(row["sop"]),
+            "hierarchy": str(row["hierarchy"] or ""),
+        }
+        for row in rows
+        if _normalize_ea_key(row["ea_number"])
+    }
+
+
+def _ea_matrix_category(ea_key: str, meta: dict[str, Any], special_order: dict[str, int]) -> str:
+    if ea_key in special_order:
+        return "Sondervereinbarungen"
+    title = str(meta.get("title") or "").upper()
+    hierarchy = str(meta.get("hierarchy") or "").upper()
+    if "SERIENBETREUUNG" in hierarchy or title.startswith("SB "):
+        return "Serienbetreuung"
+    return "Fahrzeugprojekte"
+
+
+def _ea_matrix_sort_key(row: dict[str, Any]) -> tuple[int, int, str, str]:
+    return (
+        EA_MATRIX_CATEGORIES.index(row["category"]),
+        int(row.get("special_order", 9999)),
+        str(row.get("family") or ""),
+        str(row.get("ea") or ""),
+    )
+
+
+def _target_quarter_values_for_area(targets: dict[str, int], start_q: dict[str, int], area: str) -> dict[str, int]:
+    target_eur = int(targets.get(area, 0)) * 1000
+    first_q = int(start_q.get(area, 1))
+    active = [q for idx, q in enumerate(QUARTERS, start=1) if idx >= first_q]
+    if not active:
+        return {q: 0 for q in QUARTERS}
+    base = round(target_eur / len(active))
+    values = {q: (base if q in active else 0) for q in QUARTERS}
+    values[active[-1]] += target_eur - sum(values.values())
+    return values
+
+
+def _load_ek_totals(year: int) -> dict[str, tuple[int, int]]:
+    """EK Plan / EK Genehmigt per EA from btl_all (all OEs), in EUR."""
+    if not os.path.isfile(DB_PATH):
+        return {}
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT dev_order,"
+                " SUM(planned_value) AS ek_plan,"
+                " SUM(CASE WHEN status LIKE '%Bestellt%' THEN planned_value ELSE 0 END) AS ek_gen"
+                " FROM btl_all"
+                " WHERE substr(COALESCE(target_date,''),1,4)=? AND COALESCE(dev_order,'') <> ''"
+                " GROUP BY dev_order",
+                (str(year),),
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    return {_normalize_ea_key(r[0]): (int(r[1] or 0), int(r[2] or 0)) for r in rows}
+
+
+def _build_ea_matrix(
+    *,
+    year: int,
+    entries: list[dict[str, Any]],
+    targets: dict[str, int],
+    start_q: dict[str, int],
+    known_companies: list[str],
+) -> dict[str, Any]:
+    metadata = _load_ea_metadata()
+    special_rules = _load_sondervorgaben(CONFIG_XLSX, known_companies)
+    special_order = {
+        key: idx
+        for idx, rule in enumerate(special_rules)
+        for key in rule.get("ea_keys", [])
+        if key
+    }
+    el_aggregates = _load_el_aggregates(year, 4)
+    ek_totals = _load_ek_totals(year)
+    ea_totals: dict[str, dict[str, Any]] = defaultdict(lambda: {"quarters": defaultdict(int), "total": 0, "status": {}})
+
+    for entry in entries:
+        ea_key = _normalize_ea_key(entry.get("ea_number") or entry.get("ea"))
+        quarter = entry.get("quarter")
+        if not ea_key or quarter not in QUARTERS:
+            continue
+        group = _matrix_group_for_entry(entry)
+        value = int(entry.get("value") or 0)
+        ea_totals[ea_key]["quarters"][(group, quarter)] += value
+        key = (group, quarter)
+        prev = ea_totals[ea_key]["status"].get(key)
+        label = entry.get("status_label", "")
+        if prev is None or _STATUS_PRIORITY.get(label, 99) < _STATUS_PRIORITY.get(prev, 99):
+            ea_totals[ea_key]["status"][key] = label
+        ea_totals[ea_key]["total"] += value
+        if ea_key not in metadata:
+            metadata[ea_key] = {
+                "ea": ea_key,
+                "title": entry.get("ea") or entry.get("title") or ea_key,
+                "family": "",
+                "sop": None,
+                "hierarchy": "",
+            }
+
+    for ea_key in special_order:
+        metadata.setdefault(ea_key, {"ea": ea_key, "title": ea_key, "family": "", "sop": None, "hierarchy": ""})
+
+    rows: list[dict[str, Any]] = []
+    grand_total = sum(int(data["total"]) for data in ea_totals.values())
+    ek_plan_total = sum(v[0] for v in ek_totals.values()) or 1
+    ek_gen_total = sum(v[1] for v in ek_totals.values()) or 1
+    for ea_key in sorted(set(metadata) & (set(ea_totals) | set(special_order))):
+        meta = metadata[ea_key]
+        total = int(ea_totals[ea_key]["total"])
+        rows.append(
+            {
+                "category": _ea_matrix_category(ea_key, meta, special_order),
+                "special_order": special_order.get(ea_key, 9999),
+                "ea": ea_key,
+                "title": meta.get("title") or ea_key,
+                "family": meta.get("family") or "",
+                "sop": meta.get("sop"),
+                "fl_te": round(total / 1000),
+                "fl_pct": (total / grand_total) if grand_total else 0,
+                "ek_plan": ek_totals[ea_key][0] / ek_plan_total if ea_key in ek_totals else None,
+                "ek_genehmigt": ek_totals[ea_key][1] / ek_gen_total if ea_key in ek_totals else None,
+                "el_te": round(float(el_aggregates.get(ea_key, {}).get("year_te", 0))) if ea_key in el_aggregates else None,
+                "quarters": dict(ea_totals[ea_key]["quarters"]),
+                "statuses": dict(ea_totals[ea_key]["status"]),
+            }
+        )
+    rows.sort(key=_ea_matrix_sort_key)
+
+    _annual_targets, quarter_targets = _load_reporting_company_targets(year)
+    soll = {group: {q: 0 for q in QUARTERS} for group in EA_MATRIX_GROUPS}
+    # Detect groups sharing a marker (e.g. multiple THIESEN columns) → skip from company matching
+    _marker_groups: dict[str, list[str]] = {}
+    for g, (_c, m) in EA_MATRIX_GROUPS.items():
+        if m:
+            _marker_groups.setdefault(m, []).append(g)
+    _shared_marker_groups = {g for gs in _marker_groups.values() if len(gs) > 1 for g in gs}
+    # Map sub-group key → area for area-based targets
+    _subgroup_target_map: dict[str, str] = {}
+    for area_key, hint in _SUBGROUP_AREAS.items():
+        for g in _shared_marker_groups:
+            if hint.upper() in g.upper():
+                _subgroup_target_map[g] = area_key
+    catch_all = _find_catch_all()
+    for group, (_col, marker) in EA_MATRIX_GROUPS.items():
+        if group in _shared_marker_groups:
+            continue
+        for firm, values in quarter_targets.items():
+            firm_upper = firm.upper()
+            if (marker and marker in firm_upper) or (group == catch_all and not any(m and m in firm_upper for _g, (_c, m) in EA_MATRIX_GROUPS.items() if m)):
+                for quarter in QUARTERS:
+                    soll[group][quarter] += int(values.get(quarter, 0))
+    for group, area_key in _subgroup_target_map.items():
+        soll[group] = _target_quarter_values_for_area(targets, start_q, area_key)
+
+    ist = {group: {q: 0 for q in QUARTERS} for group in EA_MATRIX_GROUPS}
+    catch_all_firms: set[str] = set()
+    for entry in entries:
+        quarter = entry.get("quarter")
+        if quarter in QUARTERS:
+            grp = _matrix_group_for_entry(entry)
+            ist[grp][quarter] += int(entry.get("value") or 0)
+            if grp == catch_all:
+                catch_all_firms.add(str(entry.get("reporting_company") or entry.get("source_company") or ""))
+    catch_all_firms.discard("")
+
+    return {"rows": rows, "soll": soll, "ist": ist,
+            "catch_all_rename": catch_all_firms.pop() if len(catch_all_firms) == 1 else None}
+
+
+def _copy_row_style(ws, row_idx: int) -> tuple[float | None, list[dict[str, Any]]]:
+    styles = []
+    for col_idx in range(1, ws.max_column + 1):
+        cell = ws.cell(row_idx, col_idx)
+        styles.append({
+            "font": copy(cell.font),
+            "fill": copy(cell.fill),
+            "border": copy(cell.border),
+            "alignment": copy(cell.alignment),
+            "number_format": cell.number_format,
+            "protection": copy(cell.protection),
+        })
+    return ws.row_dimensions[row_idx].height, styles
+
+
+def _apply_row_style(ws, row_idx: int, template: tuple[float | None, list[dict[str, Any]]]) -> None:
+    height, styles = template
+    ws.row_dimensions[row_idx].height = height
+    for col_idx, style in enumerate(styles, start=1):
+        cell = ws.cell(row_idx, col_idx)
+        cell.font = copy(style["font"])
+        cell.fill = copy(style["fill"])
+        cell.border = copy(style["border"])
+        cell.alignment = copy(style["alignment"])
+        cell.number_format = style["number_format"]
+        cell.protection = copy(style["protection"])
+
+
+def _write_ea_matrix(ws, matrix: dict[str, Any] | None) -> None:
+    if not matrix:
+        return
+    data_style = _copy_row_style(ws, 5)
+    category_style = _copy_row_style(ws, 7)
+    if ws.max_row >= 5:
+        ws.delete_rows(5, ws.max_row - 4)
+
+    ws["A2"] = f"Stand: {datetime.date.today().strftime('%d.%m.%Y')}"
+    if (rename := matrix.get("catch_all_rename")) and (ca := _find_catch_all()):
+        ws.cell(1, EA_MATRIX_GROUPS[ca][0]).value = rename
+    for group, (start_col, _marker) in EA_MATRIX_GROUPS.items():
+        for offset, quarter in enumerate(QUARTERS):
+            col_idx = start_col + offset
+            ws.cell(2, col_idx).value = round(matrix["soll"].get(group, {}).get(quarter, 0) / 1000)
+            ws.cell(3, col_idx).value = round(matrix["ist"].get(group, {}).get(quarter, 0) / 1000)
+
+    current_row = 5
+    for category in EA_MATRIX_CATEGORIES:
+        category_rows = [row for row in matrix["rows"] if row["category"] == category]
+        if not category_rows:
+            continue
+        _apply_row_style(ws, current_row, category_style)
+        ws.cell(current_row, 2).value = category
+        current_row += 1
+        no_fill = PatternFill(fill_type=None)
+        for data in category_rows:
+            _apply_row_style(ws, current_row, data_style)
+            values = [
+                data["ea"],
+                data["title"],
+                data["family"],
+                data["sop"],
+                data.get("ek_plan"),
+                data.get("ek_genehmigt"),
+                data["fl_te"] or None,
+                data["fl_pct"] or None,
+                data["el_te"],
+            ]
+            for col_idx, value in enumerate(values, start=1):
+                ws.cell(current_row, col_idx).value = value
+            ws.cell(current_row, 5).number_format = "0.0%"
+            ws.cell(current_row, 6).number_format = "0.0%"
+            for col_idx in range(5, ws.max_column + 1):
+                ws.cell(current_row, col_idx).fill = no_fill
+            for group, (start_col, _marker) in EA_MATRIX_GROUPS.items():
+                for offset, quarter in enumerate(QUARTERS):
+                    value = round(data["quarters"].get((group, quarter), 0) / 1000)
+                    cell = ws.cell(current_row, start_col + offset)
+                    cell.value = value or None
+                    status = data.get("statuses", {}).get((group, quarter))
+                    if value and status in _STATUS_FILL_MAP:
+                        cell.fill = _STATUS_FILL_MAP[status]
+            current_row += 1
+
+    last = current_row - 1
+    if last >= 5:
+        pct_rule = ColorScaleRule(start_type="num", start_value=0, start_color="FFFFFF", end_type="num", end_value=0.05, end_color="00B050")
+        num_rule = ColorScaleRule(start_type="num", start_value=0, start_color="FFFFFF", end_type="num", end_value=200, end_color="00B050")
+        for col in ("E", "F", "H"):
+            ws.conditional_formatting.add(f"{col}5:{col}{last}", pct_rule)
+        ws.conditional_formatting.add(f"G5:G{last}", num_rule)
+
+
 def _merge_quarter_todo_entries(
     base: dict[str, list[dict[str, Any]]],
     extra: dict[str, list[dict[str, Any]]],
@@ -1827,10 +2102,15 @@ def render_markdown(report: ReportDocument) -> str:
 
 
 def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from: str | None = None) -> str:
-    workbook = Workbook()
-    overview_ws = workbook.active
-    overview_ws.title = "Übersicht"
-    correction_ws = workbook.create_sheet("Korrektur")
+    workbook = load_workbook(EA_MATRIX_TEMPLATE) if os.path.isfile(EA_MATRIX_TEMPLATE) else Workbook()
+    if "Übersicht" in workbook.sheetnames:
+        del workbook["Übersicht"]
+    if "Korrektur" in workbook.sheetnames:
+        del workbook["Korrektur"]
+    overview_ws = workbook.create_sheet("Übersicht", 0)
+    correction_ws = workbook.create_sheet("Korrektur", 1)
+    if "Sheet" in workbook.sheetnames and "EA-Matrix" not in workbook.sheetnames:
+        del workbook["Sheet"]
 
     max_cols = max(1, report.max_columns)
 
@@ -2174,6 +2454,11 @@ def write_xlsx_report(report: ReportDocument, xlsx_file: str, inherit_notes_from
 
     _inherit_notes_from_workbook(workbook, inherit_notes_from)
     _write_overview_quarter_block(overview_ws, report.overview_quarter_block)
+    if "EA-Matrix" in workbook.sheetnames:
+        _write_ea_matrix(workbook["EA-Matrix"], report.ea_matrix)
+    workbook.active = workbook.sheetnames.index("Übersicht")
+    for ws in workbook.worksheets:
+        ws.views.sheetView[0].tabSelected = (ws.title == "Übersicht")
     workbook.save(xlsx_file)
     return xlsx_file
 
@@ -2816,6 +3101,13 @@ def generate_report(
         sections=sections,
         max_columns=max_columns,
         overview_quarter_block=overview_quarter_block,
+        ea_matrix=_build_ea_matrix(
+            year=year,
+            entries=budget_entries,
+            targets=TARGET_2026,
+            start_q=START_Q,
+            known_companies=sorted({str(entry["reporting_company"]) for entry in budget_entries}),
+        ),
     )
 
     md_text = render_markdown(report)

@@ -14,7 +14,7 @@ from report_utils import report_path, section, table_md, write_report
 
 WORKSPACE = Path(__file__).resolve().parents[2]
 DB_PATH = WORKSPACE / "userdata" / "budget.db"
-DEFAULT_RULES_CSV = WORKSPACE / "userdata" / "budget" / "planning" / "beauftragungsplanung_rules.csv"
+DEFAULT_CONFIG_XLSX = WORKSPACE / "userdata" / "budget" / "planning" / "beauftragungsplanung_config.xlsx"
 STATUS_MAPPING_CSV = (
     WORKSPACE
     / ".agents"
@@ -45,64 +45,6 @@ EDAG_COMPANY = "EDAG ENGINEERING GMBH WOLFSBURG"
 BERTRANDT_COMPANY = "BERTRANDT INGENIEURBUERO GMBH TAPPENBECK"
 
 
-def compute_company_annual_targets(
-    target_2026: dict[str, int],
-    company_overrides: dict[str, dict[str, int | str]],
-) -> dict[str, int]:
-    """Firmenjahrestargets (€) aus target.csv-Daten. Einheitliche Quelle."""
-    result = {
-        c: sum(int(target_2026.get(a, 0)) * 1000 for a in areas)
-        for c, areas in COMPANY_AREA_MAP.items()
-    }
-    result = {c: v for c, v in result.items() if v > 0}
-    for key, company in (("BERTRANDT", BERTRANDT_COMPANY), ("EDAG", EDAG_COMPANY)):
-        override = int((company_overrides.get(key) or {}).get("target_te", 0)) * 1000
-        if override > 0:
-            result[company] = override
-    return result
-
-
-def _load_target_csv_data() -> tuple[dict[str, int], dict[str, dict[str, int | str]], dict[str, Any] | None]:
-    """Lädt (target_2026, company_overrides, quarter_split) aus report_massnahmenplan.py."""
-    import importlib.util
-
-    report_py = (
-        Path(__file__).resolve().parents[2]
-        / ".agents" / "skills" / "skill-budget-target-ist-analyse" / "report_massnahmenplan.py"
-    )
-    spec = importlib.util.spec_from_file_location("report_massnahmenplan", report_py)
-    if not spec or not spec.loader:
-        return {}, {}, None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    _ref, target_2026, _order, _start_q, company_overrides, quarter_split = module.load_targets()
-    return target_2026, company_overrides, quarter_split
-DEFAULT_RULE_ROWS = [
-    ("stage2_source", "plan_stage2_results", "Quelltabelle fuer Stage-2-Ergebnisse. Nicht aendern."),
-    ("stage2_solver", "highs", "Solver-Engine. Nur 'highs' wird unterstuetzt."),
-    ("stage2_activation_penalty", "100", "Strafkosten pro EA die ueberhaupt genutzt wird (jaehrlich). Hoeher = weniger verschiedene EAs im Plan."),
-    ("stage2_quarter_activation_penalty", "50", "Zusaetzliche Strafe pro EA pro Quartal. Hoeher = weniger Einzelbeauftragungen."),
-    ("stage2_min_new_order_amount", "10000", "Mindestbetrag (EUR) fuer neue Beauftragungen. Kleinere Betraege werden vermieden."),
-    ("stage2_repeat_quarter_penalty", "200", "Strafe wenn dieselbe EA in mehreren Quartalen beauftragt wird. Hoeher = EA-Rotation zwischen Quartalen."),
-    ("stage2_stop_penalty", "500", "Strafe fuer das Stoppen einer bestehenden Konzept-Position. Hoeher = bestehende Auftraege werden eher beibehalten."),
-    ("stage2_large_order_penalty", "700", "Strafe fuer Einzelbeauftragungen ueber dem Schwellenwert. Hoeher = gleichmaessigere Verteilung."),
-    ("stage2_large_order_threshold", "40000", "Schwellenwert (EUR) ab dem large_order_penalty greift."),
-    ("stage2_existing_small_amount_penalty", "10000", "Strafe fuer Kleinstbetraege unter min_new_order_amount bei bestehenden Konzepten. Hoeher = Kleinstpositionen werden eher gestoppt."),
-    ("stage2_soft_target_penalty", "100", "Strafe pro EUR Abweichung wenn eine Firma WENIGER als ihr Quartalsziel bekommt (Unterplanung). Hoeher = Unterplanung wird staerker vermieden."),
-    ("stage2_active_ea_cap_per_quarter", "0", "Max. Anzahl aktiver EAs pro Firma und Quartal. 0 = kein Limit."),
-    ("stage2_hard_need_bonus", "50", "Bonus (Kostenreduktion) fuer EAs die als 'hart benoetigt' markiert sind. Hoeher = harte EAs werden bevorzugt."),
-    ("stage2_throughlauf_change_penalty", "2500", "Strafe pro EUR Reduktion bei Positionen die bereits im Durchlauf sind. Hoeher = laufende Positionen werden weniger gekuerzt."),
-    ("stage2_special_rule_priority_penalty_step", "25", "Strafkosten-Stufe pro Rang bei Sondervorgaben-Firmenprioritaet. Hoeher = priorisierte Firmen werden staerker bevorzugt."),
-    ("stage2_special_rule_annual_penalty", "500", "Strafe pro EUR Abweichung vom Jahres-/Periodenziel einer Sondervorgabe. Hoeher = Sondervorgaben werden exakter eingehalten."),
-    ("stage2_global_quarter_undershoot_penalty", "500", "Strafe pro EUR wenn ein Quartal insgesamt UNTER dem Gesamtplan liegt. Hoeher = keine Unterplanung im Quartal."),
-    ("stage2_global_quarter_overshoot_penalty", "5", "Strafe pro EUR wenn ein Quartal insgesamt UEBER dem Gesamtplan liegt. Hoeher = weniger Ueberplanung im Quartal."),
-    ("stage2_soft_target_overshoot_penalty", "10", "Strafe pro EUR Abweichung wenn eine Firma MEHR als ihr Quartalsziel bekommt (Ueberplanung). Hoeher = Ueberplanung wird staerker vermieden."),
-    ("stage2_time_limit_seconds", "120", "Maximale Rechenzeit des Solvers in Sekunden. Bei Timeout wird die beste Zwischenloesung verwendet."),
-    ("enforce_company_annual_target_consistency", "true", "Prueft ob Quartalssummen zum Jahresziel passen. true = Abbruch bei Inkonsistenz."),
-    ("btl_opt_refresh", "replace", "Modus fuer btl_opt-Aktualisierung. 'replace' loescht und schreibt neu."),
-]
-
-
 class PlanningError(RuntimeError):
     pass
 
@@ -112,35 +54,6 @@ def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
-
-
-def ensure_default_rules_csv(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        return path
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle, delimiter=";")
-        writer.writerow(["rule", "value", "description"])
-        writer.writerows(DEFAULT_RULE_ROWS)
-    return path
-
-
-def _read_rules_csv(path: Path) -> dict[str, str]:
-    with path.open(encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle, delimiter=";")
-        fieldnames = [str(name or "").strip() for name in reader.fieldnames or []]
-        if fieldnames[:2] != ["rule", "value"]:
-            raise PlanningError(
-                f"Ungueltiges Rules-Format in {path}. Erwartet werden mindestens die Spalten 'rule;value'."
-            )
-        rules = {
-            str(row["rule"]).strip(): str(row["value"] or "").strip()
-            for row in reader
-            if str(row.get("rule") or "").strip()
-        }
-    if not rules:
-        raise PlanningError(f"Keine Regeln in {path} gefunden.")
-    return rules
 
 
 @lru_cache(maxsize=1)
@@ -760,26 +673,22 @@ def _write_planning_report(
     return report
 
 
-def _bootstrap_company_targets(conn: sqlite3.Connection, year: int) -> None:
-    """Befüllt/aktualisiert plan_company_targets aus target.csv (immer frisch)."""
-    target_2026, company_overrides, quarter_split = _load_target_csv_data()
-    company_annual = compute_company_annual_targets(target_2026, company_overrides)
-    if not company_annual:
+def _bootstrap_company_targets(
+    conn: sqlite3.Connection, year: int, company_targets: list[dict[str, Any]],
+) -> None:
+    """Befüllt/aktualisiert plan_company_targets aus Excel-Config."""
+    if not company_targets:
         return
-
-    if quarter_split and float(quarter_split.get("annual_te", 0)) > 0:
-        annual_te = float(quarter_split["annual_te"])
-        ratios = {q: float(quarter_split["quarters_te"][q]) / annual_te for q in QUARTERS}
-    else:
-        ratios = {q: 0.25 for q in QUARTERS}
-
     insert_rows = []
-    for company, annual in company_annual.items():
+    for ct in company_targets:
+        company = ct["company"]
+        annual = int(ct["annual_te"]) * 1000
+        step = int(ct.get("step", 1))
+        ratios = {q: float(ct.get(q, 0.25)) for q in QUARTERS}
         qvals = {q: int(round(annual * ratios[q])) for q in QUARTERS}
         qvals[QUARTERS[-1]] += annual - sum(qvals.values())
         for q in QUARTERS:
-            insert_rows.append((year, company, q, qvals[q], annual, None, 1))
-
+            insert_rows.append((year, company, q, qvals[q], annual, None, step))
     conn.executemany(
         """
         INSERT INTO plan_company_targets
@@ -886,35 +795,43 @@ def _bootstrap_stage1_from_btl(conn: sqlite3.Connection, year: int) -> None:
 def execute_planning(
     *,
     year: int,
-    rules_csv: str,
+    config_xlsx: str,
     output: str | None = None,
     logger: logging.Logger | None = None,
     planning_start_quarter: int | None = None,
     sondervorgaben_mode: str = "catchup",
 ) -> tuple[dict[str, Any], str]:
-    rules_path = ensure_default_rules_csv(Path(rules_csv))
-    rules = _read_rules_csv(rules_path)
+    from planning_config_io import read_config, transform_sondervorgaben
     from stage2_solver import load_solver_config, solve_stage2
 
-    config = load_solver_config(rules)
+    cfg = read_config(Path(config_xlsx))
+    config = load_solver_config(cfg.rules)
     start_quarter = planning_start_quarter or _current_quarter()
 
     with connect() as conn:
         init_planning_schema(conn)
-        _bootstrap_company_targets(conn, year)
+        _bootstrap_company_targets(conn, year, cfg.company_targets)
         _ensure_special_company_targets(conn, year)
         _bootstrap_stage1_from_btl(conn, year)
         _bootstrap_existing_orders_from_btl(conn, year)
+        known_companies = sorted(
+            str(r["company"])
+            for r in conn.execute(
+                "SELECT DISTINCT company FROM plan_company_targets WHERE year=?", (year,)
+            ).fetchall()
+        )
+        special_rules = transform_sondervorgaben(cfg.sondervorgaben, known_companies, start_quarter)
         solution = solve_stage2(
             conn,
             year=year,
             config=config,
             planning_start_quarter=start_quarter,
             sondervorgaben_mode=sondervorgaben_mode,
+            special_rules=special_rules,
         )
         conn.execute(
             "UPDATE plan_run_log SET rules_csv = ? WHERE run_id = ?",
-            (str(rules_path), solution.run_id),
+            (str(config_xlsx), solution.run_id),
         )
         rows = _materialize_btl_opt(conn, year)
         conn.commit()
@@ -941,6 +858,6 @@ def execute_planning(
         "solver_status": solution.summary.status,
         "objective_value": solution.summary.objective_value,
         "btl_opt_rows": len(rows),
-        "rules_csv": str(rules_path),
+        "config_xlsx": str(config_xlsx),
     }
     return result, str(report)

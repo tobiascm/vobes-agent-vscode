@@ -1,6 +1,6 @@
 ---
 name: skill-budget-beauftragungsplanung
-description: Beauftragungsplanung fuer Fremdvergaben auf Basis von SQLite + Regel-CSV. Nutzt vorhandene BPLUS-Syncs (`budget_db.py`) maximal weiter, schreibt Stage-1/Stage-2-Ergebnisse in `budget.db`, materialisiert den letzten Optimierungsvorschlag nach `btl_opt` und stoesst danach automatisch die Target-Ist-Analyse auf `btl_opt` an. Verwenden fuer Anfragen wie Beauftragungsplanung, Fremdvergaben planen, Firma x Gewerk x Quartal auf EA verteilen, Referenzbeauftragungen nutzen, Stage 1/Stage 2 Budgetplanung.
+description: Beauftragungsplanung fuer Fremdvergaben auf Basis von SQLite + Excel-Config. Nutzt vorhandene BPLUS-Syncs (`budget_db.py`) maximal weiter, schreibt Stage-1/Stage-2-Ergebnisse in `budget.db`, materialisiert den letzten Optimierungsvorschlag nach `btl_opt` und stoesst danach automatisch die Target-Ist-Analyse auf `btl_opt` an. Verwenden fuer Anfragen wie Beauftragungsplanung, Fremdvergaben planen, Firma x Gewerk x Quartal auf EA verteilen, Referenzbeauftragungen nutzen, Stage 1/Stage 2 Budgetplanung.
 ---
 
 # Skill: Beauftragungsplanung
@@ -16,7 +16,6 @@ Der Skill ist bewusst so gebaut, dass er **maximal mit der bestehenden Budget-In
 - gleiche Report-Helfer: `scripts/budget/report_utils.py`
 - gleiche Session-Reports: `userdata/sessions/`
 - gleiche Sync-Mechanik ueber `scripts/budget/budget_db.py`
-- gleiche Target-Quelle wie `$skill-budget-target-ist-analyse`: `userdata/budget/vorgaben/target.csv`
 - gleiche Test-Logik via `pytest`
 
 ## Wann verwenden?
@@ -68,14 +67,11 @@ Der Skill verwendet dieselbe DB `userdata/budget.db` und legt dort zusaetzlich e
 - Stage-2-Ergebnisse
 - letzter Optimierungsvorschlag in `btl_opt`
 
-**In CSV:**
-- Solver- und Regelparameter
-- Gewichte / Strafkosten
-- Modus-Flags
-- Verdichtungs- und Aktivierungsregeln
-
-Standard-Regeldatei:
-- `userdata/budget/planning/beauftragungsplanung_rules.csv`
+**In Excel-Config** (`userdata/budget/planning/beauftragungsplanung_config.xlsx`):
+- Sheet "Solver-Parameter": Gewichte, Strafkosten, Modus-Flags
+- Sheet "Firmenziele": Jahresziel T€, Quartalsverteilung, Schrittweiten pro Firma
+- Sheet "Sondervorgaben": Themen mit EA-Zuordnung, Kadenz, erlaubte/priorisierte Firmen
+- Sheet "Praemissen": Freitext-Notizen
 
 ## Standard-Workflow
 
@@ -87,12 +83,12 @@ python .agents/skills/skill-budget-beauftragungsplanung/report_beauftragungsplan
 
 Das macht:
 - Planungsschema in `budget.db` anlegen
-- Default-Regel-CSV erzeugen, falls sie noch fehlt
+- Default-Config-Excel erzeugen, falls sie noch fehlt
 
 ### 2. Eingabedaten in SQLite pflegen
 
 Pflichtdaten:
-- `plan_company_targets` oder Auto-Bootstrap aus `target.csv` + `btl`
+- `plan_company_targets` oder Auto-Bootstrap aus Config-Excel Sheet "Firmenziele"
 - `plan_existing_orders` oder Auto-Bootstrap aus `btl`
 - `plan_reference_orders` oder Auto-Bootstrap aus `btl_all` mit Status `07_In Planen-BM: Bestellt`
 - optional Gruppenregeln in `plan_group_rules` / `plan_group_members`
@@ -105,7 +101,7 @@ python .agents/skills/skill-budget-beauftragungsplanung/report_beauftragungsplan
 
 Optional:
 ```bash
-python .agents/skills/skill-budget-beauftragungsplanung/report_beauftragungsplanung.py --jahr 2026 --rules userdata/budget/planning/beauftragungsplanung_rules.csv --output userdata/sessions/planung_2026.md
+python .agents/skills/skill-budget-beauftragungsplanung/report_beauftragungsplanung.py --jahr 2026 --config userdata/budget/planning/beauftragungsplanung_config.xlsx --output userdata/sessions/planung_2026.md
 ```
 
 Fuer Debug-/Testzwecke kann die Planung trotz aktuellem Datum auf das gesamte Jahr erweitert werden:
@@ -129,9 +125,9 @@ Standard ist `catchup`:
 ## Was das Script automatisch macht
 
 - legt das Planungsschema an
-- liest die Regel-CSV
+- liest die Config-Excel
 - synchronisiert bei Bedarf `devorder` und `btl` ueber das bestehende `budget_db.py`
-- bootstrapped Firmen-/Gewerk-Targets aus `userdata/budget/vorgaben/target.csv` und der Zuordnungslogik aus `$skill-budget-target-ist-analyse`
+- bootstrapped Firmen-/Gewerk-Targets aus Config-Excel Sheet "Firmenziele"
 - bootstrapped bestehende Positionen aus `btl`, wenn `plan_existing_orders` leer ist
 - bootstrapped Referenzen aus `btl_all` mit Status `07_In Planen-BM: Bestellt`, wenn `plan_reference_orders` leer ist
 - berechnet Stage 1
@@ -167,8 +163,7 @@ Stage 2 verwendet ausschliesslich **HiGHS via `highspy`**. Es gibt keinen Heuris
 
 Die Quartalssteuerung orientiert sich an der realen Budget-Sicht **Q1-X**:
 
-- `target.csv` liefert die Jahresziele pro Aufgabenbereich
-- die bekannte Firmen-/Aufgabenbereich-Zuordnung wird aus `$skill-budget-target-ist-analyse` wiederverwendet
+- Config-Excel Sheet "Firmenziele" liefert die Jahresziele und Quartalsverteilung pro Firma
 - fuer die Planung werden daraus **interne Einzelquartale Q1..Q4** abgeleitet
 - die Steuerungslogik bleibt dabei kompatibel zur kumulierten Budget-Sicht `Q1-X`
 - standardmaessig werden bereits vergangene Quartale eingefroren; mit `--volljahr` laesst sich das fuer Debug/Test abschalten
@@ -190,41 +185,27 @@ Die Quartalssteuerung orientiert sich an der realen Budget-Sicht **Q1-X**:
 - Rotation der EA zwischen Quartalen
 - Stoppen laufender Positionen nur mit hoher Strafe
 
-## Default-Regel-CSV
+## Config-Excel
 
-Die erzeugte Datei `userdata/budget/planning/beauftragungsplanung_rules.csv` enthaelt u. a.:
+Die erzeugte Datei `userdata/budget/planning/beauftragungsplanung_config.xlsx` enthaelt 4 Sheets:
 
-- `stage1_chunk_amount`
-- `stage1_min_amount`
-- `stage1_max_active_eas`
-- `stage2_solver`
-- `stage2_activation_penalty`
-- `stage2_quarter_activation_penalty`
-- `stage2_min_new_order_amount`
-- `stage2_repeat_quarter_penalty`
-- `stage2_stop_penalty`
-- `stage2_large_order_penalty`
-- `stage2_large_order_threshold`
-- `stage2_existing_small_amount_penalty` (reserviert, derzeit nicht aktiv)
-- `stage2_soft_target_penalty`
-- `stage2_active_ea_cap_per_quarter`
-- `stage2_hard_need_bonus`
-- `stage2_throughlauf_change_penalty`
-- `stage2_special_rule_priority_penalty_step`
-- `stage2_special_rule_annual_penalty`
-- `stage2_global_quarter_undershoot_penalty`
-- `stage2_global_quarter_overshoot_penalty`
-- `stage2_soft_target_overshoot_penalty`
-- `stage2_time_limit_seconds`
-- `enforce_company_annual_target_consistency`
-- `btl_opt_refresh`
+### Sheet "Solver-Parameter"
+Key-Value-Paare (Parameter / Wert / Standard / Beschreibung). Fehlende Keys werden mit Standardwerten ergaenzt.
+
+### Sheet "Firmenziele"
+Firma / Jahresziel_TE / Q1 / Q2 / Q3 / Q4 / Schrittweite. Quartale als Anteil (0.25 = 25%).
+
+### Sheet "Sondervorgaben"
+Thema / EA / EL / FL / Kadenz / Erlaubte_Firmen / Prioritaet_Firmen / Bemerkung / Hinweise.
+
+### Sheet "Praemissen"
+Freitext in Zelle A1.
 
 ## Wichtige Grenzen / Ehrlichkeit
 
 - Wenn `target_value` nicht durch `step_value` teilbar ist, bricht der Lauf mit Fehler ab
 - Wenn harte bestehende Beauftragungen ein Quartalsziel bereits ueberfuellen, wird das offen gemeldet
 - Wenn `plan_stage1_results` fuer das Jahr leer ist, bricht der Lauf mit Fehler ab
-- Die Regeldatei verwendet das Format `rule;value;description` (3-spaltig mit Semikolon)
 
 ## Beispiele fuer Eingabe-Fragen
 
@@ -238,4 +219,5 @@ Die erzeugte Datei `userdata/budget/planning/beauftragungsplanung_rules.csv` ent
 - `.agents/skills/skill-budget-beauftragungsplanung/SKILL.md`
 - `.agents/skills/skill-budget-beauftragungsplanung/report_beauftragungsplanung.py`
 - `scripts/budget/beauftragungsplanung_core.py`
+- `scripts/budget/planning_config_io.py`
 - `tests/test_beauftragungsplanung.py`

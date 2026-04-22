@@ -12,13 +12,13 @@ WORKSPACE = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(WORKSPACE / "scripts" / "budget"))
 
 from beauftragungsplanung_core import (  # noqa: E402
-    DEFAULT_RULES_CSV,
+    DEFAULT_CONFIG_XLSX,
     PlanningError,
     connect,
-    ensure_default_rules_csv,
     execute_planning,
     init_planning_schema,
 )
+from planning_config_io import create_default_config  # noqa: E402
 
 LOGS_DIR = WORKSPACE / "userdata" / "tmp" / "logs"
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
@@ -45,9 +45,9 @@ def setup_logging() -> tuple[logging.Logger, Path]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Beauftragungsplanung auf budget.db")
     parser.add_argument("--jahr", type=int, default=datetime.now().year)
-    parser.add_argument("--rules", default=str(DEFAULT_RULES_CSV))
+    parser.add_argument("--config", default=str(DEFAULT_CONFIG_XLSX))
     parser.add_argument("--output")
-    parser.add_argument("--init", action="store_true", help="Planungsschema und Default-Regel-CSV anlegen")
+    parser.add_argument("--init", action="store_true", help="Planungsschema und Default-Config-Excel anlegen")
     parser.add_argument(
         "--volljahr",
         action="store_true",
@@ -82,16 +82,19 @@ def main() -> int:
 
     with connect() as conn:
         init_planning_schema(conn)
-    ensure_default_rules_csv(Path(args.rules))
+
+    config_path = Path(args.config)
+    if not config_path.exists() or args.init:
+        create_default_config(config_path)
 
     if args.init:
-        print(f"Initialisiert. Regeldatei: {args.rules}")
+        print(f"Initialisiert. Config-Excel: {config_path}")
         return 0
 
     try:
         result, report = execute_planning(
             year=args.jahr,
-            rules_csv=args.rules,
+            config_xlsx=str(config_path),
             output=args.output,
             logger=logger,
             planning_start_quarter=1 if args.volljahr else None,
