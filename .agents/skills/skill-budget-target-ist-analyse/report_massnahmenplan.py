@@ -1516,7 +1516,7 @@ _MARKER_OVERRIDES: dict[str, str] = {"VWGS": "VOLKSWAGEN GROUP SERVICES"}
 _MATRIX_START_COL = 10
 _MATRIX_LABEL_COL = 9
 _IST_UNDER_90_FILL = PatternFill("solid", fgColor="F4B183")
-_IST_UNDER_75_FILL = PatternFill("solid", fgColor="FFC7CE")
+_IST_UNDER_75_FILL = PatternFill("solid", fgColor="FF6666")
 _IST_OVER_110_FILL = PatternFill("solid", fgColor="B4A7D6")
 
 
@@ -1902,15 +1902,17 @@ def _reset_matrix_columns(ws, groups: dict[str, tuple[int, str]], block_style: d
         ws.cell(1, start_col).value = label
 
 
-def _apply_ist_deviation_fill(cell, ist: int, soll: int) -> None:
+def _apply_ist_deviation_fill(cell, ist: int, soll: int, cumulative_ist: int, cumulative_soll: int) -> None:
     if soll <= 0:
+        if cumulative_soll > 0 and cumulative_ist > cumulative_soll:
+            cell.fill = copy(_IST_OVER_110_FILL)
         return
     ratio = ist / soll
     if ratio < 0.75:
         cell.fill = copy(_IST_UNDER_75_FILL)
     elif ratio < 0.95:
         cell.fill = copy(_IST_UNDER_90_FILL)
-    elif ratio > 1.05:
+    elif cumulative_soll > 0 and cumulative_ist > cumulative_soll:
         cell.fill = copy(_IST_OVER_110_FILL)
 
 
@@ -1939,6 +1941,9 @@ def _write_ea_matrix(ws, matrix: dict[str, Any] | None) -> None:
             col_idx = start_col + offset
             soll = int(matrix["soll"].get(group, {}).get(quarter, 0))
             ist = int(matrix["ist"].get(group, {}).get(quarter, 0))
+            cumulative_quarters = QUARTERS[: offset + 1]
+            cumulative_soll = sum(int(matrix["soll"].get(group, {}).get(q, 0)) for q in cumulative_quarters)
+            cumulative_ist = sum(int(matrix["ist"].get(group, {}).get(q, 0)) for q in cumulative_quarters)
             ws.cell(soll_row, col_idx).value = round(soll / 1000)
             ist_cell = ws.cell(ist_row, col_idx)
             ist_cell.value = round(ist / 1000)
@@ -1948,7 +1953,7 @@ def _write_ea_matrix(ws, matrix: dict[str, Any] | None) -> None:
             open_cell.alignment = copy(ist_cell.alignment)
             if open_value and quarter == current_quarter:
                 open_cell.fill = copy(_STATUS_FILL_MAP["im Durchlauf"])
-            _apply_ist_deviation_fill(ist_cell, ist, soll)
+            _apply_ist_deviation_fill(ist_cell, ist, soll, cumulative_ist, cumulative_soll)
 
     current_row = data_start_row
     for category in EA_MATRIX_CATEGORIES:

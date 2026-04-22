@@ -281,12 +281,14 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
                 "4SOFT": {"Q1": 100_000},
                 "THIESEN Spez.": {"Q1": 100_000},
                 "THIESEN Support": {"Q1": 200_000},
+                "Weitere": {"Q1": 100_000, "Q2": 100_000},
             },
             "ist": {
                 **groups,
                 "4SOFT": {"Q1": 111_000},
                 "THIESEN Spez.": {"Q1": 80_000},
                 "THIESEN Support": {"Q1": 140_000, "Q2": 33_000},
+                "Weitere": {"Q1": 50_000, "Q2": 150_000},
             },
             "open": {
                 **groups,
@@ -361,7 +363,9 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
     assert ws.cell(4, starts["THIESEN Support"] + 1).fill.fgColor.rgb.endswith("FFC000")
     assert ws.cell(3, starts["4SOFT"]).fill.fgColor.rgb.endswith("B4A7D6")
     assert ws.cell(3, starts["THIESEN Spez."]).fill.fgColor.rgb.endswith("F4B183")
-    assert ws.cell(3, starts["THIESEN Support"]).fill.fgColor.rgb.endswith("FFC7CE")
+    assert ws.cell(3, starts["THIESEN Support"]).fill.fgColor.rgb.endswith("FF6666")
+    assert ws.cell(3, starts["Weitere"]).fill.fgColor.rgb.endswith("FF6666")
+    assert ws.cell(3, starts["Weitere"] + 1).fill.fgColor.rgb == "00000000"
     quarter_widths = {
         ws.column_dimensions[get_column_letter(col_idx)].width
         for start_col in starts.values()
