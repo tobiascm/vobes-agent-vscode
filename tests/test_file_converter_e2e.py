@@ -92,3 +92,33 @@ def test_to_pdf(filename: str, tmp_path: Path) -> None:
     )
     assert output_file.exists(), f"Output {output_file} not created"
     assert output_file.stat().st_size > 0, f"Output PDF {output_file} is empty"
+
+
+@pytest.mark.e2e
+def test_md_to_pdf(tmp_path: Path) -> None:
+    input_file = tmp_path / "input.md"
+    output_file = tmp_path / "output.pdf"
+    input_file.write_text(
+        "# Titel\n\n"
+        "Das ist ein [externer Link](https://example.com).\n\n"
+        "## Abschnitt A\n\n"
+        "- Punkt 1\n"
+        "- Punkt 2\n",
+        encoding="utf-8",
+    )
+
+    result = _run_converter(
+        "md-to-pdf",
+        str(input_file),
+        str(output_file),
+        "--title",
+        "Test",
+        "--toc-level",
+        "2",
+    )
+
+    assert result.returncode == 0, (
+        f"md-to-pdf failed\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert output_file.exists(), f"Output {output_file} not created"
+    assert output_file.stat().st_size > 0, f"Output PDF {output_file} is empty"

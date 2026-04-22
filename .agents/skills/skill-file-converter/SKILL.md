@@ -1,6 +1,6 @@
 ---
 name: skill-file-converter
-description: "Lokale Dateien nach PDF (via Office COM) oder Markdown (via lightrag LLM-Pipeline) konvertieren. Trigger: Datei konvertieren, PPTX nach PDF, Word nach PDF, Excel nach PDF, Datei nach Markdown, Dokument in Markdown umwandeln."
+description: "Lokale Dateien nach PDF (via Office COM oder Markdown via markdown-pdf) oder Markdown (via lightrag LLM-Pipeline) konvertieren. Trigger: Datei konvertieren, PPTX nach PDF, Word nach PDF, Excel nach PDF, Markdown nach PDF, md-to-pdf, Datei nach Markdown, Dokument in Markdown umwandeln."
 ---
 
 # Skill: File Converter
@@ -8,6 +8,7 @@ description: "Lokale Dateien nach PDF (via Office COM) oder Markdown (via lightr
 Konvertiert **lokale Dateien** nach **PDF** oder **Markdown**.
 
 - **→ PDF:** Windows COM-Automation (PowerPoint, Word, Excel)
+- **Markdown → PDF:** `markdown-pdf` (MarkdownPdf + Section)
 - **→ Markdown (LLM):** Delegiert an `lightrag_test/scripts/convert_to_markdown.py` (Docling + Claude)
 - **→ Markdown (non-LLM):** Lokale Extraktion via `file_parsers.py` (python-pptx, openpyxl, python-docx, pdfplumber)
 
@@ -20,8 +21,9 @@ Konvertiert **lokale Dateien** nach **PDF** oder **Markdown**.
 
 - Der User moechte eine **lokale Datei** nach PDF oder Markdown konvertieren
 - Der User hat ein PPTX/DOCX/XLSX und braucht ein PDF daraus
+- Der User hat Markdown und braucht daraus ein PDF
 - Der User moechte den Inhalt einer Datei als Markdown extrahieren (LLM-gestuetzt oder schnell ohne LLM)
-- Der User fragt: "Konvertiere diese Datei nach PDF", "Mach daraus ein Markdown"
+- Der User fragt: "Konvertiere diese Datei nach PDF", "Markdown nach PDF", "Mach daraus ein Markdown"
 
 ## Wann NICHT verwenden?
 
@@ -39,6 +41,12 @@ Konvertiert **lokale Dateien** nach **PDF** oder **Markdown**.
 | `.pptx`, `.ppt` | PowerPoint |
 | `.docx`, `.doc` | Word |
 | `.xlsx`, `.xls`, `.xlsm`, `.xltx`, `.xltm` | Excel |
+
+### Markdown → PDF (markdown-pdf)
+
+| Eingabe | Methode |
+|---------|---------|
+| `.md`, `.markdown` | markdown-pdf (`MarkdownPdf`, `Section`) |
 
 ### → Markdown (LLM via lightrag_test)
 
@@ -65,7 +73,8 @@ PDF, DOCX, XLSX, PPTX, ODT, ODP, TXT, XML, PNG, JPG, TIFF, BMP, WEBP, HTML und m
 1. **PDF (to-pdf):** Microsoft Office (PowerPoint, Word, Excel) muss installiert sein
 2. **Markdown (LLM):** `C:\Daten\Python\lightrag_test` muss vorhanden sein (LLM-Pipeline)
 3. **Markdown (non-LLM):** Keine externe Abhaengigkeit (python-pptx, openpyxl, python-docx in pyproject.toml)
-4. **Python-Pakete:** `pywin32` (bereits in pyproject.toml)
+4. **Markdown → PDF:** `markdown-pdf` (bereits in pyproject.toml)
+5. **Python-Pakete:** `pywin32` (bereits in pyproject.toml)
 
 ## CLI-Befehle
 
@@ -76,6 +85,20 @@ python .agents/skills/skill-file-converter/scripts/file_converter.py to-pdf INPU
 ```
 
 Ohne OUTPUT wird die PDF neben die Eingabedatei gelegt (`<stem>.pdf`).
+
+### Markdown → PDF
+
+```bash
+python .agents/skills/skill-file-converter/scripts/file_converter.py md-to-pdf INPUT.md [OUTPUT.pdf]
+```
+
+Optionale Flags:
+- `--title "..."` — PDF-Titel-Metadatum
+- `--toc-level 3` — Bookmark/TOC-Tiefe (default: 2)
+- `--no-optimize` — PDF-Optimierung deaktivieren
+- `--css pfad\style.css` — CSS-Anpassung aus Datei laden
+
+Ohne OUTPUT wird die PDF neben die Markdown-Datei gelegt (`<stem>.pdf`).
 
 ### Datei → Markdown
 
@@ -99,13 +122,16 @@ Ohne OUTPUT wird die Markdown-Datei neben die Eingabedatei gelegt (`<stem>.md`).
 | `0` | Erfolg |
 | `1` | Fehler |
 | `2` | Format nicht unterstuetzt |
-| `3` | Abhaengigkeit fehlt (Office nicht installiert, lightrag_test nicht gefunden) |
+| `3` | Abhaengigkeit fehlt (Office nicht installiert, lightrag_test oder markdown-pdf nicht gefunden) |
 
 ## Typischer Ablauf
 
 ```bash
 # PPTX → PDF
 python .agents/skills/skill-file-converter/scripts/file_converter.py to-pdf C:\Users\VWRR6B4\Downloads\praesentation.pptx
+
+# Markdown → PDF
+python .agents/skills/skill-file-converter/scripts/file_converter.py md-to-pdf bericht.md bericht.pdf --title "Bericht" --toc-level 2
 
 # DOCX → Markdown (LLM-gestuetzt)
 python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown C:\Users\VWRR6B4\Downloads\bericht.docx

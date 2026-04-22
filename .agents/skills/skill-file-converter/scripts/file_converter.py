@@ -3,6 +3,7 @@
 Usage:
     python .agents/skills/skill-file-converter/scripts/file_converter.py to-markdown INPUT [OUTPUT] [--no-llm] [--no-llm-pdf] [--all-sheets] [--clipboard]
     python .agents/skills/skill-file-converter/scripts/file_converter.py to-pdf INPUT [OUTPUT]
+    python .agents/skills/skill-file-converter/scripts/file_converter.py md-to-pdf INPUT.md [OUTPUT.pdf] [--title TITLE] [--toc-level N] [--no-optimize] [--css CSS_FILE]
 
 Markdown-Konvertierung:
     --no-llm       Lokale Extraktion via file_parsers (PPTX, DOCX, XLSX, PDF, CSV, ...)
@@ -14,7 +15,7 @@ Exit codes:
     0  Erfolg
     1  Fehler
     2  Format nicht unterstuetzt
-    3  Abhaengigkeit fehlt (Office/lightrag_test nicht gefunden)
+    3  Abhaengigkeit fehlt (Office/lightrag_test/markdown-pdf nicht gefunden)
 """
 
 from __future__ import annotations
@@ -86,6 +87,51 @@ def _to_markdown(input_path: Path, output_path: Path, *, no_llm_pdf: bool = Fals
 def _to_pdf(input_path: Path, output_path: Path) -> int:
     from file_llm_converter import _to_pdf as _llm_to_pdf
     return _llm_to_pdf(input_path, output_path)
+
+
+# ---------------------------------------------------------------------------
+# md-to-pdf: Markdown via markdown-pdf
+# ---------------------------------------------------------------------------
+
+
+def _markdown_to_pdf(input_path: Path, output_path: Path, *,
+                     toc_level: int = 2, optimize: bool = True,
+                     title: str | None = None, css_path: Path | None = None) -> int:
+    if not input_path.is_file():
+        print(f"ERROR: Eingabedatei nicht gefunden: {input_path}", file=sys.stderr)
+        return 1
+
+    if input_path.suffix.lower() not in {".md", ".markdown"}:
+        print("ERROR: md-to-pdf unterstuetzt nur .md und .markdown", file=sys.stderr)
+        return 2
+
+    try:
+        from markdown_pdf import MarkdownPdf, Section
+    except ImportError:
+        print("ERROR: md-to-pdf benoetigt markdown-pdf (python -m pip install markdown-pdf)", file=sys.stderr)
+        return 3
+
+    try:
+        user_css = css_path.read_text(encoding="utf-8") if css_path else None
+        md_text = input_path.read_text(encoding="utf-8")
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        pdf = MarkdownPdf(toc_level=toc_level, optimize=optimize)
+        try:
+            from mdit_py_plugins.anchors import anchors_plugin
+            anchors_plugin(pdf.m_d, min_level=1, max_level=6, permalink=False)
+        except ImportError:
+            pass
+        pdf.add_section(Section(md_text), user_css=user_css)
+        if title:
+            pdf.meta["title"] = title
+        pdf.save(str(output_path))
+    except Exception as exc:
+        print(f"ERROR: Markdown-PDF-Konvertierung fehlgeschlagen: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"PDF erstellt: {output_path}")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +215,15 @@ def main() -> int:
     pdf.add_argument("input", type=Path, help="Eingabedatei")
     pdf.add_argument("output", type=Path, nargs="?", help="Ausgabedatei (default: <stem>.pdf)")
 
+    # md-to-pdf
+    md_pdf = sub.add_parser("md-to-pdf", help="Markdown nach PDF konvertieren (markdown-pdf)")
+    md_pdf.add_argument("input", type=Path, help="Markdown-Eingabedatei")
+    md_pdf.add_argument("output", type=Path, nargs="?", help="Ausgabedatei (default: <stem>.pdf)")
+    md_pdf.add_argument("--title", type=str, default=None, help="PDF-Titel-Metadatum")
+    md_pdf.add_argument("--toc-level", type=int, default=2, help="Bookmark/TOC-Tiefe (default: 2)")
+    md_pdf.add_argument("--no-optimize", action="store_true", help="PDF-Optimierung deaktivieren")
+    md_pdf.add_argument("--css", type=Path, default=None, help="CSS-Datei fuer markdown-pdf")
+
     args = parser.parse_args()
 
     if args.command == "to-markdown":
@@ -206,6 +261,18 @@ def main() -> int:
         input_path = args.input.resolve()
         output_path = (args.output or _default_output(input_path, ".pdf")).resolve()
         return _to_pdf(input_path, output_path)
+
+    elif args.command == "md-to-pdf":
+        input_path = args.input.resolve()
+        output_path = (args.output or _default_output(input_path, ".pdf")).resolve()
+        css_path = args.css.resolve() if args.css else None
+        return _markdown_to_pdf(
+            input_path, output_path,
+            toc_level=args.toc_level,
+            optimize=not args.no_optimize,
+            title=args.title,
+            css_path=css_path,
+        )
 
     return 1
 
