@@ -145,15 +145,75 @@ def test_thiesen_manual_soll_includes_both_thiesen_areas():
 
 def test_ea_matrix_group_splits_thiesen_by_existing_area_logic():
     mod = load_module()
+    groups = mod._matrix_groups_from_labels(["THIESEN Spez.", "THIESEN Support", "Weitere"])
 
     assert mod._matrix_group_for_entry({
         "reporting_company": "THIESEN HARDWARE SOFTW. GMBH WARTENBERG",
         "area": mod.THIESEN_SPEC_KEY,
-    }) == "THIESEN_SPEC"
+    }, groups) == "THIESEN Spez."
     assert mod._matrix_group_for_entry({
         "reporting_company": "THIESEN HARDWARE SOFTW. GMBH WARTENBERG",
         "area": mod.THIESEN_SUPPORT_KEY,
-    }) == "THIESEN_SUPPORT"
+    }, groups) == "THIESEN Support"
+
+
+def test_ea_matrix_groups_use_entries_and_target_only_companies(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(mod, "_load_ea_metadata", lambda: {})
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(mod, "_load_el_aggregates", lambda year, num_q: {})
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(
+        mod,
+        "_load_reporting_company_targets",
+        lambda year: ({}, {"ZIEL FIRMA GMBH": {"Q1": 50_000, "Q2": 0, "Q3": 0, "Q4": 0}}),
+    )
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[
+            {
+                "ea_number": "1",
+                "ea": "EA1",
+                "title": "BM 1",
+                "value": 10_000,
+                "quarter": "Q1",
+                "status_label": "Konzept",
+                "reporting_company": "Ist Firma GmbH",
+                "area": "Area",
+            }
+        ],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    assert list(matrix["groups"]) == ["Ist Firma GmbH", "ZIEL FIRMA GMBH"]
+    assert matrix["ist"]["Ist Firma GmbH"]["Q1"] == 10_000
+    assert matrix["soll"]["ZIEL FIRMA GMBH"]["Q1"] == 50_000
+
+
+def test_ea_matrix_group_matches_vwgs_marker_override():
+    mod = load_module()
+    groups = mod._build_matrix_groups(
+        [],
+        {"VOLKSWAGEN GROUP SERVICES GMBH WOLFSBURG": {"Q1": 100_000}},
+    )
+
+    assert list(groups) == ["VWGS"]
+    assert mod._matrix_group_for_entry({
+        "reporting_company": "VOLKSWAGEN GROUP SERVICES GMBH WOLFSBURG",
+    }, groups) == "VWGS"
+
+
+def test_ea_matrix_uses_dynamic_company_instead_of_weitere_for_unknown_company():
+    mod = load_module()
+    groups = mod._build_matrix_groups(
+        [{"reporting_company": "NEUE FIRMA GMBH", "quarter": "Q1"}],
+        {},
+    )
+
+    assert list(groups) == ["NEUE FIRMA GMBH"]
 
 
 def test_write_xlsx_report_writes_titles_and_summary_style(tmp_path):
@@ -205,15 +265,17 @@ def test_write_xlsx_report_writes_titles_and_summary_style(tmp_path):
 
 def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
     mod = load_module()
-    groups = {group: {quarter: 0 for quarter in mod.QUARTERS} for group in mod.EA_MATRIX_GROUPS}
+    matrix_groups = mod._matrix_groups_from_labels(["4SOFT", "THIESEN Spez.", "THIESEN Support", "Weitere"])
+    groups = {group: {quarter: 0 for quarter in mod.QUARTERS} for group in matrix_groups}
     report = mod.ReportDocument(
         title="Testreport",
         meta_lines=["Meta"],
         sections=[],
         max_columns=1,
         ea_matrix={
-            "soll": {**groups, "THIESEN_SPEC": {"Q1": 100_000}, "THIESEN_SUPPORT": {"Q1": 200_000}},
-            "ist": {**groups, "THIESEN_SPEC": {"Q1": 22_000}, "THIESEN_SUPPORT": {"Q2": 33_000}},
+            "groups": matrix_groups,
+            "soll": {**groups, "THIESEN Spez.": {"Q1": 100_000}, "THIESEN Support": {"Q1": 200_000}},
+            "ist": {**groups, "THIESEN Spez.": {"Q1": 22_000}, "THIESEN Support": {"Q2": 33_000}},
             "rows": [
                 {
                     "category": "Fahrzeugprojekte",
@@ -224,7 +286,7 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
                     "fl_te": 44,
                     "fl_pct": 0.4,
                     "el_te": None,
-                    "quarters": {("WEITERE", "Q4"): 44_000},
+                    "quarters": {("Weitere", "Q4"): 44_000},
                 },
                 {
                     "category": "Sondervereinbarungen",
@@ -246,7 +308,7 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
                     "fl_te": 55,
                     "fl_pct": 0.5,
                     "el_te": None,
-                    "quarters": {("THIESEN_SPEC", "Q1"): 22_000, ("THIESEN_SUPPORT", "Q2"): 33_000},
+                    "quarters": {("THIESEN Spez.", "Q1"): 22_000, ("THIESEN Support", "Q2"): 33_000},
                 },
             ],
         },
@@ -256,25 +318,31 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
     mod.write_xlsx_report(report, str(output))
 
     ws = load_workbook(output)["EA-Matrix"]
+    starts = {
+        ws.cell(1, col).value: col
+        for col in range(10, ws.max_column + 1, 4)
+        if ws.cell(1, col).value
+    }
 
     assert ws.freeze_panes == "C5"
-    assert "J1:M1" in {str(rng) for rng in ws.merged_cells.ranges}
-    assert ws["AH2"].value == 100
-    assert ws["AL2"].value == 200
-    assert ws["AH3"].value == 22
-    assert ws["AM3"].value == 33
+    assert starts == {"4SOFT": 10, "THIESEN Spez.": 14, "THIESEN Support": 18, "Weitere": 22}
+    assert {str(rng) for rng in ws.merged_cells.ranges} >= {"J1:M1", "N1:Q1", "R1:U1", "V1:Y1"}
+    assert ws.cell(2, starts["THIESEN Spez."]).value == 100
+    assert ws.cell(2, starts["THIESEN Support"]).value == 200
+    assert ws.cell(3, starts["THIESEN Spez."]).value == 22
+    assert ws.cell(3, starts["THIESEN Support"] + 1).value == 33
     assert [ws[f"B{row}"].value for row in (5, 7, 9)] == [
         "Sondervereinbarungen",
         "Serienbetreuung",
         "Fahrzeugprojekte",
     ]
     assert ws["A6"].value == "43932"
-    assert ws["Z6"].value == 11
+    assert ws.cell(6, starts["4SOFT"]).value == 11
     assert ws["A8"].value == "1800"
-    assert ws["AH8"].value == 22
-    assert ws["AM8"].value == 33
+    assert ws.cell(8, starts["THIESEN Spez."]).value == 22
+    assert ws.cell(8, starts["THIESEN Support"] + 1).value == 33
     assert ws["A10"].value == "999"
-    assert ws["AS10"].value == 44
+    assert ws.cell(10, starts["Weitere"] + 3).value == 44
 
 
 def test_write_xlsx_report_creates_neutral_tables_only_on_korrektur(tmp_path):

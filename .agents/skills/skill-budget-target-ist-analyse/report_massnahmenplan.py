@@ -1513,44 +1513,105 @@ _SUBGROUP_AREAS: dict[str, str] = {
 }
 _CATCH_ALL_HINTS = ("WEITERE", "SONSTIGE", "OTHER")
 _MARKER_OVERRIDES: dict[str, str] = {"VWGS": "VOLKSWAGEN GROUP SERVICES"}
+_MATRIX_START_COL = 10
 
 
-def _detect_matrix_groups() -> dict[str, tuple[int, str]]:
-    """Scan Row 1 of the EA-Matrix template to build {header: (start_col, MARKER)}."""
+def _matrix_marker_for_label(label: str) -> str:
+    marker = "" if any(h in label.upper() for h in _CATCH_ALL_HINTS) else label.upper()
+    parts = marker.split()
+    if len(parts) > 1:
+        marker = parts[0]
+    return _MARKER_OVERRIDES.get(marker, marker)
+
+
+def _detect_matrix_template_groups() -> dict[str, tuple[int, str]]:
+    """Scan row 1 of the EA-Matrix template to keep template order and known aliases."""
     if not os.path.isfile(EA_MATRIX_TEMPLATE):
         return {}
     wb = load_workbook(EA_MATRIX_TEMPLATE, read_only=True, data_only=True)
     ws = wb.active
     groups: dict[str, tuple[int, str]] = {}
-    for c in range(10, (ws.max_column or 45) + 1, 4):
+    for c in range(_MATRIX_START_COL, (ws.max_column or 45) + 1, len(QUARTERS)):
         header = ws.cell(1, c).value
         if not header or not str(header).strip():
             continue
         key = str(header).strip()
-        marker = "" if any(h in key.upper() for h in _CATCH_ALL_HINTS) else key.upper()
-        # Multi-word headers: use first word as marker (e.g. "THIESEN Spez." → "THIESEN")
-        parts = marker.split()
-        if len(parts) > 1:
-            marker = parts[0]
-        marker = _MARKER_OVERRIDES.get(marker, marker)
-        groups[key] = (c, marker)
+        groups[key] = (c, _matrix_marker_for_label(key))
     wb.close()
     return groups
 
 
-EA_MATRIX_GROUPS: dict[str, tuple[int, str]] = _detect_matrix_groups()
 EA_MATRIX_CATEGORIES = ("Sondervereinbarungen", "Serienbetreuung", "Fahrzeugprojekte")
 
 
-def _find_catch_all() -> str | None:
+def _find_catch_all(groups: dict[str, tuple[int, str]]) -> str | None:
     """Return the key of the catch-all group (empty marker)."""
-    return next((k for k, (_c, m) in EA_MATRIX_GROUPS.items() if not m), None)
+    return next((k for k, (_c, m) in groups.items() if not m), None)
 
 
-def _matrix_group_for_entry(entry: dict[str, Any]) -> str:
-    company = str(entry.get("reporting_company") or entry.get("source_company") or "").upper()
+def _company_matrix_label(company: str) -> str:
+    upper = company.upper()
+    for alias, fallback in COMPANY_ALIAS_FALLBACKS.items():
+        if alias in upper or fallback.upper() in upper:
+            return "VWGS" if alias == "VOLKSWAGEN" else alias
+    return company.strip()
+
+
+def _company_matrix_labels(company: str) -> list[str]:
+    if "THIESEN" in company.upper():
+        return ["THIESEN Spez.", "THIESEN Support"]
+    label = _company_matrix_label(company)
+    return [label] if label else ["Weitere"]
+
+
+def _matrix_groups_from_labels(labels: list[str]) -> dict[str, tuple[int, str]]:
+    template_groups = _detect_matrix_template_groups()
+    template_order = {label: idx for idx, label in enumerate(template_groups)}
+
+    def sort_key(label: str) -> tuple[int, str]:
+        if label in template_order:
+            return template_order[label], label
+        if any(h in label.upper() for h in _CATCH_ALL_HINTS):
+            return 9999, label
+        return 1000, label
+
+    ordered = sorted(dict.fromkeys(labels), key=sort_key)
+    return {
+        label: (_MATRIX_START_COL + idx * len(QUARTERS), template_groups.get(label, (0, _matrix_marker_for_label(label)))[1])
+        for idx, label in enumerate(ordered)
+    }
+
+
+def _build_matrix_groups(
+    entries: list[dict[str, Any]],
+    quarter_targets: dict[str, dict[str, int]],
+) -> dict[str, tuple[int, str]]:
+    labels: list[str] = []
+    for entry in entries:
+        if entry.get("quarter") not in QUARTERS:
+            continue
+        company = str(entry.get("reporting_company") or entry.get("source_company") or "").strip()
+        labels.extend(_company_matrix_labels(company))
+    for company, values in quarter_targets.items():
+        if any(int(value or 0) for value in values.values()):
+            labels.extend(_company_matrix_labels(str(company)))
+    return _matrix_groups_from_labels(labels)
+
+
+def _subgroup_target_map(groups: dict[str, tuple[int, str]]) -> dict[str, str]:
+    return {
+        group: area_key
+        for area_key, hint in _SUBGROUP_AREAS.items()
+        for group in groups
+        if hint.upper() in group.upper()
+    }
+
+
+def _matrix_group_for_entry(entry: dict[str, Any], groups: dict[str, tuple[int, str]]) -> str:
+    company_text = str(entry.get("reporting_company") or entry.get("source_company") or "")
+    company = company_text.upper()
     area = str(entry.get("area") or "")
-    matches = [k for k, (_c, m) in EA_MATRIX_GROUPS.items() if m and m in company]
+    matches = [k for k, (_c, m) in groups.items() if m and m in company]
     if len(matches) == 1:
         return matches[0]
     if len(matches) > 1:
@@ -1558,7 +1619,10 @@ def _matrix_group_for_entry(entry: dict[str, Any]) -> str:
             if area == area_key:
                 return next((k for k in matches if hint.upper() in k.upper()), matches[0])
         return next((k for k in matches if not any(h.upper() in k.upper() for h in _SUBGROUP_AREAS.values())), matches[0])
-    return _find_catch_all() or matches[0] if matches else list(EA_MATRIX_GROUPS)[-1]
+    label = _company_matrix_label(company_text)
+    if label in groups:
+        return label
+    return _find_catch_all(groups) or (list(groups)[-1] if groups else "Weitere")
 
 
 def _parse_iso_date(value: Any) -> datetime.date | Any:
@@ -1664,6 +1728,8 @@ def _build_ea_matrix(
     }
     el_aggregates = _load_el_aggregates(year, 4)
     ek_totals = _load_ek_totals(year)
+    _annual_targets, quarter_targets = _load_reporting_company_targets(year)
+    groups = _build_matrix_groups(entries, quarter_targets)
     ea_totals: dict[str, dict[str, Any]] = defaultdict(lambda: {"quarters": defaultdict(int), "total": 0, "status": {}})
 
     for entry in entries:
@@ -1671,7 +1737,7 @@ def _build_ea_matrix(
         quarter = entry.get("quarter")
         if not ea_key or quarter not in QUARTERS:
             continue
-        group = _matrix_group_for_entry(entry)
+        group = _matrix_group_for_entry(entry, groups)
         value = int(entry.get("value") or 0)
         ea_totals[ea_key]["quarters"][(group, quarter)] += value
         key = (group, quarter)
@@ -1718,87 +1784,112 @@ def _build_ea_matrix(
         )
     rows.sort(key=_ea_matrix_sort_key)
 
-    _annual_targets, quarter_targets = _load_reporting_company_targets(year)
-    soll = {group: {q: 0 for q in QUARTERS} for group in EA_MATRIX_GROUPS}
-    # Detect groups sharing a marker (e.g. multiple THIESEN columns) → skip from company matching
-    _marker_groups: dict[str, list[str]] = {}
-    for g, (_c, m) in EA_MATRIX_GROUPS.items():
-        if m:
-            _marker_groups.setdefault(m, []).append(g)
-    _shared_marker_groups = {g for gs in _marker_groups.values() if len(gs) > 1 for g in gs}
-    # Map sub-group key → area for area-based targets
-    _subgroup_target_map: dict[str, str] = {}
-    for area_key, hint in _SUBGROUP_AREAS.items():
-        for g in _shared_marker_groups:
-            if hint.upper() in g.upper():
-                _subgroup_target_map[g] = area_key
-    catch_all = _find_catch_all()
-    for group, (_col, marker) in EA_MATRIX_GROUPS.items():
-        if group in _shared_marker_groups:
+    soll = {group: {q: 0 for q in QUARTERS} for group in groups}
+    subgroup_targets = _subgroup_target_map(groups)
+    for firm, values in quarter_targets.items():
+        group = _matrix_group_for_entry({"reporting_company": firm}, groups)
+        if group in subgroup_targets:
             continue
-        for firm, values in quarter_targets.items():
-            firm_upper = firm.upper()
-            if (marker and marker in firm_upper) or (group == catch_all and not any(m and m in firm_upper for _g, (_c, m) in EA_MATRIX_GROUPS.items() if m)):
-                for quarter in QUARTERS:
-                    soll[group][quarter] += int(values.get(quarter, 0))
-    for group, area_key in _subgroup_target_map.items():
+        for quarter in QUARTERS:
+            soll[group][quarter] += int(values.get(quarter, 0))
+    for group, area_key in subgroup_targets.items():
         soll[group] = _target_quarter_values_for_area(targets, start_q, area_key)
 
-    ist = {group: {q: 0 for q in QUARTERS} for group in EA_MATRIX_GROUPS}
-    catch_all_firms: set[str] = set()
+    ist = {group: {q: 0 for q in QUARTERS} for group in groups}
     for entry in entries:
         quarter = entry.get("quarter")
         if quarter in QUARTERS:
-            grp = _matrix_group_for_entry(entry)
+            grp = _matrix_group_for_entry(entry, groups)
             ist[grp][quarter] += int(entry.get("value") or 0)
-            if grp == catch_all:
-                catch_all_firms.add(str(entry.get("reporting_company") or entry.get("source_company") or ""))
-    catch_all_firms.discard("")
 
-    return {"rows": rows, "soll": soll, "ist": ist,
-            "catch_all_rename": catch_all_firms.pop() if len(catch_all_firms) == 1 else None}
+    return {"groups": groups, "rows": rows, "soll": soll, "ist": ist}
+
+
+def _copy_cell_style(cell) -> dict[str, Any]:
+    return {
+        "font": copy(cell.font),
+        "fill": copy(cell.fill),
+        "border": copy(cell.border),
+        "alignment": copy(cell.alignment),
+        "number_format": cell.number_format,
+        "protection": copy(cell.protection),
+    }
+
+
+def _apply_cell_style(cell, style: dict[str, Any]) -> None:
+    cell.font = copy(style["font"])
+    cell.fill = copy(style["fill"])
+    cell.border = copy(style["border"])
+    cell.alignment = copy(style["alignment"])
+    cell.number_format = style["number_format"]
+    cell.protection = copy(style["protection"])
 
 
 def _copy_row_style(ws, row_idx: int) -> tuple[float | None, list[dict[str, Any]]]:
-    styles = []
-    for col_idx in range(1, ws.max_column + 1):
-        cell = ws.cell(row_idx, col_idx)
-        styles.append({
-            "font": copy(cell.font),
-            "fill": copy(cell.fill),
-            "border": copy(cell.border),
-            "alignment": copy(cell.alignment),
-            "number_format": cell.number_format,
-            "protection": copy(cell.protection),
-        })
-    return ws.row_dimensions[row_idx].height, styles
+    return (
+        ws.row_dimensions[row_idx].height,
+        [_copy_cell_style(ws.cell(row_idx, col_idx)) for col_idx in range(1, ws.max_column + 1)],
+    )
 
 
-def _apply_row_style(ws, row_idx: int, template: tuple[float | None, list[dict[str, Any]]]) -> None:
+def _apply_row_style(ws, row_idx: int, template: tuple[float | None, list[dict[str, Any]]], max_col: int | None = None) -> None:
     height, styles = template
     ws.row_dimensions[row_idx].height = height
-    for col_idx, style in enumerate(styles, start=1):
-        cell = ws.cell(row_idx, col_idx)
-        cell.font = copy(style["font"])
-        cell.fill = copy(style["fill"])
-        cell.border = copy(style["border"])
-        cell.alignment = copy(style["alignment"])
-        cell.number_format = style["number_format"]
-        cell.protection = copy(style["protection"])
+    for col_idx, style in enumerate(styles[:max_col], start=1):
+        _apply_cell_style(ws.cell(row_idx, col_idx), style)
+
+
+def _copy_matrix_block_style(ws) -> dict[str, Any]:
+    return {
+        "widths": [
+            ws.column_dimensions[get_column_letter(_MATRIX_START_COL + offset)].width
+            for offset in range(len(QUARTERS))
+        ],
+        "rows": {
+            row_idx: [
+                _copy_cell_style(ws.cell(row_idx, _MATRIX_START_COL + offset))
+                for offset in range(len(QUARTERS))
+            ]
+            for row_idx in range(1, 5)
+        },
+    }
+
+
+def _reset_matrix_columns(ws, groups: dict[str, tuple[int, str]], block_style: dict[str, Any]) -> None:
+    for merged_range in list(ws.merged_cells.ranges):
+        if merged_range.min_col >= _MATRIX_START_COL:
+            ws.unmerge_cells(str(merged_range))
+    if ws.max_column >= _MATRIX_START_COL:
+        ws.delete_cols(_MATRIX_START_COL, ws.max_column - _MATRIX_START_COL + 1)
+
+    for label, (start_col, _marker) in groups.items():
+        for offset, quarter in enumerate(QUARTERS):
+            col_idx = start_col + offset
+            width = block_style["widths"][offset]
+            if width is not None:
+                ws.column_dimensions[get_column_letter(col_idx)].width = width
+            for row_idx, row_styles in block_style["rows"].items():
+                _apply_cell_style(ws.cell(row_idx, col_idx), row_styles[offset])
+            ws.cell(4, col_idx).value = quarter
+        ws.merge_cells(start_row=1, start_column=start_col, end_row=1, end_column=start_col + len(QUARTERS) - 1)
+        ws.cell(1, start_col).value = label
 
 
 def _write_ea_matrix(ws, matrix: dict[str, Any] | None) -> None:
     if not matrix:
         return
+    groups = matrix.get("groups") or {}
+    max_matrix_col = _MATRIX_START_COL - 1 + len(groups) * len(QUARTERS)
+    block_style = _copy_matrix_block_style(ws)
     data_style = _copy_row_style(ws, 5)
     category_style = _copy_row_style(ws, 7)
     if ws.max_row >= 5:
         ws.delete_rows(5, ws.max_row - 4)
+    _reset_matrix_columns(ws, groups, block_style)
+    ws.freeze_panes = "C5"
 
     ws["A2"] = f"Stand: {datetime.date.today().strftime('%d.%m.%Y')}"
-    if (rename := matrix.get("catch_all_rename")) and (ca := _find_catch_all()):
-        ws.cell(1, EA_MATRIX_GROUPS[ca][0]).value = rename
-    for group, (start_col, _marker) in EA_MATRIX_GROUPS.items():
+    for group, (start_col, _marker) in groups.items():
         for offset, quarter in enumerate(QUARTERS):
             col_idx = start_col + offset
             ws.cell(2, col_idx).value = round(matrix["soll"].get(group, {}).get(quarter, 0) / 1000)
@@ -1809,12 +1900,12 @@ def _write_ea_matrix(ws, matrix: dict[str, Any] | None) -> None:
         category_rows = [row for row in matrix["rows"] if row["category"] == category]
         if not category_rows:
             continue
-        _apply_row_style(ws, current_row, category_style)
+        _apply_row_style(ws, current_row, category_style, max_matrix_col)
         ws.cell(current_row, 2).value = category
         current_row += 1
         no_fill = PatternFill(fill_type=None)
         for data in category_rows:
-            _apply_row_style(ws, current_row, data_style)
+            _apply_row_style(ws, current_row, data_style, max_matrix_col)
             values = [
                 data["ea"],
                 data["title"],
@@ -1830,9 +1921,9 @@ def _write_ea_matrix(ws, matrix: dict[str, Any] | None) -> None:
                 ws.cell(current_row, col_idx).value = value
             ws.cell(current_row, 5).number_format = "0.0%"
             ws.cell(current_row, 6).number_format = "0.0%"
-            for col_idx in range(5, ws.max_column + 1):
+            for col_idx in range(5, max_matrix_col + 1):
                 ws.cell(current_row, col_idx).fill = no_fill
-            for group, (start_col, _marker) in EA_MATRIX_GROUPS.items():
+            for group, (start_col, _marker) in groups.items():
                 for offset, quarter in enumerate(QUARTERS):
                     value = round(data["quarters"].get((group, quarter), 0) / 1000)
                     cell = ws.cell(current_row, start_col + offset)
