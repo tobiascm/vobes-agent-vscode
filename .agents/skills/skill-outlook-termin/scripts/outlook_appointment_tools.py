@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -22,6 +23,7 @@ from outlook_search_tools import (  # noqa: E402
     _coerce_text,
     _get_item_by_id,
     _lazy_outlook_context,
+    _load_signature_html,
     _normalize_smtp_address,
     _safe_get,
     _try_internet_address,
@@ -29,6 +31,21 @@ from outlook_search_tools import (  # noqa: E402
     outlook_read_email,
     search_emails,
 )
+
+
+_SIGNATURES_DIR = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Signatures"
+
+
+def _signature_plain(name: str) -> str:
+    """Load Outlook signature as plain text (.txt preferred, .htm fallback)."""
+    try:
+        for txt in sorted(_SIGNATURES_DIR.glob(f"{name}*.txt")):
+            raw = txt.read_bytes()
+            return raw.decode("utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8").replace("\xa0", " ").strip()
+        html = _load_signature_html(name)
+        return re.sub(r"<[^>]+>", "", html).strip()
+    except (FileNotFoundError, OSError):
+        return ""
 
 OL_APPOINTMENT_ITEM = 1
 OL_FOLDER_CALENDAR = 9
@@ -551,6 +568,7 @@ def create_appointment(
     send_mode: str = SEND_MODE_REVIEW,
     send_without_confirmation: bool = False,
     normalize_start: bool = True,
+    signature: str = "kurz",
 ) -> dict[str, Any]:
     app, _, _ = _lazy_outlook_context()
     required_results, optional_results = _resolve_many(required or [], optional or [])
@@ -596,7 +614,9 @@ def create_appointment(
     local_start_tz = local_tz
     local_end_tz = local_tz
     item.Location = _coerce_text(location).strip()
-    item.Body = _coerce_text(body).replace("\\n", "\n")
+    body_text = _coerce_text(body).replace("\\n", "\n")
+    sig = _signature_plain(signature) if signature else ""
+    item.Body = (body_text + "\n\n" + sig).rstrip() if sig else body_text
     if teams:
         item.IsOnlineMeeting = True
     _add_recipients(item, required_results, OL_REQUIRED)
@@ -654,6 +674,7 @@ def update_appointment(
     send_mode: str = "",
     send_without_confirmation: bool = False,
     normalize_start: bool = True,
+    signature: str = "kurz",
 ) -> dict[str, Any]:
     app, _, _ = _lazy_outlook_context()
     item = _get_item_by_id(entry_id, store_id)
@@ -665,7 +686,9 @@ def update_appointment(
         keep_draft = _coerce_text(_safe_get(item, "Subject", "")).lower().startswith(DRAFT_PREFIX.lower()) and send_mode != "send"
         item.Subject = _effective_subject(subject, draft=keep_draft)
     if body is not None:
-        item.Body = _coerce_text(body).replace("\\n", "\n")
+        body_text = _coerce_text(body).replace("\\n", "\n")
+        sig = _signature_plain(signature) if signature else ""
+        item.Body = (body_text + "\n\n" + sig).rstrip() if sig else body_text
     if location is not None:
         item.Location = _coerce_text(location).strip()
     if teams is not None:
@@ -975,6 +998,8 @@ def _build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument("--send-without-confirmation", action="store_true")
     create_parser.add_argument("--teams", dest="teams", action="store_true", default=True)
     create_parser.add_argument("--no-teams", dest="teams", action="store_false")
+    create_parser.add_argument("--signature", default="kurz", help="Signature name prefix (default: 'kurz'). Use '' to skip.")
+    create_parser.add_argument("--no-signature", dest="signature", action="store_const", const="")
     create_parser.add_argument("--no-normalize-start", dest="normalize_start", action="store_false", default=True)
 
     send_parser = subparsers.add_parser("send", help="Send a prepared draft meeting.")
@@ -992,6 +1017,8 @@ def _build_parser() -> argparse.ArgumentParser:
     update_parser.add_argument("--send-without-confirmation", action="store_true")
     update_parser.add_argument("--teams", dest="teams", action="store_true", default=None)
     update_parser.add_argument("--no-teams", dest="teams", action="store_false")
+    update_parser.add_argument("--signature", default="kurz", help="Signature name prefix (default: 'kurz'). Use '' to skip.")
+    update_parser.add_argument("--no-signature", dest="signature", action="store_const", const="")
     update_parser.add_argument("--no-normalize-start", dest="normalize_start", action="store_false", default=True)
 
     cancel_parser = subparsers.add_parser("cancel", help="Cancel an existing appointment.")
@@ -1056,6 +1083,7 @@ def main(argv: list[str] | None = None) -> int:
             send_mode=args.send_mode,
             send_without_confirmation=args.send_without_confirmation,
             normalize_start=args.normalize_start,
+            signature=args.signature,
         )
     elif args.command == "send":
         payload = send_appointment(args.entry_id, args.store_id)
@@ -1074,6 +1102,7 @@ def main(argv: list[str] | None = None) -> int:
             send_mode=args.send_mode,
             send_without_confirmation=args.send_without_confirmation,
             normalize_start=args.normalize_start,
+            signature=args.signature,
         )
     elif args.command == "cancel":
         payload = cancel_appointment(args.entry_id, args.store_id, send_without_confirmation=args.send_without_confirmation)

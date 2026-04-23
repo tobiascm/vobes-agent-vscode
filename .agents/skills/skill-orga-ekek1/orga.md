@@ -8,25 +8,31 @@
 
 ## Fuehrungsstruktur
 
+`E`: Gruenitz, Kai (E): `Technische Entwicklung`
 - `EK`: Dr. Gunnar Koether (`Entwicklung Bodysystem`)
   - Petra Weigel (`Sekretariat`)
   - Dr. Martin Wünsch (`Assistent`)
 - `EKE`: Dr. Bodo Specht (`Entwicklung Bordnetzsystem`)
   - Jessica Bachmann
   - Marco van Slooten (`Assistent, Budget EKE, AWS, Jobsplit`)
-- `EKEA`: Dr. Rainer Kühne (`Bordnetzsysteme A`)
-  - Guy Duplex Mbounga Boukop
-  - Torsten Hahn
-  - Birgit Kretschmer
-  - Dirk Lorenke
-  - Dirk Lorenzen
-  - Lena Schlüter
-- `EKEK`: Dr. Bodo Specht (`Baukasten Bordnetzsysteme`, kommissarisch)
-  - Vertretung offene Leitungsstelle: Dr. Tobias Carsten Müller
-  - Marvin Becker (`Assistent, Budget EKEK`)
-  - Britta Ulrich (`Sekretariat`)
+  - `EKEA`: Dr. Rainer Kühne (`Bordnetzsysteme A`)
+    - Guy Duplex Mbounga Boukop
+    - Torsten Hahn
+    - Birgit Kretschmer
+    - Dirk Lorenke
+    - Dirk Lorenzen
+    - Lena Schlüter
+  - `EKEK`: Dr. Bodo Specht (`Baukasten Bordnetzsysteme`, kommissarisch)
+    - Vertretung offene Leitungsstelle: Dr. Tobias Carsten Müller
+    - Marvin Becker (`Assistent, Budget EKEK`)
+    - Britta Ulrich (`Sekretariat`)
+- `E2`: Kamla, Thomas (E2): `Leitung CTO ID.1, MQB Classic, Koop., Meth.Tools` (alp.atik1@volkswagen.de)
+  - Atik, Alp, Dr. (E2): `CTO ID.1, MQB Classic, Koop., Meth.Tools`
+    Sonderaufgaben:
+      - Ansprechpartner E2 für BOOST Initiative [8] „Engineering IT & KI“
+      - Koordination „TE‑Ziel [8b] KI im Entwicklungsprozess“, „Nutzenbetrachtung KI Tools“
 
-## Unterabteilungen in EKEK
+## Unterabteilungen in der EKEK
 
 - `EKEK/1`: Dr. Tobias Carsten Müller
   - Fachlicher Zuschnitt: `BSK VOBES, Bibliotheken, SYS-Plaene`
@@ -74,6 +80,28 @@
   - Lena Wichelmann (`Assistent`)
 - `EKX`: Dr. Birkan-Can Magzalci (`Steuerung Entwicklung Bodysystem`)
   - Lisa Goldbeck (`Assistent`)
+- `EKXG`: (`Vorentwicklung und Fahrzeugbeurteilung`)
+  - `EKXG/1`: Dr. Ute Tschampke (`Vorentwicklung Bodysystem`)
+    Sonderaufgageben:
+      - KI-Koordination auf EK-Ebene (KI-Governance, Abstimmung EKE/E2)
+      - Teilnahme Regeltermin KI-Ansprechpartner@EK
+      - Vorentwicklung & Budgetthemen, projektuebergreifende Koordination
+    - Dr. Johannes Sperber (`Vorentwicklung Bodysystem, KI-Koordination`)
+      - Zentraler Koordinator / Ansprechpartner fuer KI-Themen @ EK
+      - Organisator „KI-Ansprechpartner@EK – Regeltermin"
+      - Treiber der EK-KI-Vision & Roadmap, KI-Portfolio / Wirkketten
+      - AI@Bodysystem-Formate, Infoveranstaltungen, Tool-Uebersichten
+    - Dr. Lennart Barfuß (`Vorentwicklung Bodysystem, KI-Enablement`)
+      - Co-Treiber KI-Ansprechpartner@EK-Runde mit Sperber
+      - Aufbereitung und Praesentation von KI-Inhalten (u. a. bei Gunnar Koether)
+      - KI-Governance & EU-AI-Act, KI-Learnings & Enablement
+- `E2DT`: (`Digitalisierung & Technologie`)
+  - `E2DT/4`: Claudia Hänel (`KI-Kompetenzcenter & Software-Produkte`)
+    - Leitung Vorentwicklung (VE) „Virtuelle Absicherung"
+    - Verantwortlich TE-Digitalisierungsbudget (inkl. KI- und Daten-Themen)
+    - Zentrale Koordinatorin fuer Budgetfreigaben, KI-Portfolio (KI:Notes), Wirkketten
+    - Organisator TE Digi.Day
+
 
 ## Arbeitshinweise fuer den Agenten
 

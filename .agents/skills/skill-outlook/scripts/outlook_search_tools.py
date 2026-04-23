@@ -1157,21 +1157,41 @@ _SIGNATURES_DIR = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Signature
 
 def _load_signature_html(name: str) -> str:
     """Load an Outlook signature HTM file by display name (prefix match)."""
+    import re as _re
     for htm in sorted(_SIGNATURES_DIR.glob("*.htm")):
         if htm.stem.lower().startswith(name.lower()):
-            return htm.read_text(encoding="utf-8", errors="replace")
+            raw = htm.read_bytes()
+            m = _re.search(rb'charset=([^\s">;]+)', raw)
+            enc = m.group(1).decode("ascii") if m else "utf-8"
+            return raw.decode(enc, errors="replace")
     raise FileNotFoundError(f"Signature '{name}' not found in {_SIGNATURES_DIR}")
 
 
 def _plain_to_html(text: str) -> str:
     """Convert plain-text body to simple HTML paragraphs."""
     import html as _html
+    import re as _re
+
+    def _linkify(line: str) -> str:
+        tokens = []
+        last = 0
+        for m in _re.finditer(r'\[([^\]]+)\]\((https?://\S+?)\)|(https?://\S+)', line):
+            if m.start() > last:
+                tokens.append(_html.escape(line[last:m.start()]))
+            if m.group(1):  # markdown link [text](url)
+                tokens.append('<a href="' + _html.escape(m.group(2)) + '">' + _html.escape(m.group(1)) + '</a>')
+            else:  # bare URL
+                tokens.append('<a href="' + _html.escape(m.group(3)) + '">' + _html.escape(m.group(3)) + '</a>')
+            last = m.end()
+        if last < len(line):
+            tokens.append(_html.escape(line[last:]))
+        return "".join(tokens) if tokens else _html.escape(line)
 
     paragraphs = text.split("\n\n")
     parts: list[str] = []
     for p in paragraphs:
         lines = p.strip().splitlines()
-        parts.append('<p style="margin:0;">' + "<br>".join(_html.escape(l) for l in lines) + "</p>")
+        parts.append('<p style="margin:0 0 12px 0;">' + "<br>".join(_linkify(l) for l in lines) + "</p>")
     return '<div style="font-family:Calibri,sans-serif;font-size:11pt;">' + "".join(parts) + "</div>"
 
 
@@ -1193,7 +1213,8 @@ def compose_draft(
 
     body_html = _plain_to_html(body) if body else ""
     sig_html = _load_signature_html(signature) if signature else ""
-    mail.HTMLBody = body_html + ("<br>" + sig_html if sig_html else "")
+    inner = body_html + (sig_html if sig_html else "")
+    mail.HTMLBody = '<html><head><meta charset="utf-8"></head><body>' + inner + "</body></html>"
 
     if display:
         mail.Display()
