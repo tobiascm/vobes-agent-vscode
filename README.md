@@ -41,7 +41,7 @@ pytest -q                # optional: Tests laufen lassen
 Ctrl+Shift+P -> "Tasks: Run Task" -> "MCP Atlassian: Start"
 
 # Oder per PowerShell
-.\scripts\mcp-atlassian\start.ps1
+.\scripts\mcp-atlassian\start_mcp_atlassian.ps1
 ```
 
 ### 3. Skill im Agent aufrufen

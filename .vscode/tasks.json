@@ -9,7 +9,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}\\scripts\\mcp-atlassian\\start.ps1"
+        "${workspaceFolder}\\scripts\\mcp-atlassian\\start_mcp_atlassian.ps1"
       ],
       "presentation": {
         "reveal": "always",
@@ -25,7 +25,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}\\scripts\\mcp-atlassian\\stop.ps1"
+        "${workspaceFolder}\\scripts\\mcp-atlassian\\stop_mcp_atlassian.ps1"
       ],
       "presentation": {
         "reveal": "always",
@@ -41,7 +41,7 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "${workspaceFolder}\\scripts\\mcp-atlassian\\logs.ps1"
+        "${workspaceFolder}\\scripts\\mcp-atlassian\\logs_mcp_atlassian.ps1"
       ],
       "presentation": {
         "reveal": "always",

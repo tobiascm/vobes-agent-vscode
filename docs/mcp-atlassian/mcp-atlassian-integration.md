@@ -26,7 +26,7 @@ Integration des [MCP Atlassian Servers](https://github.com/sooperset/mcp-atlassi
 
 **PowerShell:**
 ```powershell
-C:\Daten\Python\lightrag_test\scripts\mcp-atlassian\start.ps1
+C:\Daten\Python\lightrag_test\scripts\mcp-atlassian\start_mcp_atlassian.ps1
 ```
 
 **Docker Compose:**
@@ -42,13 +42,13 @@ docker-compose -f docker-compose.mcp-atlassian.yml up -d
 ### 3. Container stoppen
 
 ```powershell
-C:\Daten\Python\lightrag_test\scripts\mcp-atlassian\stop.ps1
+C:\Daten\Python\lightrag_test\scripts\mcp-atlassian\stop_mcp_atlassian.ps1
 ```
 
 ### 4. Logs anzeigen
 
 ```powershell
-C:\Daten\Python\lightrag_test\scripts\mcp-atlassian\logs.ps1
+C:\Daten\Python\lightrag_test\scripts\mcp-atlassian\logs_mcp_atlassian.ps1
 ```
 
 ## Konfiguration

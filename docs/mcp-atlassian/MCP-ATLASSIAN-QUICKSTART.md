@@ -33,13 +33,13 @@ code C:\Daten\Python\vobes_agent_vscode
 ### Container Management
 ```powershell
 # Starten
-.\scripts\mcp-atlassian\start.ps1
+.\scripts\mcp-atlassian\start_mcp_atlassian.ps1
 
 # Stoppen
-.\scripts\mcp-atlassian\stop.ps1
+.\scripts\mcp-atlassian\stop_mcp_atlassian.ps1
 
 # Logs
-.\scripts\mcp-atlassian\logs.ps1
+.\scripts\mcp-atlassian\logs_mcp_atlassian.ps1
 
 # Status
 docker ps | grep mcp-atlassian

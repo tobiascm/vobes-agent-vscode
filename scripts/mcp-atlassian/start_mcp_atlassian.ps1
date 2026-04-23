@@ -14,18 +14,20 @@ if (-not $env:CONFLUENCE_PAT) {
     exit 1
 }
 
-# Navigate to project root
+# Resolve compose file path relative to this script
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$projectRoot = Split-Path -Parent (Split-Path -Parent $scriptDir)
-Set-Location $projectRoot
+$composeFile = Join-Path $scriptDir "docker-compose.mcp-atlassian.yml"
 
 # Pull latest image
 Write-Host "Pulling latest MCP Atlassian image..." -ForegroundColor Cyan
 docker pull ghcr.io/sooperset/mcp-atlassian:0.21
 
+# Remove stale container if exists
+docker rm -f mcp-atlassian 2>$null
+
 # Start container
 Write-Host "Starting container..." -ForegroundColor Cyan
-docker-compose -f docker-compose.mcp-atlassian.yml up -d
+docker-compose -f $composeFile up -d
 
 # Wait for container to be ready
 Write-Host "Waiting for container to be ready..." -ForegroundColor Cyan

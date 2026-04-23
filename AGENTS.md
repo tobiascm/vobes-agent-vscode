@@ -118,6 +118,10 @@ Bevor ein Skill geladen wird, der einen MCP-Server benoetigt, MUSS geprueft werd
 
 Bei Token-Problemen mit M365-Skills (Mail Search, File Search, Graph Scope Probe) die Debugging-Referenz lesen: `docs/teams-token-debugging.md`. Enthaelt die 6-Stufen-Fallback-Kette, bekannte Pitfalls (LevelDB Multi-Needle, SPA Origin-Header) und Code-Beispiele zum manuellen Debugging.
 
+## MCP-Atlassian Container nicht gestartet (`MCP server could not be started`)
+
+Docker-Container laeuft nicht. Fix: `powershell -ExecutionPolicy Bypass -File scripts/mcp-atlassian/start_mcp_atlassian.ps1` (raeumt stale Container auf, pullt, startet). Stoppen: `stop_mcp_atlassian.ps1`, Logs: `logs_mcp_atlassian.ps1`.
+
 ## Playwright-Verbindung verloren (`Target page, context or browser has been closed`)
 
 Tritt dieser Fehler bei `playwright-browser_*`-Aufrufen auf, ist die Verbindung zwischen VS Code und dem Browser abgerissen. **Loesung:** In `.vscode/mcp.json` den MCP-Server `playwright` per Rechtsklick → **Restart** neu starten. Danach den Aufruf wiederholen. Hilft das nicht, zusaetzlich pruefen ob die **Playwright MCP Bridge Extension** im Browser aktiv/verbunden ist.

@@ -17,13 +17,13 @@ Diese Konfiguration ermöglicht die Nutzung des MCP Atlassian Servers in VS Code
 
 ### Option 2: PowerShell Skript
 ```powershell
-.\scripts\mcp-atlassian\start.ps1
+.\scripts\mcp-atlassian\start_mcp_atlassian.ps1
 ```
 
 ### Option 3: Docker Compose
 ```bash
 cd C:\Daten\Python\vobes_agent_vscode
-docker-compose -f docker-compose.mcp-atlassian.yml up -d
+docker-compose -f scripts/mcp-atlassian/docker-compose.mcp-atlassian.yml up -d
 ```
 
 ## Container stoppen
@@ -33,7 +33,7 @@ docker-compose -f docker-compose.mcp-atlassian.yml up -d
 
 ### PowerShell
 ```powershell
-.\scripts\mcp-atlassian\stop.ps1
+.\scripts\mcp-atlassian\stop_mcp_atlassian.ps1
 ```
 
 ## Logs anzeigen
@@ -43,7 +43,7 @@ docker-compose -f docker-compose.mcp-atlassian.yml up -d
 
 ### PowerShell
 ```powershell
-.\scripts\mcp-atlassian\logs.ps1
+.\scripts\mcp-atlassian\logs_mcp_atlassian.ps1
 ```
 
 ## MCP Server Konfiguration

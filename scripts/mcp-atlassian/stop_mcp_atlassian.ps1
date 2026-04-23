@@ -2,12 +2,11 @@
 
 Write-Host "Stopping MCP Atlassian Docker Container..." -ForegroundColor Yellow
 
-# Navigate to project root
+# Resolve compose file path relative to this script
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$projectRoot = Split-Path -Parent (Split-Path -Parent $scriptDir)
-Set-Location $projectRoot
+$composeFile = Join-Path $scriptDir "docker-compose.mcp-atlassian.yml"
 
 # Stop container
-docker-compose -f docker-compose.mcp-atlassian.yml down
+docker-compose -f $composeFile down
 
 Write-Host "MCP Atlassian stopped." -ForegroundColor Green
