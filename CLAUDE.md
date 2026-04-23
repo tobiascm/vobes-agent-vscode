@@ -65,6 +65,10 @@
   → PFLICHT: Skill `$skill-budget-plausibilisierung` laden und befolgen.
 - Massnahmenplan | Budget-Massnahmenplan | Budget-Arbeitstabelle | Aufgabenbereiche mit Massnahmen | Budget-Vergleich Vorjahr Target Ist  
   → PFLICHT: Skill `$skill-budget-target-ist-analyse` laden und befolgen. Erzeugt Markdown mit Aufgabenbereich- und Firmen-Tabelle, Massnahmen-Spalte bleibt leer fuer Agent.
+- Im Chat-Kontext erkannt dass ein EA gesperrt ist oder wird:
+  → PFLICHT: Blacklist-Check ausfuehren: `python scripts/budget/blacklist_check.py --ea <EA-Nummer>`  
+  → Ergebnis `"found": false`: User fragen ob EA auf die Blacklist soll. Bei Zustimmung: `python scripts/budget/blacklist_check.py --ea <EA> --add --title "<EA-Bezeichnung>" --reason "<Grund>"`  
+  → Ergebnis `"found": true`: User informieren, dass EA bereits auf der Blacklist steht (Bezeichnung und Grund aus `entry` nennen).
 - Webseite oeffnen | Intranet-Seite durchsuchen | Screenshot von Seite | Daten von Webseite extrahieren | Formular auf Webseite ausfuellen (per Playwright MCP, nicht dev-browser)  
   → PFLICHT: Skill `$skill-browse-intranet` laden und befolgen.
 - Deep Research | Recherchiere systematisch | Untersuche systematisch | Multi-Source-Recherche | evidence-backed research across portals  
