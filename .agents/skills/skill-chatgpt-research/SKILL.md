@@ -13,6 +13,40 @@ Der Standardweg ist **ein einziger Python-Aufruf**:
 python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run --question "FRAGE"
 ```
 
+Fuer eine Frage **mit Datei-Upload**:
+
+```bash
+python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run \
+  --question "Analysiere diese Datei" \
+  --file /pfad/zur/datei.txt
+```
+
+Fuer eine Frage **mit Source-Bundle** (Quellcode + Configs hochladen):
+
+```bash
+python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run \
+  --question "Analysiere die Architektur" \
+  --source-bundle
+```
+
+Fuer eine Frage **mit Source-Bundle inkl. Tests**:
+
+```bash
+python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run \
+  --question "Pruefe die Testabdeckung" \
+  --source-bundle --with-tests
+```
+
+Fuer ein **selektives Bundle** (nur bestimmte Dateien, hybrid mode):
+
+```bash
+python .agents/skills/skill-chatgpt-research/scripts/chatgpt_research.py run \
+  --question "Vergleiche diese beiden Dateien" \
+  --source-bundle --includes "AGENTS.md,CLAUDE.md"
+```
+
+`--source-bundle` und `--file` sind kombinierbar (Bundle + zusaetzliche Datei).
+
 Fuer einen bestehenden Chat, der **nur gelesen** und als Markdown gespeichert werden soll:
 
 ```bash

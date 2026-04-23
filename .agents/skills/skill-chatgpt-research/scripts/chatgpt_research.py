@@ -986,6 +986,10 @@ class RunOptions:
     completion_min_chars: int
     no_generation_grace_seconds: int
     follow_up: bool
+    file: Path | None = None
+    source_bundle: bool = False
+    with_tests: bool = False
+    includes: str | None = None
 
 
 @dataclass
@@ -1403,6 +1407,108 @@ def _wait_for_prompt_readiness(
     )
 
 
+MCP_SRC_BUNDLE_SCRIPT = Path("C:/Daten/Python/GPT-MCP-Bridge/src/mcp_supervisor/cli/mcp_src_bundle.py")
+SRC_BUNDLE_CONFIG = PROJECT_ROOT / "config" / "src_zip_config.toml"
+SRC_BUNDLE_OUTPUT_DIR = PROJECT_ROOT / ".export"
+_BUNDLE_SUFFIX_ORDER = ("_configs.txt", "_src.txt", "_tests.txt")
+
+
+def _generate_source_bundle(with_tests: bool, includes: str | None = None) -> list[Path]:
+    """Run mcp_src_bundle and return the generated file paths."""
+    print("Source-Bundle wird erzeugt...")
+    cmd = [
+        sys.executable, str(MCP_SRC_BUNDLE_SCRIPT),
+        "--format", "text",
+        "--config", str(SRC_BUNDLE_CONFIG),
+        "--output", str(SRC_BUNDLE_OUTPUT_DIR),
+    ]
+    if includes:
+        cmd += ["--mode", "hybrid", "--includes", includes]
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(PROJECT_ROOT))
+    if result.returncode != 0:
+        raise RuntimeError(f"Source-Bundle fehlgeschlagen (exit {result.returncode}): {result.stderr.strip()}")
+    files = sorted(SRC_BUNDLE_OUTPUT_DIR.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        raise RuntimeError(f"Keine Bundle-Dateien in {SRC_BUNDLE_OUTPUT_DIR} gefunden.")
+    # Take the latest batch (same timestamp prefix)
+    prefix = files[0].name.split("_")[0]  # e.g. "20260423-225817"
+    batch = [f for f in files if f.name.startswith(prefix)]
+    # Sort by canonical order and filter tests
+    def _sort_key(p: Path) -> int:
+        for i, suffix in enumerate(_BUNDLE_SUFFIX_ORDER):
+            if p.name.endswith(suffix):
+                return i
+        return 99
+    batch.sort(key=_sort_key)
+    if not with_tests:
+        batch = [f for f in batch if not f.name.endswith("_tests.txt")]
+    print(f"Bundle erzeugt: {len(batch)} Dateien ({', '.join(f.name for f in batch)})")
+    return batch
+
+
+def _upload_source_bundle(client: McpStdioClient, with_tests: bool, includes: str | None = None) -> None:
+    """Generate source bundle and upload files sequentially."""
+    paths = _generate_source_bundle(with_tests, includes)
+    for path in paths:
+        _upload_file(client, path)
+
+
+def _upload_file(client: McpStdioClient, file_path: Path) -> None:
+    """Upload a file to the ChatGPT composer via Playwright FileChooser."""
+    abs_path = str(file_path.resolve()).replace("\\", "/")
+    file_name = file_path.name
+    print(f"Datei wird hochgeladen: {file_name}")
+    code = _js_return(
+        "{"
+        f"const filePath = {json.dumps(abs_path)};"
+        f"const fileName = {json.dumps(file_name)};"
+        r"""
+  const selectors = [
+    'button[aria-label*="Dateien"]',
+    'button[aria-label*="hinzufügen"]',
+    'button[aria-label*="Attach"]',
+    'button[aria-label*="attach"]',
+  ];
+  let attachBtn = null;
+  for (const sel of selectors) {
+    const loc = page.locator(sel).first();
+    if (await loc.count() > 0 && await loc.isVisible()) {
+      attachBtn = loc;
+      break;
+    }
+  }
+  if (!attachBtn) {
+    return JSON.stringify({error: 'ATTACH_BUTTON_NOT_FOUND'});
+  }
+
+  const [fileChooser] = await Promise.all([
+    page.waitForEvent('filechooser', {timeout: 10000}),
+    attachBtn.click(),
+  ]);
+  await fileChooser.setFiles(filePath);
+
+  // Wait for file indicator in DOM (max 30s for indexing)
+  let ready = false;
+  for (let i = 0; i < 60; i++) {
+    const hasFile = await page.evaluate(() => {
+      return !!document.querySelector('[aria-label*="entfernen"], [aria-label*="remove"], [aria-label*="Remove"]');
+    });
+    if (hasFile) { ready = true; break; }
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  return JSON.stringify({uploaded: ready, file: filePath, fileName});
+}"""
+    )
+    raw = _tool_text_with_retry(client, "browser_run_code", {"code": code})
+    data = _parse_json_text(raw, "file upload")
+    if data.get("error") == "ATTACH_BUTTON_NOT_FOUND":
+        raise RuntimeError("ChatGPT Datei-Upload-Button nicht gefunden.")
+    if not data.get("uploaded"):
+        raise RuntimeError(f"Datei-Upload nicht bestaetigt: {file_name}")
+    print(f"Datei hochgeladen: {file_name}")
+
+
 def _submit_prompt(client: McpStdioClient, prompt: str) -> None:
     code = _js_return(
         "{"
@@ -1806,6 +1912,11 @@ def cmd_run(options: RunOptions) -> None:
                 "DOM state after thinking mode",
             )
 
+        if options.source_bundle:
+            _upload_source_bundle(client, options.with_tests, options.includes)
+        if options.file:
+            _upload_file(client, options.file)
+
         _apply_global_prompt_gate()
         state = _parse_json_text(
             _tool_text_with_retry(client, "browser_evaluate", {"function": DOM_STATE_JS}),
@@ -1968,6 +2079,27 @@ def main() -> None:
         action="store_true",
         help="Folgefrage im zuletzt erfolgreichen Chat stellen",
     )
+    run.add_argument(
+        "--file",
+        "-f",
+        default=None,
+        help="Dateipfad fuer Upload an ChatGPT (wird vor dem Prompt angehaengt)",
+    )
+    run.add_argument(
+        "--source-bundle",
+        action="store_true",
+        help="Source-Bundle erzeugen und an ChatGPT hochladen (configs + src)",
+    )
+    run.add_argument(
+        "--with-tests",
+        action="store_true",
+        help="Tests-Datei im Source-Bundle mit hochladen (nur mit --source-bundle)",
+    )
+    run.add_argument(
+        "--includes",
+        default=None,
+        help="Komma-separierte Dateiliste fuer selektives Bundle (hybrid mode, nur mit --source-bundle)",
+    )
 
     args = parser.parse_args()
 
@@ -1999,6 +2131,10 @@ def main() -> None:
                 completion_min_chars=args.completion_min_chars,
                 no_generation_grace_seconds=args.no_generation_grace_seconds,
                 follow_up=args.follow_up,
+                file=Path(args.file) if args.file else None,
+                source_bundle=args.source_bundle,
+                with_tests=args.with_tests,
+                includes=args.includes,
             )
         )
 
