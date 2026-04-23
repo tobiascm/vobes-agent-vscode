@@ -139,7 +139,7 @@ Die **Browser Extension** nutzt die bestehende Browser-Session. Wenn der User im
 **Wichtig:**
 - `fetch()`-Aufrufe innerhalb von `mcp_playwright_browser_evaluate` uebernehmen die Session-Cookies des Browsers
 - Direkte API-Aufrufe per PowerShell/curl funktionieren bei SSO-geschuetzten Seiten oft NICHT (403)
-- Falls eine Seite eine Login-Seite zeigt → User bitten, sich manuell im Browser einzuloggen
+- **Login-Erkennung:** → Siehe `AGENTS.md` → `Browser-Login-Erkennung`. Bei Login-Seite: stoppen, `notify.ps1 -AskUser`, warten, retry.
 
 ## Typische Patterns
 
@@ -149,6 +149,7 @@ Viele Intranet-Seiten leiten zunaechst auf eine SSO-Login-Seite um. Nach dem Red
 
 1. `mcp_playwright_browser_wait_for(time=5)` — SSO-Redirect abwarten
 2. `mcp_playwright_browser_snapshot()` — Pruefen ob Zielseite oder Login-Seite
+3. Falls Login-Seite → `AGENTS.md` → `Browser-Login-Erkennung` anwenden
 
 ### iframes
 

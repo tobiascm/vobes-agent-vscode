@@ -446,7 +446,7 @@ contacts(term: "EKEK", limit: 20, offset: 20)  # Seite 2: Ergebnis 20-39
 | Problem | Loesung |
 |---------|---------|
 | `mcp_playwright_*` Tools nicht verfuegbar | Playwright MCP Server nicht aktiv → VS Code MCP-Panel pruefen |
-| Seite zeigt Keycloak-Login statt GroupFind | Browser-Session abgelaufen → User bitten, sich manuell im Browser bei GroupFind einzuloggen |
+| Seite zeigt Keycloak-Login statt GroupFind | Browser-Session abgelaufen → zentrale Login-Erkennung aus `AGENTS.md` anwenden (stoppen, `notify.ps1 -AskUser`, warten, retry) |
 | `fetch()` liefert 401/403 | Session abgelaufen → erneut `navigate` + `wait_for` ausfuehren |
 | `contacts` liefert leere Liste | Suchbegriff pruefen — Vor- und Nachname getrennt oder OE-Kuerzel exakt |
 | `contactRelations` → `structure` ist `null` | Normal — immer `tree`-Feld verwenden, `structure` ist serverseitig deaktiviert |

@@ -382,7 +382,7 @@ print(f'\nGesamt: {len(doc)} Seiten')
 |---------|---------|
 | Snapshot zeigt Extension-Seite statt iProject | `mcp_playwright_browser_tabs(action="list")` → richtigen Tab auswaehlen oder neu navigieren |
 | Seite zeigt nur Ladebalken | `mcp_playwright_browser_wait_for(time=8)` und erneut Snapshot machen |
-| Download-Link oeffnet Login-Seite | User ist nicht authentifiziert → manuell im Browser einloggen |
+| Download-Link oeffnet Login-Seite | User ist nicht authentifiziert → zentrale Login-Erkennung aus `AGENTS.md` anwenden (stoppen, `notify.ps1 -AskUser`, warten, retry) |
 | PDF-Text ist leer oder unleserlich | Dokument ist gescannt/Bild-PDF → OCR noetig (nicht im Skill abgedeckt) |
 | Mehrere gleichnamige Downloads | Neueste Datei per `Sort-Object LastWriteTime -Descending` waehlen |
 | API liefert 403 per PowerShell/curl | Nur im Browser-Kontext moeglich — `mcp_playwright_browser_evaluate` mit `fetch()` verwenden |

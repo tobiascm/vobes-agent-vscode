@@ -118,6 +118,19 @@ Bei Token-Problemen mit M365-Skills (Mail Search, File Search, Graph Scope Probe
 
 Tritt dieser Fehler bei `playwright-browser_*`-Aufrufen auf, ist die Verbindung zwischen VS Code und dem Browser abgerissen. **Loesung:** In `.vscode/mcp.json` den MCP-Server `playwright` per Rechtsklick → **Restart** neu starten. Danach den Aufruf wiederholen. Hilft das nicht, zusaetzlich pruefen ob die **Playwright MCP Bridge Extension** im Browser aktiv/verbunden ist.
 
+## Browser-Login-Erkennung (Pflicht fuer alle Playwright-Skills)
+
+Bei **jedem** `mcp_playwright_browser_*`-Aufruf und `fetch()`-Antwort pruefen:
+- URL enthaelt `idp.cloud.vwgroup.com`, `login.microsoftonline.com`, `/adfs/`, `/auth/realms/`; oder
+- Page-Title enthaelt `Anmeldung`, `Login`, `Sign in`; oder
+- `fetch()`-Antwort beginnt mit `<!DOCTYPE` statt JSON
+
+→ **Sofort stoppen**, KEINE Credentials eingeben. Dann:
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/hooks/notify.ps1 -AskUser -Message "Browser-Login erforderlich - bitte manuell im Browser anmelden und dann OK klicken" -Title "Browser Login"
+```
+Exit 0 → retry. Exit 1 → abbrechen.
+
 ## Plan-Modus aktiv
 
  Falls ein MCP-Tools nicht verfuegbar prüfe über aufruf  `tool_search_tool_regex` mit dem passenden Pattern. Liefert die Suche KEINE Ergebnisse, sind die MCP-Tools nicht verfuegbar (z.B. weil der Plan-Modus aktiv ist). Wenn Ergebnis = leer → **SOFORT** folgende Meldung ausgeben und die Aufgabe abbrechen:
