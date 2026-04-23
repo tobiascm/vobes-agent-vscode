@@ -220,6 +220,87 @@ def test_active_ea_cap_per_quarter_is_enforced():
     assert all(row["active"] <= 1 for row in rows)
 
 
+def test_reference_eas_are_used_as_additional_candidates():
+    conn = _conn()
+    conn.execute(
+        """
+        INSERT INTO plan_company_targets (year, company, quarter, target_value, annual_target, step_value)
+        VALUES (2026, 'Firma A', 'Q1', 100, 100, 50)
+        """
+    )
+    _insert_stage1(conn, [("EA_STAGE", 0, 0)])
+    conn.execute(
+        """
+        INSERT INTO plan_reference_orders (year, ea_number, reference_value, reference_count, source_company, note)
+        VALUES (2026, 'EA_REF', 100, 1, 'Firma X', 'auto:test')
+        """
+    )
+    conn.commit()
+
+    solver.solve_stage2(conn, year=2026, config=_config(), planning_start_quarter=1)
+
+    rows = _rows_by_key(conn)
+    assert rows == {("Firma A", "Q1", "EA_REF"): 100}
+
+
+def test_blacklist_filters_only_free_candidates():
+    conn = _conn()
+    conn.execute(
+        """
+        INSERT INTO plan_company_targets (year, company, quarter, target_value, annual_target, step_value)
+        VALUES (2026, 'Firma A', 'Q1', 100, 100, 50)
+        """
+    )
+    _insert_stage1(conn, [("90741", 100, 0), ("EA_OK", 100, 0)])
+    conn.commit()
+
+    solver.solve_stage2(
+        conn,
+        year=2026,
+        config=_config(),
+        planning_start_quarter=1,
+        ea_blacklist_norms={"90741"},
+    )
+
+    rows = _rows_by_key(conn)
+    assert rows == {("Firma A", "Q1", "EA_OK"): 100}
+
+
+def test_blacklist_is_ignored_for_special_rules():
+    conn = _conn()
+    conn.execute(
+        """
+        INSERT INTO plan_company_targets (year, company, quarter, target_value, annual_target, step_value)
+        VALUES (2026, 'Firma A', 'Q1', 100, 100, 50)
+        """
+    )
+    _insert_stage1(conn, [("EA_OK", 100, 0)])
+    conn.commit()
+
+    solver.solve_stage2(
+        conn,
+        year=2026,
+        config=_config(),
+        planning_start_quarter=1,
+        ea_blacklist_norms={"90741"},
+        special_rules=[
+            {
+                "topic": "SR",
+                "ea_keys": {"90741"},
+                "candidate_eas": {"0090741"},
+                "allowed_companies": {"Firma A"},
+                "priority_companies": [],
+                "target_amount": 100,
+                "period_target_amount": None,
+                "enforce_period_exact": False,
+            }
+        ],
+    )
+
+    rows = _rows_by_key(conn)
+    assert rows == {("Firma A", "Q1", "0090741"): 100}
+
+
 def test_throughlauf_rows_are_kept_before_switching_to_other_eas():
     conn = _conn()
     conn.execute(

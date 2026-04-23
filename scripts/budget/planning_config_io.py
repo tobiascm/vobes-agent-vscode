@@ -18,6 +18,8 @@ SHEET_SOLVER = "Solver-Parameter"
 SHEET_TARGETS = "Firmenziele"
 SHEET_SONDER = "Sondervorgaben"
 SHEET_PRAEMISSEN = "Praemissen"
+SHEET_BLACKLIST = "EA-Blacklist"
+MAX_BLACKLIST_ROWS = 1000
 
 # ── Default solver rules ──────────────────────────────────────────────
 
@@ -97,6 +99,7 @@ class PlanningConfig:
     company_targets: list[dict[str, Any]]
     sondervorgaben: list[dict[str, Any]]
     praemissen: str
+    ea_blacklist: list[dict[str, str]]
 
 
 def read_config(path: Path) -> PlanningConfig:
@@ -106,8 +109,15 @@ def read_config(path: Path) -> PlanningConfig:
     targets = _read_targets_sheet(wb)
     sonder = _read_sonder_sheet(wb) if SHEET_SONDER in wb.sheetnames else []
     praemissen = _read_praemissen_sheet(wb) if SHEET_PRAEMISSEN in wb.sheetnames else ""
+    blacklist = _read_blacklist_sheet(wb) if SHEET_BLACKLIST in wb.sheetnames else []
     wb.close()
-    return PlanningConfig(rules=rules, company_targets=targets, sondervorgaben=sonder, praemissen=praemissen)
+    return PlanningConfig(
+        rules=rules,
+        company_targets=targets,
+        sondervorgaben=sonder,
+        praemissen=praemissen,
+        ea_blacklist=blacklist,
+    )
 
 
 def _read_solver_sheet(wb: Workbook) -> dict[str, str]:
@@ -214,6 +224,31 @@ def _read_sonder_sheet(wb: Workbook) -> list[dict[str, Any]]:
 def _read_praemissen_sheet(wb: Workbook) -> str:
     ws = wb[SHEET_PRAEMISSEN]
     return str(ws.cell(1, 1).value or "").strip()
+
+
+def _read_blacklist_sheet(wb: Workbook) -> list[dict[str, str]]:
+    ws = wb[SHEET_BLACKLIST]
+    required = {"EA", "EA-Bezeichnung", "Grund"}
+    header_row, cols = _find_header_row(ws, required)
+    max_row = ws.max_row or header_row
+    last_row = min(max_row, header_row + MAX_BLACKLIST_ROWS)
+    if max_row > last_row:
+        log.warning(
+            "EA-Blacklist enthaelt mehr als %d Zeilen; nur die ersten %d Datenzeilen werden beruecksichtigt.",
+            MAX_BLACKLIST_ROWS,
+            MAX_BLACKLIST_ROWS,
+        )
+    rows: list[dict[str, str]] = []
+    for row_idx in range(header_row + 1, last_row + 1):
+        ea = str(ws.cell(row_idx, cols["EA"]).value or "").strip()
+        if not ea:
+            continue
+        rows.append({
+            "ea": ea,
+            "ea_title": str(ws.cell(row_idx, cols["EA-Bezeichnung"]).value or "").strip(),
+            "reason": str(ws.cell(row_idx, cols["Grund"]).value or "").strip(),
+        })
+    return rows
 
 
 # ── Transform raw Excel → solver format ───────────────────────────────
@@ -341,6 +376,22 @@ def create_default_config(path: Path, *, company_targets: list[dict[str, Any]] |
     ws4.cell(1, 1, "").alignment = _WRAP
     ws4.column_dimensions["A"].width = 120
     ws4.row_dimensions[1].height = 200
+
+    # Sheet 5: EA-Blacklist
+    ws5 = wb.create_sheet(SHEET_BLACKLIST)
+    _header_row(ws5, ["EA", "EA-Bezeichnung", "Grund"])
+    default_blacklist = [
+        ("90741", "Nachträgliche Projektkostenzuordnung", "Nicht frei beplanen"),
+        ("9999999", "Rest/Sachgemeinkosten", "Nicht frei beplanen"),
+        ("10933", "Baukasten PKO Maßnahmen SOP 2027-2029", "Nicht frei beplanen"),
+        ("87813", "Modul Innenspiegel mit MIK MQB27", "Nicht frei beplanen"),
+        ("48040", "TEDigitalisierung", "Nicht frei beplanen"),
+    ]
+    for row_idx, (ea, title, reason) in enumerate(default_blacklist, 2):
+        ws5.cell(row_idx, 1, ea).border = _BORDER
+        ws5.cell(row_idx, 2, title).border = _BORDER
+        ws5.cell(row_idx, 3, reason).border = _BORDER
+    _auto_width(ws5)
 
     wb.save(path)
     wb.close()

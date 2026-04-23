@@ -300,6 +300,11 @@ def _quarter_for_date(target_date: str | None) -> str | None:
     return "Q4"
 
 
+def _normalize_ea_number(value: Any) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    return digits.lstrip("0") or "0" if digits else ""
+
+
 def _status_for_new_planned_row(year: int, quarter: str) -> str:
     now = datetime.now()
     current_q = _current_quarter(now)
@@ -763,6 +768,69 @@ def _bootstrap_existing_orders_from_btl(conn: sqlite3.Connection, year: int) -> 
         conn.commit()
 
 
+def _bootstrap_reference_orders_from_btl_all(conn: sqlite3.Connection, year: int) -> None:
+    """Befüllt plan_reference_orders aus BTL_ALL wenn leer: EK-bestellte/genehmigte Referenzen."""
+    has = conn.execute(
+        "SELECT 1 FROM plan_reference_orders WHERE year=? LIMIT 1", (year,)
+    ).fetchone()
+    if has:
+        return
+    try:
+        source = conn.execute(
+            """
+            SELECT company, status, planned_value, dev_order, ea
+            FROM btl_all
+            WHERE substr(COALESCE(target_date, ''), 1, 4) = ?
+            """,
+            (str(year),),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return
+
+    buckets: dict[tuple[str, str], dict[str, int]] = {}
+    for row in source:
+        raw = str(row["status"] or "").strip()
+        if status_label_for_raw_status(raw) != "bestellt":
+            continue
+        ea = str(row["dev_order"] or row["ea"] or "").strip()
+        if not ea:
+            continue
+        amount = int(row["planned_value"] or 0)
+        if amount <= 0:
+            continue
+        company = str(row["company"] or "").strip()
+        key = (ea, company)
+        bucket = buckets.get(key)
+        if bucket is None:
+            buckets[key] = {"value": amount, "count": 1}
+        else:
+            bucket["value"] += amount
+            bucket["count"] += 1
+
+    if not buckets:
+        return
+
+    conn.executemany(
+        """
+        INSERT INTO plan_reference_orders
+            (year, ea_number, reference_value, reference_count, source_company, note)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                year,
+                ea,
+                values["value"],
+                values["count"],
+                company or None,
+                "auto:btl_all_bestellt",
+            )
+            for (ea, company), values in buckets.items()
+        ],
+    )
+    conn.commit()
+
+
 def _bootstrap_stage1_from_btl(conn: sqlite3.Connection, year: int) -> None:
     """Befüllt plan_stage1_results aus BTL wenn leer: EA-Jahressumme als weiche Ziele."""
     has = conn.execute("SELECT 1 FROM plan_stage1_results WHERE year = ? LIMIT 1", (year,)).fetchone()
@@ -818,6 +886,7 @@ def execute_planning(
         _ensure_special_company_targets(conn, year)
         _bootstrap_stage1_from_btl(conn, year)
         _bootstrap_existing_orders_from_btl(conn, year)
+        _bootstrap_reference_orders_from_btl_all(conn, year)
         known_companies = sorted(
             str(r["company"])
             for r in conn.execute(
@@ -825,6 +894,11 @@ def execute_planning(
             ).fetchall()
         )
         special_rules = transform_sondervorgaben(cfg.sondervorgaben, known_companies, start_quarter)
+        ea_blacklist_norms = {
+            norm
+            for norm in (_normalize_ea_number(entry.get("ea")) for entry in cfg.ea_blacklist)
+            if norm
+        }
         solution = solve_stage2(
             conn,
             year=year,
@@ -832,6 +906,7 @@ def execute_planning(
             planning_start_quarter=start_quarter,
             sondervorgaben_mode=sondervorgaben_mode,
             special_rules=special_rules,
+            ea_blacklist_norms=ea_blacklist_norms,
         )
         conn.execute(
             "UPDATE plan_run_log SET rules_csv = ? WHERE run_id = ?",

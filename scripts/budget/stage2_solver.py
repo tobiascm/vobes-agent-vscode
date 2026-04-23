@@ -316,6 +316,7 @@ def solve_stage2(
     sondervorgaben_mode: str = "catchup",
     run_id: str | None = None,
     special_rules: list[dict[str, Any]] | None = None,
+    ea_blacklist_norms: set[str] | None = None,
 ) -> Stage2Solution:
     if planning_start_quarter not in {1, 2, 3, 4}:
         raise PlanningError(f"Ungueltiges planning_start_quarter: {planning_start_quarter}")
@@ -357,9 +358,26 @@ def solve_stage2(
         """,
         (year,),
     ).fetchall()
+    reference_rows = conn.execute(
+        """
+        SELECT ea_number
+        FROM plan_reference_orders
+        WHERE year = ?
+        ORDER BY ea_number
+        """,
+        (year,),
+    ).fetchall()
     known_companies = sorted({str(row["company"]) for row in target_rows} | {str(row["company"]) for row in existing_rows})
     if special_rules is None:
         special_rules = []
+    if ea_blacklist_norms is None:
+        ea_blacklist_norms = set()
+    else:
+        ea_blacklist_norms = {
+            norm
+            for norm in (_normalize_ea_number(v) for v in ea_blacklist_norms)
+            if norm
+        }
     min_order_exempt_ea_norms = _min_order_exempt_ea_norms(special_rules)
     hard_company_annual_targets = _load_hard_company_annual_targets(target_rows)
 
@@ -420,6 +438,8 @@ def solve_stage2(
     stage1_ea_set: set[str] = set()
     for row in stage1_rows:
         ea_number = str(row["ea_number"])
+        if _normalize_ea_number(ea_number) in ea_blacklist_norms:
+            continue
         stage1_targets[ea_number] = int(row["target_value"])
         stage1_ea_set.add(ea_number)
         if int(row["is_hard"] or 0):
@@ -430,6 +450,11 @@ def solve_stage2(
         existing_by_company[company].add(ea_number)
 
     group_member_eas = {str(row["ea_number"]) for row in group_members}
+    reference_eas = {
+        ea_number
+        for ea_number in (str(row["ea_number"]).strip() for row in reference_rows)
+        if ea_number and _normalize_ea_number(ea_number) not in ea_blacklist_norms
+    }
     ea_variants_by_norm: dict[str, set[str]] = defaultdict(set)
     for row in stage1_rows:
         ea_variants_by_norm[_normalize_ea_number(row["ea_number"])].add(str(row["ea_number"]))
@@ -437,6 +462,8 @@ def solve_stage2(
         ea_variants_by_norm[_normalize_ea_number(row["ea_number"])].add(str(row["ea_number"]))
     for row in group_members:
         ea_variants_by_norm[_normalize_ea_number(row["ea_number"])].add(str(row["ea_number"]))
+    for ea_number in reference_eas:
+        ea_variants_by_norm[_normalize_ea_number(ea_number)].add(ea_number)
 
     extra_candidates_by_company: dict[str, set[str]] = defaultdict(set)
     priority_penalty_by_company_ea: dict[tuple[str, str], float] = {}
@@ -462,8 +489,9 @@ def solve_stage2(
     for company, _quarter in effective_targets:
         if company in candidates_by_company:
             continue
+        free_candidates = stage1_ea_set | reference_eas
         candidates = (
-            stage1_ea_set
+            free_candidates
             | existing_by_company.get(company, set())
             | group_member_eas
             | extra_candidates_by_company.get(company, set())

@@ -151,6 +151,80 @@ def test_bootstrap_existing_orders_populates_live_btl_rows(tmp_path, monkeypatch
     assert rows[0]["note"] == "auto:07_In Planen-BM: Bestellt"
 
 
+def test_bootstrap_reference_orders_populates_btl_all_bestellt_rows(tmp_path, monkeypatch):
+    db_path = tmp_path / "budget.db"
+    monkeypatch.setattr(core, "DB_PATH", db_path)
+
+    with core.connect() as conn:
+        core.init_planning_schema(conn)
+        conn.execute(f"CREATE TABLE btl_all ({core.BTL_COLUMNS_SQL})")
+        conn.executemany(
+            """
+            INSERT INTO btl_all (
+                concept, ea, title, status, planned_value, org_unit, company, creator,
+                bm_number, az_number, projektfamilie, dev_order, bm_text, last_updated,
+                category, cost_type, quantity, unit, supplier_number,
+                first_signature, second_signature, target_date, invoices
+            )
+            VALUES (
+                ?, ?, ?, ?, ?, 'ORG', ?, 'T',
+                NULL, NULL, NULL, ?, 'BM', '2026-01-01',
+                'TEST', NULL, NULL, NULL, NULL,
+                NULL, NULL, '2026-06-30', NULL
+            )
+            """,
+            [
+                ("C1", "EA_REF", "EA REF", "07_In Planen-BM: Bestellt", 70, "Firma A", "EA_REF"),
+                ("C2", "EA_IGN", "EA IGN", "01_In Erstellung", 80, "Firma B", "EA_IGN"),
+            ],
+        )
+        conn.commit()
+        core._bootstrap_reference_orders_from_btl_all(conn, 2026)
+        rows = conn.execute(
+            """
+            SELECT ea_number, reference_value, reference_count, source_company, note
+            FROM plan_reference_orders
+            ORDER BY ea_number
+            """
+        ).fetchall()
+
+    assert [(r["ea_number"], r["reference_value"], r["reference_count"], r["source_company"], r["note"]) for r in rows] == [
+        ("EA_REF", 70, 1, "Firma A", "auto:btl_all_bestellt")
+    ]
+
+
+def test_read_config_reads_ea_blacklist_sheet(tmp_path):
+    config_path = tmp_path / "config.xlsx"
+    planning_config_io.create_default_config(config_path)
+    from openpyxl import load_workbook
+
+    wb = load_workbook(config_path)
+    ws = wb[planning_config_io.SHEET_BLACKLIST]
+    ws.append(["12345", "EA X", "Testgrund"])
+    wb.save(config_path)
+    wb.close()
+
+    cfg = planning_config_io.read_config(config_path)
+    assert any(entry["ea"] == "12345" and entry["ea_title"] == "EA X" and entry["reason"] == "Testgrund" for entry in cfg.ea_blacklist)
+    assert any(entry["ea"] == "90741" for entry in cfg.ea_blacklist)
+
+
+def test_read_config_limits_ea_blacklist_to_1000_rows(tmp_path):
+    config_path = tmp_path / "config.xlsx"
+    planning_config_io.create_default_config(config_path)
+    from openpyxl import load_workbook
+
+    wb = load_workbook(config_path)
+    ws = wb[planning_config_io.SHEET_BLACKLIST]
+    for i in range(1, 1101):
+        ws.append([f"77{i:04d}", f"EA {i}", "Limit-Test"])
+    wb.save(config_path)
+    wb.close()
+
+    cfg = planning_config_io.read_config(config_path)
+    assert len(cfg.ea_blacklist) == 1000
+
+
 def test_ensure_special_company_targets_adds_voitas_zero_scope(tmp_path, monkeypatch):
     db_path = tmp_path / "budget.db"
     monkeypatch.setattr(core, "DB_PATH", db_path)
