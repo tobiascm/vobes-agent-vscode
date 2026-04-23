@@ -35,7 +35,7 @@ BTL_COLUMNS_SQL = """
         projektfamilie TEXT, dev_order TEXT, bm_text TEXT, last_updated TEXT,
         category TEXT, cost_type TEXT, quantity TEXT, unit TEXT, supplier_number TEXT,
         first_signature TEXT, second_signature TEXT, target_date TEXT,
-        invoices REAL
+        invoices REAL, dev_order_active INTEGER
 """
 
 SCHEMA = [
@@ -93,7 +93,27 @@ def connect() -> sqlite3.Connection:
 def init_db(conn: sqlite3.Connection) -> None:
     for stmt in SCHEMA:
         conn.execute(stmt)
+    _migrate_btl_tables(conn)
     conn.commit()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column_sql: str) -> None:
+    col_name = column_sql.split()[0]
+    try:
+        cols = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    except sqlite3.OperationalError:
+        return
+    if col_name in cols:
+        return
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_sql}")
+    except sqlite3.OperationalError:
+        return
+
+
+def _migrate_btl_tables(conn: sqlite3.Connection) -> None:
+    for table in ("btl", "btl_all", "btl_opt"):
+        _ensure_column(conn, table, "dev_order_active INTEGER")
 
 
 def ps_json(url: str, timeout: int = 60):
@@ -157,6 +177,21 @@ def as_float(value) -> float:
         return float(str(value or "0").replace(",", "."))
     except ValueError:
         return 0.0
+
+
+def as_optional_bool_int(value) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return 1 if value else 0
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    if text in {"1", "true", "yes", "ja"}:
+        return 1
+    if text in {"0", "false", "no", "nein"}:
+        return 0
+    return None
 
 
 def update_sync_meta(conn: sqlite3.Connection, table: str, year: int) -> None:
@@ -236,6 +271,7 @@ def _sync_btl(conn: sqlite3.Connection, year: int, table: str, org_unit: str | N
             trim(item.get("secondSignature")),
             iso_date(item.get("targetDate")),
             item.get("invoices") or 0.0,
+            as_optional_bool_int(item.get("devOrderActive")),
         ))
     count = replace_table(
         conn,
@@ -245,7 +281,7 @@ def _sync_btl(conn: sqlite3.Connection, year: int, table: str, org_unit: str | N
             "company", "creator", "bm_number", "az_number", "projektfamilie",
             "dev_order", "bm_text", "last_updated", "category", "cost_type",
             "quantity", "unit", "supplier_number", "first_signature",
-            "second_signature", "target_date", "invoices",
+            "second_signature", "target_date", "invoices", "dev_order_active",
         ],
         rows,
         year,

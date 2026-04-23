@@ -518,3 +518,46 @@ def test_materialize_btl_opt_excludes_storniert_passthrough(tmp_path, monkeypatc
     assert "EA_REJECT" not in eas
     assert "EA_OK" in eas
     assert "EA_KEEP" in eas
+
+
+def test_materialize_btl_opt_keeps_dev_order_active_from_passthrough_rows(tmp_path, monkeypatch):
+    db_path = tmp_path / "budget.db"
+    monkeypatch.setattr(core, "DB_PATH", db_path)
+
+    with core.connect() as conn:
+        core.init_planning_schema(conn)
+        conn.execute(f"CREATE TABLE btl ({core.BTL_COLUMNS_SQL})")
+        conn.execute(
+            """
+            INSERT INTO plan_stage2_results
+                (run_id, year, company, quarter, ea_number, amount, source, is_locked, note)
+            VALUES ('run1', 2026, 'Firma A', 'Q1', 'EA_PLAN', 100, 'highs', 0, NULL)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO btl (
+                concept, ea, title, status, planned_value, org_unit, company, creator,
+                bm_number, az_number, projektfamilie, dev_order, bm_text, last_updated,
+                category, cost_type, quantity, unit, supplier_number,
+                first_signature, second_signature, target_date, invoices, dev_order_active
+            )
+            VALUES (
+                'C1','EA_PASS','EA_PASS','01_In Erstellung',50,'EKEK/1','Firma A','T',
+                NULL,NULL,NULL,'EA_PASS','BM','2026-01-01','TEST',NULL,NULL,NULL,NULL,
+                NULL,NULL,'2026-03-31',NULL,0
+            )
+            """
+        )
+        conn.commit()
+        core._materialize_btl_opt(conn, 2026)
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = {
+            row["ea"]: row["dev_order_active"]
+            for row in conn.execute("SELECT ea, dev_order_active FROM btl_opt").fetchall()
+        }
+
+    assert rows["EA_PASS"] == 0
+    assert rows["EA_PLAN"] is None

@@ -256,7 +256,10 @@ def _meta_line_font(line: str) -> Font:
 
 def _budget_source_sql(source_table: str) -> str:
     table = _normalize_source_table(source_table)
-    return f"SELECT concept, dev_order, ea, title, planned_value, company, status, bm_text, target_date FROM {table}"
+    return (
+        "SELECT concept, dev_order, ea, title, planned_value, company, status, bm_text, "
+        f"target_date, dev_order_active FROM {table}"
+    )
 
 
 MONTH_COLUMNS = (
@@ -544,7 +547,7 @@ def _special_rule_matches_budget_row(rule: dict[str, Any], row: dict[str, Any]) 
     return True
 
 
-def _load_el_aggregates(year: int, num_q: int) -> dict[str, dict[str, float]]:
+def _load_el_aggregates(year: int, num_q: int) -> dict[str, dict[str, Any]]:
     period_columns = MONTH_COLUMNS[: num_q * 3]
     year_expr = " + ".join(f"COALESCE({column}, 0)" for column in MONTH_COLUMNS)
     period_expr = " + ".join(f"COALESCE({column}, 0)" for column in period_columns) or "0"
@@ -554,7 +557,8 @@ def _load_el_aggregates(year: int, num_q: int) -> dict[str, dict[str, float]]:
             ROUND(SUM((({year_expr}) / 1200.0) * year_work_hours), 2) AS year_hours,
             ROUND(SUM((({period_expr}) / 1200.0) * year_work_hours), 2) AS period_hours,
             ROUND(SUM((({year_expr}) / 1200.0) * year_work_hours * hourly_rate) / 1000.0, 2) AS year_te,
-            ROUND(SUM((({period_expr}) / 1200.0) * year_work_hours * hourly_rate) / 1000.0, 2) AS period_te
+            ROUND(SUM((({period_expr}) / 1200.0) * year_work_hours * hourly_rate) / 1000.0, 2) AS period_te,
+            SUM(CASE WHEN COALESCE(TRIM(booking_locks), '') <> '' THEN 1 ELSE 0 END) AS booking_lock_rows
         FROM el_planning
         GROUP BY ea_number
     """
@@ -562,7 +566,7 @@ def _load_el_aggregates(year: int, num_q: int) -> dict[str, dict[str, float]]:
         rows = run_sql(sql, year)
     except BaseException:
         return {}
-    aggregates: dict[str, dict[str, float]] = {}
+    aggregates: dict[str, dict[str, Any]] = {}
     for row in rows:
         key = _normalize_ea_key(row.get("ea_number"))
         if not key:
@@ -572,6 +576,7 @@ def _load_el_aggregates(year: int, num_q: int) -> dict[str, dict[str, float]]:
             "period_hours": float(row.get("period_hours") or 0),
             "year_te": float(row.get("year_te") or 0),
             "period_te": float(row.get("period_te") or 0),
+            "has_booking_locks": int(row.get("booking_lock_rows") or 0) > 0,
         }
     return aggregates
 
@@ -1395,6 +1400,17 @@ def _display_ea_title(ea_value: str, ea_number: str, ea_title_by_number: dict[st
     return ea_text
 
 
+def _is_inactive_dev_order(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return not value
+    text = str(value).strip().lower()
+    if text in {"0", "false", "no", "nein"}:
+        return True
+    return False
+
+
 def _budget_entry_from_row(
     row: dict[str, Any],
     status_map: dict[str, str],
@@ -1427,6 +1443,7 @@ def _budget_entry_from_row(
         "reporting_company": reporting_company,
         "quarter": quarter,
         "area": area,
+        "fl_inactive": _is_inactive_dev_order(row.get("dev_order_active")),
     }
 
 
@@ -1549,7 +1566,8 @@ def _detect_matrix_template_groups() -> dict[str, tuple[int, str]]:
     return groups
 
 
-EA_MATRIX_CATEGORIES = ("Sondervereinbarungen", "Serienbetreuung", "Fahrzeugprojekte")
+EA_MATRIX_EL_ONLY_CATEGORY = "EAs nur mit EL ohne FL in der Familie"
+EA_MATRIX_CATEGORIES = ("Sondervereinbarungen", "Serienbetreuung", "Fahrzeugprojekte", EA_MATRIX_EL_ONLY_CATEGORY)
 
 
 def _find_catch_all(groups: dict[str, tuple[int, str]]) -> str | None:
@@ -1667,9 +1685,32 @@ def _load_ea_metadata() -> dict[str, dict[str, Any]]:
     }
 
 
-def _ea_matrix_category(ea_key: str, meta: dict[str, Any], special_order: dict[str, int]) -> str:
+def _ea_matrix_category(ea_key: str, meta: dict[str, Any], special_order: dict[str, int], *, has_fl: bool, has_el: bool) -> str:
+    return _ea_matrix_category_with_family_context(
+        ea_key,
+        meta,
+        special_order,
+        has_fl=has_fl,
+        has_el=has_el,
+        family_has_fl=has_fl,
+    )
+
+
+def _ea_matrix_category_with_family_context(
+    ea_key: str,
+    meta: dict[str, Any],
+    special_order: dict[str, int],
+    *,
+    has_fl: bool,
+    has_el: bool,
+    family_has_fl: bool,
+) -> str:
     if ea_key in special_order:
         return "Sondervereinbarungen"
+    if has_el and not has_fl and not family_has_fl:
+        return EA_MATRIX_EL_ONLY_CATEGORY
+    if has_el and not has_fl and family_has_fl:
+        return "Fahrzeugprojekte"
     title = str(meta.get("title") or "").upper()
     hierarchy = str(meta.get("hierarchy") or "").upper()
     if "SERIENBETREUUNG" in hierarchy or title.startswith("SB "):
@@ -1677,13 +1718,49 @@ def _ea_matrix_category(ea_key: str, meta: dict[str, Any], special_order: dict[s
     return "Fahrzeugprojekte"
 
 
-def _ea_matrix_sort_key(row: dict[str, Any]) -> tuple[int, int, str, str]:
-    return (
-        EA_MATRIX_CATEGORIES.index(row["category"]),
-        int(row.get("special_order", 9999)),
-        str(row.get("family") or ""),
-        str(row.get("ea") or ""),
-    )
+def _ea_matrix_row_score(row: dict[str, Any]) -> int:
+    fl_te = int(row.get("fl_te") or 0)
+    if fl_te > 0:
+        return fl_te
+    return int(row.get("el_te") or 0)
+
+
+def _ea_matrix_family_key(family_value: Any, ea_key: str) -> str:
+    family = str(family_value or "").strip().upper() or "~~~"
+    if family == "KEINE":
+        return f"KEINE::{ea_key}"
+    return family
+
+
+def _ea_matrix_family_group_key(row: dict[str, Any]) -> str:
+    return _ea_matrix_family_key(row.get("family"), str(row.get("ea") or ""))
+
+
+def _ea_matrix_sort_rows(rows: list[dict[str, Any]]) -> None:
+    family_scores: dict[tuple[str, str], int] = defaultdict(int)
+    for row in rows:
+        category = str(row.get("category") or "")
+        family = _ea_matrix_family_group_key(row)
+        score = _ea_matrix_row_score(row)
+        key = (category, family)
+        if score > family_scores[key]:
+            family_scores[key] = score
+
+    def sort_key(row: dict[str, Any]) -> tuple[int, int, str, int, int, int, int, str]:
+        category = str(row.get("category") or "")
+        family = _ea_matrix_family_group_key(row)
+        return (
+            EA_MATRIX_CATEGORIES.index(category),
+            -int(family_scores.get((category, family), 0)),
+            family,
+            -_ea_matrix_row_score(row),
+            -int(row.get("fl_te") or 0),
+            -int(row.get("el_te") or 0),
+            int(row.get("special_order", 9999)),
+            str(row.get("ea") or ""),
+        )
+
+    rows.sort(key=sort_key)
 
 
 def _target_quarter_values_for_area(targets: dict[str, int], start_q: dict[str, int], area: str) -> dict[str, int]:
@@ -1738,7 +1815,9 @@ def _build_ea_matrix(
     ek_totals = _load_ek_totals(year)
     _annual_targets, quarter_targets = _load_reporting_company_targets(year)
     groups = _build_matrix_groups(entries, quarter_targets)
-    ea_totals: dict[str, dict[str, Any]] = defaultdict(lambda: {"quarters": defaultdict(int), "total": 0, "status": {}})
+    ea_totals: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"quarters": defaultdict(int), "total": 0, "status": {}, "fl_inactive": False}
+    )
     open_values = {group: {q: 0 for q in QUARTERS} for group in groups}
 
     for entry in entries:
@@ -1755,6 +1834,8 @@ def _build_ea_matrix(
         if prev is None or _STATUS_PRIORITY.get(label, 99) < _STATUS_PRIORITY.get(prev, 99):
             ea_totals[ea_key]["status"][key] = label
         ea_totals[ea_key]["total"] += value
+        if entry.get("fl_inactive"):
+            ea_totals[ea_key]["fl_inactive"] = True
         if label != "bestellt":
             open_values[group][quarter] += value
         if ea_key not in metadata:
@@ -1768,32 +1849,82 @@ def _build_ea_matrix(
 
     for ea_key in special_order:
         metadata.setdefault(ea_key, {"ea": ea_key, "title": ea_key, "family": "", "sop": None, "hierarchy": ""})
+    for ea_key in el_aggregates:
+        metadata.setdefault(ea_key, {"ea": ea_key, "title": ea_key, "family": "", "sop": None, "hierarchy": ""})
 
     rows: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
     grand_total = sum(int(data["total"]) for data in ea_totals.values())
     ek_plan_total = sum(v[0] for v in ek_totals.values()) or 1
     ek_gen_total = sum(v[1] for v in ek_totals.values()) or 1
-    for ea_key in sorted(set(metadata) & (set(ea_totals) | set(special_order))):
+    matrix_eas = set(ea_totals) | set(special_order) | set(el_aggregates)
+    for ea_key in sorted(set(metadata) & matrix_eas):
         meta = metadata[ea_key]
         total = int(ea_totals[ea_key]["total"])
-        rows.append(
+        fl_te = round(total / 1000)
+        el_year_te = float(el_aggregates.get(ea_key, {}).get("year_te", 0))
+        el_te = round(el_year_te) if ea_key in el_aggregates else None
+        has_fl = total > 0
+        has_el = ea_key in el_aggregates and float(el_aggregates[ea_key].get("year_te", 0)) > 0
+        if fl_te <= 0 and (el_te is None or el_te <= 0):
+            continue
+        candidates.append(
             {
-                "category": _ea_matrix_category(ea_key, meta, special_order),
+                "ea_key": ea_key,
+                "meta": meta,
+                "has_fl": has_fl,
+                "has_el": has_el,
+                "family_key": _ea_matrix_family_key(meta.get("family"), ea_key),
                 "special_order": special_order.get(ea_key, 9999),
                 "ea": ea_key,
                 "title": meta.get("title") or ea_key,
                 "family": meta.get("family") or "",
                 "sop": meta.get("sop"),
-                "fl_te": round(total / 1000),
+                "fl_te": fl_te,
                 "fl_pct": (total / grand_total) if grand_total else 0,
                 "ek_plan": ek_totals[ea_key][0] / ek_plan_total if ea_key in ek_totals else None,
                 "ek_genehmigt": ek_totals[ea_key][1] / ek_gen_total if ea_key in ek_totals else None,
-                "el_te": round(float(el_aggregates.get(ea_key, {}).get("year_te", 0))) if ea_key in el_aggregates else None,
+                "el_te": el_te,
+                "el_locked": bool(el_aggregates.get(ea_key, {}).get("has_booking_locks", False)),
+                "fl_inactive": bool(ea_totals[ea_key].get("fl_inactive", False)),
                 "quarters": dict(ea_totals[ea_key]["quarters"]),
                 "statuses": dict(ea_totals[ea_key]["status"]),
             }
         )
-    rows.sort(key=_ea_matrix_sort_key)
+
+    family_has_fl: dict[str, bool] = defaultdict(bool)
+    for cand in candidates:
+        if cand["has_fl"]:
+            family_has_fl[str(cand["family_key"])] = True
+
+    for cand in candidates:
+        rows.append(
+            {
+                "category": _ea_matrix_category_with_family_context(
+                    str(cand["ea_key"]),
+                    cand["meta"],
+                    special_order,
+                    has_fl=bool(cand["has_fl"]),
+                    has_el=bool(cand["has_el"]),
+                    family_has_fl=bool(family_has_fl.get(str(cand["family_key"]), False)),
+                ),
+                "special_order": cand["special_order"],
+                "ea": cand["ea"],
+                "title": cand["title"],
+                "family": cand["family"],
+                "sop": cand["sop"],
+                "fl_te": cand["fl_te"],
+                "fl_pct": cand["fl_pct"],
+                "ek_plan": cand["ek_plan"],
+                "ek_genehmigt": cand["ek_genehmigt"],
+                "el_te": cand["el_te"],
+                "el_locked": cand["el_locked"],
+                "fl_inactive": cand["fl_inactive"],
+                "quarters": cand["quarters"],
+                "statuses": cand["statuses"],
+            }
+        )
+    _ea_matrix_sort_rows(rows)
 
     soll = {group: {q: 0 for q in QUARTERS} for group in groups}
     subgroup_targets = _subgroup_target_map(groups)
@@ -1991,6 +2122,10 @@ def _write_ea_matrix(ws, matrix: dict[str, Any] | None) -> None:
                     status = data.get("statuses", {}).get((group, quarter))
                     if value and status in _STATUS_FILL_MAP:
                         cell.fill = _STATUS_FILL_MAP[status]
+            if data.get("fl_inactive"):
+                ws.cell(current_row, 2).fill = copy(_IST_UNDER_75_FILL)
+            if data.get("el_locked"):
+                ws.cell(current_row, 9).fill = copy(_STATUS_FILL_MAP["im Durchlauf"])
             current_row += 1
 
     last = current_row - 1

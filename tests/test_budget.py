@@ -42,6 +42,20 @@ class TestNumberParsing:
         assert budget_db.as_float(input_val) == pytest.approx(expected)
 
     @pytest.mark.parametrize("input_val, expected", [
+        (True, 1),
+        (False, 0),
+        ("true", 1),
+        ("false", 0),
+        ("1", 1),
+        ("0", 0),
+        (None, None),
+        ("", None),
+        ("n/a", None),
+    ])
+    def test_as_optional_bool_int(self, budget_db, input_val, expected):
+        assert budget_db.as_optional_bool_int(input_val) == expected
+
+    @pytest.mark.parametrize("input_val, expected", [
         (38000, "38.000"),
         (0, "0"),
         (999, "999"),
@@ -143,6 +157,7 @@ class TestBTLSync:
                 "projektfamilie": "PF1",
                 "devOrder": "EA1",
                 "pbmText": "Text",
+                "devOrderActive": True,
             },
             {
                 "concept": "K2",
@@ -159,6 +174,7 @@ class TestBTLSync:
                 "projektfamilie": "PF2",
                 "devOrder": "EA2",
                 "pbmText": "Text",
+                "devOrderActive": False,
             },
             {
                 "concept": "K3",
@@ -174,6 +190,7 @@ class TestBTLSync:
                 "projektfamilie": "PF3",
                 "devOrder": "EA3",
                 "pbmText": "Text",
+                "devOrderActive": True,
             },
         ]
 
@@ -186,8 +203,8 @@ class TestBTLSync:
         count = budget_db.sync_btl(conn, 2026, force=True)
 
         assert count == 1
-        rows = conn.execute("SELECT concept, org_unit FROM btl").fetchall()
-        assert [tuple(row) for row in rows] == [("K1", "EKEK/1")]
+        rows = conn.execute("SELECT concept, org_unit, dev_order_active FROM btl").fetchall()
+        assert [tuple(row) for row in rows] == [("K1", "EKEK/1", 1)]
 
     def test_sync_btl_all_keeps_all_org_units_and_excludes_archived(self, budget_db, monkeypatch):
         monkeypatch.setattr(budget_db, "ps_json", lambda url: self._payload())
@@ -198,8 +215,28 @@ class TestBTLSync:
         count = budget_db.sync_btl_all(conn, 2026, force=True)
 
         assert count == 2
-        rows = conn.execute("SELECT concept, org_unit FROM btl_all ORDER BY concept").fetchall()
-        assert [tuple(row) for row in rows] == [("K1", "EKEK/1"), ("K2", "EKEK/2")]
+        rows = conn.execute("SELECT concept, org_unit, dev_order_active FROM btl_all ORDER BY concept").fetchall()
+        assert [tuple(row) for row in rows] == [("K1", "EKEK/1", 1), ("K2", "EKEK/2", 0)]
+
+    def test_init_db_migrates_dev_order_active_for_existing_tables(self, budget_db):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            """
+            CREATE TABLE btl (
+                concept TEXT, ea TEXT, title TEXT, status TEXT, planned_value INTEGER,
+                org_unit TEXT, company TEXT, creator TEXT, bm_number TEXT, az_number TEXT,
+                projektfamilie TEXT, dev_order TEXT, bm_text TEXT, last_updated TEXT,
+                category TEXT, cost_type TEXT, quantity TEXT, unit TEXT, supplier_number TEXT,
+                first_signature TEXT, second_signature TEXT, target_date TEXT, invoices REAL
+            )
+            """
+        )
+
+        budget_db.init_db(conn)
+
+        cols = {row["name"] for row in conn.execute("PRAGMA table_info(btl)")}
+        assert "dev_order_active" in cols
 
 
 # ---------------------------------------------------------------

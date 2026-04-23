@@ -356,7 +356,7 @@ def _load_btl_year_rows(conn: sqlite3.Connection, year: int) -> list[sqlite3.Row
                org_unit, company, creator, bm_number, az_number,
                projektfamilie, dev_order, bm_text, last_updated,
                category, cost_type, quantity, unit, supplier_number,
-               first_signature, second_signature, target_date, invoices
+               first_signature, second_signature, target_date, invoices, dev_order_active
         FROM btl
         WHERE substr(COALESCE(target_date, ''), 1, 4) = ?
         ORDER BY company, target_date, dev_order, title
@@ -376,6 +376,7 @@ def _build_btl_insert_row(
     bm_text: str,
     target_date: str,
     timestamp: str,
+    dev_order_active: int | None = None,
 ) -> tuple[Any, ...]:
     return (
         concept,
@@ -401,6 +402,7 @@ def _build_btl_insert_row(
         None,
         target_date,
         None,
+        dev_order_active,
     )
 
 
@@ -441,6 +443,7 @@ def _build_btl_insert_row_from_sample(
             sample_row["second_signature"],
             _quarter_target_date(year, quarter),
             sample_row["invoices"],
+            sample_row["dev_order_active"],
         )
     return _build_btl_insert_row(
         concept=concept,
@@ -452,6 +455,7 @@ def _build_btl_insert_row_from_sample(
         bm_text="",
         target_date=_quarter_target_date(year, quarter),
         timestamp=timestamp,
+        dev_order_active=None,
     )
 
 
@@ -601,9 +605,9 @@ def _materialize_btl_opt(conn: sqlite3.Connection, year: int) -> list[sqlite3.Ro
                 org_unit, company, creator, bm_number, az_number,
                 projektfamilie, dev_order, bm_text, last_updated,
                 category, cost_type, quantity, unit, supplier_number,
-                first_signature, second_signature, target_date, invoices
+                first_signature, second_signature, target_date, invoices, dev_order_active
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             insert_rows,
         )

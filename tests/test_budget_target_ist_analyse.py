@@ -195,6 +195,342 @@ def test_ea_matrix_groups_use_entries_and_target_only_companies(monkeypatch):
     assert matrix["soll"]["ZIEL FIRMA GMBH"]["Q1"] == 50_000
 
 
+def test_ea_matrix_includes_el_only_eas(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(mod, "_load_ea_metadata", lambda: {})
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(
+        mod,
+        "_load_el_aggregates",
+        lambda year, num_q: {"12345": {"year_te": 42.4, "period_te": 20.0, "year_hours": 100.0, "period_hours": 50.0}},
+    )
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(mod, "_load_reporting_company_targets", lambda year: ({}, {}))
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    assert [(row["ea"], row["fl_te"], row["fl_pct"], row["el_te"], row["quarters"]) for row in matrix["rows"]] == [
+        ("12345", 0, 0, 42, {})
+    ]
+    assert matrix["rows"][0]["category"] == "EAs nur mit EL ohne FL in der Familie"
+    assert matrix["rows"][0]["el_locked"] is False
+    assert matrix["rows"][0]["fl_inactive"] is False
+
+
+def test_ea_matrix_combines_fl_and_el_on_same_ea(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(mod, "_load_ea_metadata", lambda: {})
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(
+        mod,
+        "_load_el_aggregates",
+        lambda year, num_q: {"1": {"year_te": 8.7, "period_te": 4.0, "year_hours": 20.0, "period_hours": 10.0}},
+    )
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(mod, "_load_reporting_company_targets", lambda year: ({}, {}))
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[
+            {
+                "ea_number": "1",
+                "ea": "EA1",
+                "title": "BM 1",
+                "value": 10_000,
+                "quarter": "Q1",
+                "status_label": "bestellt",
+                "reporting_company": "Firma A",
+                "area": "Area",
+            }
+        ],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    assert len(matrix["rows"]) == 1
+    assert matrix["rows"][0]["category"] == "Fahrzeugprojekte"
+    assert matrix["rows"][0]["fl_te"] == 10
+    assert matrix["rows"][0]["el_te"] == 9
+    assert matrix["rows"][0]["el_locked"] is False
+    assert matrix["rows"][0]["fl_inactive"] is False
+
+
+def test_ea_matrix_puts_el_only_ea_into_fahrzeugprojekte_when_family_has_fl(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(
+        mod,
+        "_load_ea_metadata",
+        lambda: {
+            "1": {"ea": "1", "title": "EA1", "family": "PF1", "sop": None, "hierarchy": ""},
+            "2": {"ea": "2", "title": "EA2", "family": "PF1", "sop": None, "hierarchy": ""},
+        },
+    )
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(
+        mod,
+        "_load_el_aggregates",
+        lambda year, num_q: {
+            "2": {"year_te": 6.0, "period_te": 2.0, "year_hours": 10.0, "period_hours": 5.0, "has_booking_locks": False},
+        },
+    )
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(mod, "_load_reporting_company_targets", lambda year: ({}, {}))
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[
+            {
+                "ea_number": "1",
+                "ea": "EA1",
+                "title": "BM 1",
+                "value": 10_000,
+                "quarter": "Q1",
+                "status_label": "bestellt",
+                "reporting_company": "Firma A",
+                "area": "Area",
+            }
+        ],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    categories = {row["ea"]: row["category"] for row in matrix["rows"]}
+    assert categories["1"] == "Fahrzeugprojekte"
+    assert categories["2"] == "Fahrzeugprojekte"
+
+
+def test_ea_matrix_excludes_rows_with_zero_fl_and_zero_el(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(mod, "_load_ea_metadata", lambda: {})
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(
+        mod,
+        "_load_el_aggregates",
+        lambda year, num_q: {"12118": {"year_te": 0.0, "period_te": 0.0, "year_hours": 0.0, "period_hours": 0.0, "has_booking_locks": True}},
+    )
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(mod, "_load_reporting_company_targets", lambda year: ({}, {}))
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    assert matrix["rows"] == []
+
+
+def test_ea_matrix_orders_rows_by_family_then_fl_desc(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(
+        mod,
+        "_load_ea_metadata",
+        lambda: {
+            "1": {"ea": "1", "title": "EA1", "family": "PF1", "sop": None, "hierarchy": ""},
+            "2": {"ea": "2", "title": "EA2", "family": "PF1", "sop": None, "hierarchy": ""},
+            "3": {"ea": "3", "title": "EA3", "family": "PF2", "sop": None, "hierarchy": ""},
+        },
+    )
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(mod, "_load_el_aggregates", lambda year, num_q: {})
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(mod, "_load_reporting_company_targets", lambda year: ({}, {}))
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[
+            {"ea_number": "1", "ea": "EA1", "title": "BM 1", "value": 10_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+            {"ea_number": "2", "ea": "EA2", "title": "BM 2", "value": 30_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+            {"ea_number": "3", "ea": "EA3", "title": "BM 3", "value": 20_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+        ],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    assert [row["ea"] for row in matrix["rows"]] == ["2", "1", "3"]
+
+
+def test_ea_matrix_orders_equal_fl_by_el_desc(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(
+        mod,
+        "_load_ea_metadata",
+        lambda: {
+            "1": {"ea": "1", "title": "EA1", "family": "PF1", "sop": None, "hierarchy": ""},
+            "2": {"ea": "2", "title": "EA2", "family": "PF1", "sop": None, "hierarchy": ""},
+        },
+    )
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(
+        mod,
+        "_load_el_aggregates",
+        lambda year, num_q: {
+            "1": {"year_te": 7.0, "period_te": 3.0, "year_hours": 10.0, "period_hours": 5.0, "has_booking_locks": False},
+            "2": {"year_te": 3.0, "period_te": 2.0, "year_hours": 10.0, "period_hours": 5.0, "has_booking_locks": False},
+        },
+    )
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(mod, "_load_reporting_company_targets", lambda year: ({}, {}))
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[
+            {"ea_number": "1", "ea": "EA1", "title": "BM 1", "value": 10_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+            {"ea_number": "2", "ea": "EA2", "title": "BM 2", "value": 10_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+        ],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    assert [row["ea"] for row in matrix["rows"]] == ["1", "2"]
+
+
+def test_ea_matrix_orders_family_blocks_by_highest_fl_desc(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(
+        mod,
+        "_load_ea_metadata",
+        lambda: {
+            "1": {"ea": "1", "title": "EA1", "family": "PF1", "sop": None, "hierarchy": ""},
+            "2": {"ea": "2", "title": "EA2", "family": "PF2", "sop": None, "hierarchy": ""},
+            "3": {"ea": "3", "title": "EA3", "family": "PF1", "sop": None, "hierarchy": ""},
+        },
+    )
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(mod, "_load_el_aggregates", lambda year, num_q: {})
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(mod, "_load_reporting_company_targets", lambda year: ({}, {}))
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[
+            {"ea_number": "1", "ea": "EA1", "title": "BM 1", "value": 10_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+            {"ea_number": "2", "ea": "EA2", "title": "BM 2", "value": 40_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+            {"ea_number": "3", "ea": "EA3", "title": "BM 3", "value": 30_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+        ],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    assert [row["ea"] for row in matrix["rows"]] == ["2", "3", "1"]
+
+
+def test_ea_matrix_orders_el_only_families_by_el_when_fl_is_zero(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(
+        mod,
+        "_load_ea_metadata",
+        lambda: {
+            "1": {"ea": "1", "title": "EA1", "family": "PF1", "sop": None, "hierarchy": ""},
+            "2": {"ea": "2", "title": "EA2", "family": "PF2", "sop": None, "hierarchy": ""},
+            "3": {"ea": "3", "title": "EA3", "family": "PF1", "sop": None, "hierarchy": ""},
+        },
+    )
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(
+        mod,
+        "_load_el_aggregates",
+        lambda year, num_q: {
+            "1": {"year_te": 10.0, "period_te": 3.0, "year_hours": 10.0, "period_hours": 5.0, "has_booking_locks": False},
+            "2": {"year_te": 40.0, "period_te": 2.0, "year_hours": 10.0, "period_hours": 5.0, "has_booking_locks": False},
+            "3": {"year_te": 30.0, "period_te": 1.0, "year_hours": 10.0, "period_hours": 5.0, "has_booking_locks": False},
+        },
+    )
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(mod, "_load_reporting_company_targets", lambda year: ({}, {}))
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    assert all(row["category"] == "EAs nur mit EL ohne FL in der Familie" for row in matrix["rows"])
+    assert [row["ea"] for row in matrix["rows"]] == ["2", "3", "1"]
+
+
+def test_ea_matrix_does_not_group_family_keine(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(
+        mod,
+        "_load_ea_metadata",
+        lambda: {
+            "1": {"ea": "1", "title": "EA1", "family": "KEINE", "sop": None, "hierarchy": ""},
+            "2": {"ea": "2", "title": "EA2", "family": "KEINE", "sop": None, "hierarchy": ""},
+            "3": {"ea": "3", "title": "EA3", "family": "PF1", "sop": None, "hierarchy": ""},
+        },
+    )
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(mod, "_load_el_aggregates", lambda year, num_q: {})
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(mod, "_load_reporting_company_targets", lambda year: ({}, {}))
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[
+            {"ea_number": "1", "ea": "EA1", "title": "BM 1", "value": 10_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+            {"ea_number": "2", "ea": "EA2", "title": "BM 2", "value": 30_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+            {"ea_number": "3", "ea": "EA3", "title": "BM 3", "value": 20_000, "quarter": "Q1", "status_label": "bestellt", "reporting_company": "Firma A", "area": "Area"},
+        ],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    assert [row["ea"] for row in matrix["rows"]] == ["2", "3", "1"]
+
+
+def test_ea_matrix_sets_inactive_fl_and_el_lock_flags(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(mod, "_load_ea_metadata", lambda: {})
+    monkeypatch.setattr(mod, "_load_sondervorgaben", lambda config_path, known_companies: [])
+    monkeypatch.setattr(
+        mod,
+        "_load_el_aggregates",
+        lambda year, num_q: {"1": {"year_te": 5.0, "period_te": 2.0, "year_hours": 10.0, "period_hours": 5.0, "has_booking_locks": True}},
+    )
+    monkeypatch.setattr(mod, "_load_ek_totals", lambda year: {})
+    monkeypatch.setattr(mod, "_load_reporting_company_targets", lambda year: ({}, {}))
+
+    matrix = mod._build_ea_matrix(
+        year=2026,
+        entries=[
+            {
+                "ea_number": "1",
+                "ea": "EA1",
+                "title": "BM 1",
+                "value": 10_000,
+                "quarter": "Q1",
+                "status_label": "bestellt",
+                "reporting_company": "Firma A",
+                "area": "Area",
+                "fl_inactive": True,
+            }
+        ],
+        targets={},
+        start_q={},
+        known_companies=[],
+    )
+
+    assert matrix["rows"][0]["el_locked"] is True
+    assert matrix["rows"][0]["fl_inactive"] is True
+
+
 def test_ea_matrix_group_matches_vwgs_marker_override():
     mod = load_module()
     groups = mod._build_matrix_groups(
@@ -307,6 +643,8 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
                     "fl_te": 44,
                     "fl_pct": 0.4,
                     "el_te": None,
+                    "fl_inactive": True,
+                    "el_locked": False,
                     "quarters": {("Weitere", "Q4"): 44_000},
                 },
                 {
@@ -318,6 +656,8 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
                     "fl_te": 11,
                     "fl_pct": 0.1,
                     "el_te": 3,
+                    "fl_inactive": False,
+                    "el_locked": True,
                     "quarters": {("4SOFT", "Q1"): 11_000},
                 },
                 {
@@ -329,6 +669,8 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
                     "fl_te": 55,
                     "fl_pct": 0.5,
                     "el_te": None,
+                    "fl_inactive": False,
+                    "el_locked": False,
                     "quarters": {("THIESEN Spez.", "Q1"): 22_000, ("THIESEN Support", "Q2"): 33_000},
                 },
             ],
@@ -379,10 +721,12 @@ def test_write_xlsx_report_adds_ea_matrix_from_template(tmp_path):
     ]
     assert ws["A7"].value == "43932"
     assert ws.cell(7, starts["4SOFT"]).value == 11
+    assert ws["I7"].fill.fgColor.rgb.endswith("FFC000")
     assert ws["A9"].value == "1800"
     assert ws.cell(9, starts["THIESEN Spez."]).value == 22
     assert ws.cell(9, starts["THIESEN Support"] + 1).value == 33
     assert ws["A11"].value == "999"
+    assert ws["B11"].fill.fgColor.rgb.endswith("FF6666")
     assert ws.cell(11, starts["Weitere"] + 3).value == 44
 
 
@@ -694,6 +1038,53 @@ def test_budget_entry_from_row_resolves_numeric_ea_to_title():
     assert entry is not None
     assert entry["ea"] == "Arbeiten EK für China nicht projektbez."
     assert entry["ea_number"] == "0093037"
+    assert entry["fl_inactive"] is False
+
+
+def test_budget_entry_from_row_marks_inactive_dev_order():
+    mod = load_module()
+
+    entry = mod._budget_entry_from_row(
+        {
+            "concept": "OPT-2",
+            "ea": "0093037",
+            "dev_order": "0093037",
+            "title": "Dummy BM",
+            "planned_value": 10000,
+            "company": "EDAG ENGINEERING GMBH WOLFSBURG",
+            "status": "01_In Erstellung",
+            "bm_text": "",
+            "target_date": "2026-09-30",
+            "dev_order_active": 0,
+        },
+        {"01_In Erstellung": "Konzept"},
+        {"0093037": "Arbeiten EK für China nicht projektbez."},
+    )
+
+    assert entry is not None
+    assert entry["fl_inactive"] is True
+
+
+def test_load_el_aggregates_sets_booking_lock_flag(monkeypatch):
+    mod = load_module()
+    monkeypatch.setattr(
+        mod,
+        "run_sql",
+        lambda sql, year: [
+            {
+                "ea_number": "0043932",
+                "year_hours": 1200.0,
+                "period_hours": 600.0,
+                "year_te": 100.0,
+                "period_te": 50.0,
+                "booking_lock_rows": 2,
+            }
+        ],
+    )
+
+    rows = mod._load_el_aggregates(2026, 2)
+
+    assert rows["43932"]["has_booking_locks"] is True
 
 
 def test_load_targets_reads_company_target_overrides():
