@@ -35,7 +35,7 @@ skill-protokoll-confluence/
 ├── SKILL.md                           ← verbindliche Spec (vom Agent geladen)
 ├── m365_copilot_protokoll_prompt.md   ← Alternativ-Prompt fuer skill-m365-copilot-chat
 └── scripts/
-    └── recordings.py                  ← list-recent | fetch | suggest-page
+    └── recordings.py                  ← list-recent | fetch | suggest-page | sync-register | list-open | next-open | materialize-transcript | mark-integrated
 ```
 
 ## CLI-Kommandos
@@ -51,6 +51,24 @@ python .agents/skills/skill-protokoll-confluence/scripts/recordings.py fetch <it
 
 # Zugehoerige Confluence-Seite auflösen (Regel-Match + Kalender-Lookup):
 python .agents/skills/skill-protokoll-confluence/scripts/recordings.py suggest-page <item-id>
+
+# Register userdata/transcriptions/transcriptions.csv aktualisieren:
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py sync-register
+
+# Optional: Kalender auch fuer bestehende Eintraege neu abgleichen (langsamer):
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py sync-register --refresh-existing-calendar
+
+# Nur offene (noch nicht integrierte) Transkriptionen:
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py list-open --limit 20
+
+# Naechste offene Transkription als JSON:
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py next-open
+
+# Master-Markdown unter userdata/transcriptions/transcripts erzeugen:
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py materialize-transcript <transcription_id|source_item_id>
+
+# Integration(en) speichern, mehrfach moeglich:
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py mark-integrated <transcription_id|source_item_id> --target "confluence|url=...|page_id=...|space=...|title=..."
 ```
 
 `<item-id>` ist bei Recordings die Graph-Item-ID, bei Audios der Dateiname (`meeting_YYYYMMDD_HHMM-HHMM.md`).
@@ -64,6 +82,21 @@ userdata/sessions/{YYYYMMDD_HHMM}_{slug}/
 ├── meta.json            (itemId, startedAt, calendarSubject, screenshots[])
 └── screenshots/         (zeitlich gefilterte Bilder aus Desktop/Screenshots/)
 ```
+
+### Register (CSV)
+
+`userdata/transcriptions/transcriptions.csv` mit diesen Feldern:
+
+```csv
+transcription_id;meeting_at;meeting_title;source_type;source_item_id;source_location;transcript_md_path;integrated_targets;suggested_title;last_action_at;notes
+```
+
+- `meeting_title`:
+  - Recording: aus Teams-Dateinamen
+  - Audio: aus Outlook-Kalender
+- Kalender-Matching fuer Audio priorisiert Termine mit Kategorie gegenueber Terminen ohne Kategorie.
+- `integrated_targets`: mehrere Zielorte per Zeilenumbruch in einer Zelle.
+- `sync-register` ist standardmaessig schnell: bestehende Eintraege werden nicht bei jedem Lauf erneut gegen Outlook abgeglichen; Kalender-Lookup erfolgt fuer neue oder unsichere Audio-Titel. Fuer Voll-Refresh den Flag `--refresh-existing-calendar` nutzen.
 
 ## Sammlerseiten (parent_id) und Namenskonvention
 

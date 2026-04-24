@@ -28,8 +28,10 @@ Jede Protokollseite MUSS:
 | Workshopreihe Easy-Migration-Selfservice | `6698589657` | `Workshop Easy-Migration-Selfservice YYYY-MM-DD` | Workshop Easy-Migration-Selfservice 2026-03-12 |
 | Planung 2026 | `5127115694` | *(keine datumsbasierten Protokolle — Sonderfall)* | — |
 | KC Vibe Coding | `6932124640` | `KC Vibe Coding - YYYY-MM-DD` | KC Vibe Coding - 2026-03-12 |
+| Übergreifendes techn. Refinement | `6612851628` | `YYYY-MM-DD Protokoll Übergr. techn. Refinement` | 2026-04-24 Protokoll Übergr. techn. Refinement |
 
 > **Datum-Format:** Immer `YYYY-MM-DD` (ISO 8601). Das Datum im Titel ist das Termindatum, NICHT das Erstellungsdatum.
+> **Datum-Position:** Bei den meisten Regelterminen steht das Datum am **Ende** des Titels. Ausnahme: "Übergreifendes techn. Refinement" hat das Datum am **Anfang** (Bestandskonvention).
 
 ## Ablauf: Neues Protokoll erstellen
 
@@ -291,6 +293,50 @@ Quellen (Kaskade, beide werden gelesen und chronologisch zusammengefuehrt):
 - **Recordings**: Teams-Token im Cache (`userdata/tmp/.graph_token_cache_teams.json`) mit Scope `Calendars.Read` + `Files.ReadWrite.All`. Refresh-Token im Teams-LocalStorage (Script refresht SharePoint-Token automatisch ueber `m365_mail_search_token`).
 - **Kalender-Subject-Lookup fuer Audio**: Graph-Token (Scope `Calendars.Read`). Faellt ohne Token auf Filename-Stem zurueck.
 - Confluence-MCP `mcp-atlassian` verfuegbar (nur wenn Push gewuenscht).
+
+## Workflow C: Register + Queue fuer unverarbeitete Transkriptionen
+
+Zweck: zentraler Ueberblick in `userdata/transcriptions/transcriptions.csv` und systematische Abarbeitung offener Transkriptionen.
+
+### Register-Regeln
+
+- Master-Ordner: `userdata/transcriptions/`
+- CSV: `userdata/transcriptions/transcriptions.csv` (Delimiter `;`, UTF-8 BOM)
+- Transkript-Markdown: `userdata/transcriptions/transcripts/YYYY-MM-DD_HHMM__{source}__{meeting-title}.md`
+- Mehrere Integrationsziele pro Eintrag: Feld `integrated_targets` mit **Zeilenumbruechen** innerhalb einer Zelle.
+
+### CSV-Felder (11)
+
+`transcription_id;meeting_at;meeting_title;source_type;source_item_id;source_location;transcript_md_path;integrated_targets;suggested_title;last_action_at;notes`
+
+### Titel-Logik (Pflicht)
+
+- `recording`: Titel aus Teams-Dateinamen (`{Title}-YYYYMMDD_HHMMSS-Besprechungstranskript.mp4`).
+- `audio`: Titel aus Outlook-Kalender.
+- Kalender-Matching priorisiert Meetings **mit Kategorie** vor Meetings ohne Kategorie; bei Gleichstand entscheidet Zeitnaehe.
+
+### Kommandos
+
+1. Register aktualisieren:
+   `python .agents/skills/skill-protokoll-confluence/scripts/recordings.py sync-register`
+2. Naechste offene Transkription:
+   `python .agents/skills/skill-protokoll-confluence/scripts/recordings.py next-open`
+3. Offene Liste:
+   `python .agents/skills/skill-protokoll-confluence/scripts/recordings.py list-open --limit 20`
+4. Master-Transkript materialisieren:
+   `python .agents/skills/skill-protokoll-confluence/scripts/recordings.py materialize-transcript <transcription_id|source_item_id>`
+5. Integration markieren (mehrfach moeglich):
+   `python .agents/skills/skill-protokoll-confluence/scripts/recordings.py mark-integrated <transcription_id|source_item_id> --target "confluence|url=...|page_id=...|space=...|title=..."`
+
+### Agentischer Queue-Ablauf
+
+1. `sync-register` ausfuehren.
+2. `next-open` aufrufen und Eintrag vorschlagen.
+3. Bei Bestaetigung:
+   - `materialize-transcript ...`
+   - Protokoll erstellen/integrieren (Workflow A/B).
+   - `mark-integrated ... --target "..."`
+4. Wieder zu Schritt 2 bis `next-open` => `{"open": false}`.
 
 ## Hinweis
 

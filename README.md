@@ -54,6 +54,54 @@ $skill-budget-bplus-export        Vorgangsuebersicht fuer EKEK/1 exportieren
 @workspace Liste alle Seiten im Confluence Space EKEK1
 ```
 
+## Transkriptions-Tracking (Protokoll)
+
+Der Skill [`skill-protokoll-confluence`](.agents/skills/skill-protokoll-confluence/SKILL.md) fuehrt ein zentrales Register fuer Transkriptionen.
+
+- CSV-Register: `userdata/transcriptions/transcriptions.csv`
+- Master-Transkripte: `userdata/transcriptions/transcripts/*.md`
+- Open-Definition: Eintrag ist **offen**, wenn `integrated_targets` leer ist.
+
+### CSV-Felder
+
+```csv
+transcription_id;meeting_at;meeting_title;source_type;source_item_id;source_location;transcript_md_path;integrated_targets;suggested_title;last_action_at;notes
+```
+
+### Typischer Ablauf
+
+```powershell
+# 1) Register aktualisieren (Teams Recordings + lokale Audioaufzeichnungen)
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py sync-register
+
+# Optional: Kalender auch fuer bestehende Eintraege komplett neu abgleichen (langsamer)
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py sync-register --refresh-existing-calendar
+
+# 2) Offene Eintraege anzeigen
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py list-open --limit 20
+
+# 3) Naechsten offenen Eintrag holen
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py next-open
+
+# 4) Transkript als Master-Markdown materialisieren
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py materialize-transcript <transcription_id|source_item_id>
+
+# 5) Nach Integration Ziel hinterlegen (Confluence/lokal/skip/merged/deferred)
+python .agents/skills/skill-protokoll-confluence/scripts/recordings.py mark-integrated <transcription_id|source_item_id> --target "confluence|url=...|page_id=...|space=...|title=..."
+```
+
+### `integrated_targets`-Konventionen
+
+- `confluence|url=...|page_id=...|space=...|title=...`
+- `local|path=...`
+- `merged|into=...|reason=...`
+- `skip|reason=...`
+- `deferred|reason=...`
+
+Mehrere Ziele sind pro Eintrag moeglich (mehrere Zeilen in einer CSV-Zelle).
+
+Hinweis Performance: Standard-`sync-register` fragt Outlook-Kalender nur fuer neue oder unsichere Audio-Titel nach. Das beschleunigt regelmaessige Laeufe deutlich.
+
 ## Projektstruktur
 
 ```
