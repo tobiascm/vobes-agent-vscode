@@ -98,6 +98,10 @@ Optionale Flags:
 - `--no-optimize` — PDF-Optimierung deaktivieren
 - `--css pfad\style.css` — CSS-Anpassung aus Datei laden
 
+> **Hinweis:** Interne Anker-Links (`[Text](#heading)`) werden vor der Konvertierung
+> automatisch gestripped, da pymupdf Anchor-HREFs URL-encoded aber Heading-IDs als
+> raw UTF-8 behaelt (Umlaut-Mismatch). Das PDF-TOC via `--toc-level` ersetzt sie.
+
 Ohne OUTPUT wird die PDF neben die Markdown-Datei gelegt (`<stem>.pdf`).
 
 ### Datei → Markdown

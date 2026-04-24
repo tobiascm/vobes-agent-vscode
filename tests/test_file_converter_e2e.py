@@ -122,3 +122,32 @@ def test_md_to_pdf(tmp_path: Path) -> None:
     )
     assert output_file.exists(), f"Output {output_file} not created"
     assert output_file.stat().st_size > 0, f"Output PDF {output_file} is empty"
+
+
+@pytest.mark.e2e
+def test_md_to_pdf_umlaut_anchors(tmp_path: Path) -> None:
+    """Markdown with Umlaut headings and internal anchor links must not crash."""
+    input_file = tmp_path / "umlauts.md"
+    output_file = tmp_path / "umlauts.pdf"
+    input_file.write_text(
+        "# \u00dcbersicht\n\n"
+        "1. [\u00dcberblick](#\u00fcberblick)\n"
+        "2. [F\u00e4higkeit der Umf\u00e4nge](#f\u00e4higkeit-der-umf\u00e4nge)\n"
+        "3. [Plain anchor](#plain-anchor)\n\n"
+        "## \u00dcberblick\n\nText mit Umlauten: \u00e4\u00f6\u00fc\u00df.\n\n"
+        "## F\u00e4higkeit der Umf\u00e4nge\n\n"
+        "| Spalte A | Spalte B |\n"
+        "|----------|----------|\n"
+        "| Wert 1   | Wert 2   |\n\n"
+        "## Plain anchor\n\nASCII only section.\n",
+        encoding="utf-8",
+    )
+
+    result = _run_converter("md-to-pdf", str(input_file), str(output_file))
+
+    assert result.returncode == 0, (
+        f"md-to-pdf with Umlaut anchors failed\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert output_file.exists()
+    assert output_file.stat().st_size > 0

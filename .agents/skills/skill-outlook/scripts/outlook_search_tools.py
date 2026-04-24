@@ -1224,6 +1224,63 @@ def compose_draft(
     return {"status": "ok", "to": to, "subject": subject, "displayed": display}
 
 
+def reply_to_email(
+    entry_id: str,
+    store_id: str = "",
+    body: str = "",
+    reply_all: bool = False,
+    signature: str = "kurz",
+    display: bool = True,
+) -> dict[str, Any]:
+    """Create a proper Reply (or ReplyAll) on an existing mail and open it."""
+    item = _get_item_by_id(entry_id, store_id)
+    reply = item.ReplyAll() if reply_all else item.Reply()
+
+    # Outlook auto-inserts signature on Reply(); only prepend our body text
+    original_html = reply.HTMLBody
+    body_html = _plain_to_html(body) if body else ""
+
+    import re as _re
+    m = _re.search(r"(<body[^>]*>)", original_html, _re.IGNORECASE)
+    if m:
+        insert_pos = m.end()
+        reply.HTMLBody = original_html[:insert_pos] + body_html + original_html[insert_pos:]
+    else:
+        reply.HTMLBody = '<html><head><meta charset="utf-8"></head><body>' + body_html + original_html + "</body></html>"
+
+    if display:
+        reply.Display()
+    else:
+        reply.Save()
+
+    return {
+        "status": "ok",
+        "subject": _coerce_text(_safe_get(reply, "Subject", "")),
+        "to": _coerce_text(_safe_get(reply, "To", "")),
+        "reply_all": reply_all,
+        "displayed": display,
+    }
+
+
+def move_emails(entry_ids: list[str], folder_path: str, store_id: str = "") -> dict:
+    """Move emails to a folder specified by path like 'Archiv\\KI'."""
+    _, namespace, _ = _lazy_outlook_context()
+    # Resolve folder by walking the path from the default store root
+    store = namespace.DefaultStore if not store_id else namespace.GetStoreFromID(store_id)
+    folder = store.GetRootFolder()
+    for part in folder_path.replace("/", "\\").split("\\"):
+        folder = folder.Folders(part)
+    moved, errors = [], []
+    for eid in entry_ids:
+        try:
+            item = _get_item_by_id(eid, store_id)
+            item.Move(folder)
+            moved.append(eid[:20] + "...")
+        except Exception as exc:
+            errors.append(f"{eid[:20]}...: {exc!r}")
+    return {"status": "ok", "moved": len(moved), "errors": errors, "target_folder": folder_path}
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Classic Outlook search and diagnostics.",
@@ -1322,6 +1379,20 @@ def _build_parser() -> argparse.ArgumentParser:
     compose_parser.add_argument("--signature", default="lang", help="Signature name prefix (default: 'lang'). Use '' to skip.")
     compose_parser.add_argument("--no-display", action="store_true", help="Save as draft without opening the compose window.")
 
+    reply_parser = subparsers.add_parser("reply", help="Reply to an existing email (threaded, with history).")
+    reply_parser.add_argument("--entry-id", required=True, help="EntryID of the mail to reply to.")
+    reply_parser.add_argument("--store-id", default="", help="Optional StoreID.")
+    reply_parser.add_argument("--body", default="", help="Plain-text reply body. No greeting/closing needed.")
+    reply_parser.add_argument("--body-file", default="", help="Read body from a text file instead of --body.")
+    reply_parser.add_argument("--reply-all", action="store_true", help="Reply to all recipients.")
+    reply_parser.add_argument("--signature", default="kurz", help="Signature name prefix (default: 'kurz').")
+    reply_parser.add_argument("--no-display", action="store_true", help="Save as draft without opening.")
+
+    move_parser = subparsers.add_parser("move", help="Move emails to a folder by path (e.g. 'Archiv\\KI').")
+    move_parser.add_argument("--entry-id", required=True, nargs="+", help="One or more EntryIDs to move.")
+    move_parser.add_argument("--store-id", default="", help="Optional StoreID.")
+    move_parser.add_argument("--folder", required=True, help="Target folder path, e.g. 'Archiv\\KI'.")
+
     return parser
 
 
@@ -1361,6 +1432,24 @@ def main(argv: list[str] | None = None) -> int:
             cc=args.cc,
             signature=args.signature,
             display=not args.no_display,
+        )
+    elif args.command == "reply":
+        body = args.body
+        if args.body_file:
+            body = Path(args.body_file).read_text(encoding="utf-8")
+        payload = reply_to_email(
+            entry_id=args.entry_id,
+            store_id=args.store_id,
+            body=body,
+            reply_all=args.reply_all,
+            signature=args.signature,
+            display=not args.no_display,
+        )
+    elif args.command == "move":
+        payload = move_emails(
+            entry_ids=args.entry_id,
+            folder_path=args.folder,
+            store_id=args.store_id,
         )
     else:
         payload = outlook_read_email(
