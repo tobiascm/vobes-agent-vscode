@@ -30,6 +30,8 @@ Dieser Skill beantwortet Plausibilisierungsanfragen zu Aufwaenden in der EKEK/1.
 
 ## Kategorie-Mapping
 
+> **Budget-Verantwortliche:** Die Datei `orga_budget.md` im Skill-Ordner enthaelt alle budgetrelevanten Ansprechpartner und Freigaberollen. Bei Fragen zu Zustaendigkeiten, Freigaben oder Ansprechpartnern im Budget-Kontext zuerst dort nachschlagen.
+
 | Kategorie | Firmen / Gewerke | Textquelle Begruendung | Textquelle BM-Text |
 |---|---|---|---|
 | **SYS/BIB** | Bertrandt, EDAG, SYS-Flow | `scripts/budget/begruendungen.md` → Abschnitt "Gewerk SYS und Bib" / "Gewerk SYS-Flow" | `scripts/budget/muster-bm-texte.md` → Abschnitt "Gewerk SYS-BIB" |

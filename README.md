@@ -2,17 +2,16 @@
 
 Agenten-Toolset fuer die VOBES/Bordnetz-Entwicklung. Kombiniert domaenenspezifische Skills, ein lokales RAG-System, MCP-Integrationen (Confluence/Jira, Playwright, VOBES) sowie Python-Skripte und Tests fuer Budget-, M365-, Outlook- und Recherche-Workflows. Lauffaehig unter **Claude Code**, **GitHub Copilot** und **Codex** (gleiche Skills, zwei Steuerdateien).
 
-## Ueberblick
+## Überblick
 
-| Komponente | Beschreibung |
-|---|---|
-| `AGENTS.md` | Steuerdatei fuer Copilot/Codex (Skill-Pflicht-Matrix, Tool-Prioritaet, Use-Cases) |
-| `CLAUDE.md` | Steuerdatei fuer Claude Code (inhaltsgleich mit AGENTS.md) |
-| `.agents/skills/` | 29 Skills (Budget, M365, Outlook, Confluence/Jira, Research, Utilities) |
-| `.vscode/mcp.json` | MCP-Server: `local-rag`, `local-rag-bridge`, `mcp-atlassian`, `playwright` |
-| `scripts/` | Python/PowerShell-Hilfsskripte (Budget-DB, MCP-Atlassian, Hooks, Token-Helper) |
-| `tests/` | pytest-Suite inkl. `e2e`-Tests (Outlook COM, LLM, M365) |
-| `userdata/` | Arbeitsdaten (Budget, Outlook, Sessions) — nicht eingecheckt |
+- **`AGENTS.md`** — Steuerdatei fuer Copilot/Codex (Skill-Pflicht-Matrix, Tool-Prioritaet, Use-Cases)
+- **`CLAUDE.md`** — Steuerdatei fuer Claude Code (inhaltsgleich mit AGENTS.md)
+- **`.agents/skills/`** — 29 Skills (Budget, M365, Outlook, Confluence/Jira, Research, Utilities)
+- **`.vscode/mcp.json`** — MCP-Server: `local-rag`, `local-rag-bridge`, `mcp-atlassian`, `playwright`
+- **`scripts/`** — Python/PowerShell-Hilfsskripte (Budget-DB, MCP-Atlassian, Hooks, Token-Helper)
+- **`tests/`** — pytest-Suite inkl. `e2e`-Tests (Outlook COM, LLM, M365)
+- **`userdata/`** — Arbeitsdaten (Budget, Outlook, Sessions) — nicht eingecheckt
+
 
 ## Voraussetzungen
 
@@ -105,63 +104,65 @@ Beide Steuerdateien (`AGENTS.md` fuer Copilot/Codex, `CLAUDE.md` fuer Claude Cod
 
 Konfiguriert in `.vscode/mcp.json`:
 
-| Server | Typ | Zweck |
-|---|---|---|
-| `local-rag` | HTTP (`localhost:8000`) | Lokales RAG (Knowledgebases `default`, `datenmodelle`, `jira-vkon2`, `ldorado`, `chd`, `prozesse`) |
-| `local-rag-bridge` | stdio (Python) | Bruecke zum remote VOBES-RAG (`test.vobes.vwgroup.com/lightrag`), nutzt Edge-Cookie `MRHSession` |
-| `mcp-atlassian` | stdio (Docker) | Confluence- und Jira-Zugriff via Container `mcp-atlassian` |
-| `playwright` | stdio (`npx`) | Browser-Automation via Chrome-Extension (VOBES, M365 Copilot, ChatGPT, Outlook-Termin) |
+- **`local-rag`** · HTTP (`localhost:8000`) — Lokales RAG (KBs: `default`, `datenmodelle`, `jira-vkon2`, `ldorado`, `chd`, `prozesse`)
+- **`local-rag-bridge`** · stdio (Python) — Bruecke zum remote VOBES-RAG (`test.vobes.vwgroup.com/lightrag`), nutzt Edge-Cookie `MRHSession`
+- **`mcp-atlassian`** · stdio (Docker) — Confluence- und Jira-Zugriff via Container
+- **`playwright`** · stdio (`npx`) — Browser-Automation via Chrome-Extension (VOBES, M365 Copilot, ChatGPT, Outlook-Termin)
+
 
 ## Skills
 
-| Skill | Zweck |
-|---|---|
-| **Wissen & Orga** ||
-| [`skill-knowledge-bordnetz-vobes`](.agents/skills/skill-knowledge-bordnetz-vobes/SKILL.md) | RAG-Abfragen zu VOBES, Bordnetz, VEC, KBL, LDorado, Prozessen |
-| [`skill-orga-ekek1`](.agents/skills/skill-orga-ekek1/SKILL.md) | Referenz fuer EKEK/1-Orga, Namen, Rollen, Gremien, Regeltermine |
-| [`skill-important-pages-links-and-urls`](.agents/skills/skill-important-pages-links-and-urls/SKILL.md) | Zentrale Link-/URL-Sammlung fuer EKEK/1-Dashboard und Standardseiten |
-| [`skill-te-regelwerk`](.agents/skills/skill-te-regelwerk/SKILL.md) | TE Regelwerk (iProject) durchsuchen, Prozessstandards laden |
-| **Budget & BPLUS** ||
-| [`skill-budget-bplus-export`](.agents/skills/skill-budget-bplus-export/SKILL.md) | Vorgangs-, Abruf-, BM-, Konzeptuebersicht aus BPLUS-NG exportieren |
-| [`skill-budget-ea-uebersicht`](.agents/skills/skill-budget-ea-uebersicht/SKILL.md) | EA-Stammdaten, Laufzeiten, DevOrders aus BPLUS-NG |
-| [`skill-budget-stundensaetze`](.agents/skills/skill-budget-stundensaetze/SKILL.md) | OE-Stundensaetze aus BPLUS-NG |
-| [`skill-budget-ua-leiter`](.agents/skills/skill-budget-ua-leiter/SKILL.md) | UA-Leiter / OE->Mail-Zuordnung im Budget-Kontext |
-| [`skill-budget-eigenleistung-el`](.agents/skills/skill-budget-eigenleistung-el/SKILL.md) | EL-Planung lesen/schreiben (inkl. Monats-Update via `el_change.py`) |
-| [`skill-budget-plausibilisierung`](.agents/skills/skill-budget-plausibilisierung/SKILL.md) | BM-Texte und Aufwandsbegruendungen erzeugen |
-| [`skill-budget-target-ist-analyse`](.agents/skills/skill-budget-target-ist-analyse/SKILL.md) | Massnahmenplan (Aufgabenbereich + Firma) als Markdown/Excel |
-| [`skill-budget-beauftragungsplanung`](.agents/skills/skill-budget-beauftragungsplanung/SKILL.md) | Beauftragungsplanung fuer Fremdvergaben (SQLite + Regel-CSV, 2-Stage-Solver) |
-| **Confluence & Jira** ||
-| [`skill-protokoll-confluence`](.agents/skills/skill-protokoll-confluence/SKILL.md) | Protokollseiten fuer Regeltermine erstellen und speichern |
-| [`skill-update-confluence-page`](.agents/skills/skill-update-confluence-page/SKILL.md) | Standardisiertes Aktualisieren bestehender Confluence-Seiten |
-| [`skill-jira-sys-flow`](.agents/skills/skill-jira-sys-flow/SKILL.md) | Abfragen des Jira-Boards SYS-FLOW (SYS-AEMs, Systemschaltplaene) |
-| **M365 & Outlook** ||
-| [`skill-m365-copilot-chat`](.agents/skills/skill-m365-copilot-chat/SKILL.md) | M365 Copilot Chat via Playwright DOM-Interaktion |
-| [`skill-m365-copilot-file-search`](.agents/skills/skill-m365-copilot-file-search/SKILL.md) | SharePoint/OneDrive via Graph Beta API durchsuchen |
-| [`skill-m365-copilot-mail-search`](.agents/skills/skill-m365-copilot-mail-search/SKILL.md) | Outlook-Mails via Graph Search API durchsuchen |
-| [`skill-m365-file-reader`](.agents/skills/skill-m365-file-reader/SKILL.md) | PPTX/XLSX/DOCX/PDF/Bilder aus SharePoint/OneDrive lesen |
-| [`skill-sharepoint`](.agents/skills/skill-sharepoint/SKILL.md) | SharePoint per REST API (Listen, Dokumentbibliotheken, Suche, Pages) via Playwright-SSO |
-| [`skill-m365-mail-agent`](.agents/skills/skill-m365-mail-agent/SKILL.md) | Agentische Analyse eines Mail-Falls (Seed-Mail + Iteration) |
-| [`skill-m365-graph-scope-probe`](.agents/skills/skill-m365-graph-scope-probe/SKILL.md) | Diagnose fehlender Graph-Scopes (401/403) |
-| [`skill-outlook`](.agents/skills/skill-outlook/SKILL.md) | Lokales Outlook (COM): Suche, Thread-Sicht, verwandte Mails |
-| [`skill-outlook-termin`](.agents/skills/skill-outlook-termin/SKILL.md) | Outlook-/Teams-Termine aus Mail-Slots erstellen |
-| **Personen & Recherche** ||
-| [`skill-personensuche-groupfind`](.agents/skills/skill-personensuche-groupfind/SKILL.md) | Personen, Vorgesetzte, OE-Struktur via GroupFind GraphQL |
-| [`skill-deep-research`](.agents/skills/skill-deep-research/SKILL.md) | Mehrstufige Multi-Source-Recherche mit Evidenzsammlung |
-| [`skill-chatgpt-research`](.agents/skills/skill-chatgpt-research/SKILL.md) | Frage an ChatGPT via Playwright, Antwort als Markdown |
-| [`skill-browse-intranet`](.agents/skills/skill-browse-intranet/SKILL.md) | Intranet-Seiten per Playwright (Navigation, Extraktion, Screenshots) |
-| **Utilities** ||
-| [`skill-excel-io`](.agents/skills/skill-excel-io/SKILL.md) | `.xlsx` lesen/schreiben/bearbeiten per CLI (info/read/edit/write, Styling, Batch) |
-| [`skill-file-converter`](.agents/skills/skill-file-converter/SKILL.md) | Lokale Dateien nach PDF (Office COM) oder Markdown (lightrag) |
-| [`skill-hibernate`](.agents/skills/skill-hibernate/SKILL.md) | Rechner zu bestimmter Uhrzeit in den Ruhezustand versetzen |
+### Wissen & Orga
+- [skill-knowledge-bordnetz-vobes](.agents/skills/skill-knowledge-bordnetz-vobes/SKILL.md) — RAG-Abfragen zu VOBES, Bordnetz, VEC, KBL, LDorado, Prozessen
+- [skill-orga-ekek1](.agents/skills/skill-orga-ekek1/SKILL.md) — Referenz fuer EKEK/1-Orga, Namen, Rollen, Gremien, Regeltermine
+- [skill-important-pages-links-and-urls](.agents/skills/skill-important-pages-links-and-urls/SKILL.md) — Zentrale Link-/URL-Sammlung fuer EKEK/1-Dashboard
+- [skill-te-regelwerk](.agents/skills/skill-te-regelwerk/SKILL.md) — TE Regelwerk (iProject) durchsuchen, Prozessstandards laden
+
+### Budget & BPLUS
+- [skill-budget-bplus-export](.agents/skills/skill-budget-bplus-export/SKILL.md) — Vorgangs-, Abruf-, BM-, Konzeptuebersicht aus BPLUS-NG
+- [skill-budget-ea-uebersicht](.agents/skills/skill-budget-ea-uebersicht/SKILL.md) — EA-Stammdaten, Laufzeiten, DevOrders
+- [skill-budget-stundensaetze](.agents/skills/skill-budget-stundensaetze/SKILL.md) — OE-Stundensaetze
+- [skill-budget-ua-leiter](.agents/skills/skill-budget-ua-leiter/SKILL.md) — UA-Leiter / OE→Mail-Zuordnung
+- [skill-budget-eigenleistung-el](.agents/skills/skill-budget-eigenleistung-el/SKILL.md) — EL-Planung lesen/schreiben (inkl. `el_change.py`)
+- [skill-budget-plausibilisierung](.agents/skills/skill-budget-plausibilisierung/SKILL.md) — BM-Texte und Aufwandsbegruendungen
+- [skill-budget-target-ist-analyse](.agents/skills/skill-budget-target-ist-analyse/SKILL.md) — Massnahmenplan (Aufgabenbereich + Firma)
+- [skill-budget-beauftragungsplanung](.agents/skills/skill-budget-beauftragungsplanung/SKILL.md) — Beauftragungsplanung Fremdvergaben (2-Stage-Solver)
+
+### Confluence & Jira
+- [skill-protokoll-confluence](.agents/skills/skill-protokoll-confluence/SKILL.md) — Protokollseiten fuer Regeltermine
+- [skill-update-confluence-page](.agents/skills/skill-update-confluence-page/SKILL.md) — Bestehende Confluence-Seiten aktualisieren
+- [skill-jira-sys-flow](.agents/skills/skill-jira-sys-flow/SKILL.md) — Jira-Board SYS-FLOW (SYS-AEMs, Systemschaltplaene)
+
+### M365 & Outlook
+- [skill-m365-copilot-chat](.agents/skills/skill-m365-copilot-chat/SKILL.md) — M365 Copilot Chat via Playwright DOM
+- [skill-m365-copilot-file-search](.agents/skills/skill-m365-copilot-file-search/SKILL.md) — SharePoint/OneDrive via Graph Beta API
+- [skill-m365-copilot-mail-search](.agents/skills/skill-m365-copilot-mail-search/SKILL.md) — Outlook-Mails via Graph Search API
+- [skill-m365-file-reader](.agents/skills/skill-m365-file-reader/SKILL.md) — PPTX/XLSX/DOCX/PDF/Bilder aus SharePoint/OneDrive
+- [skill-sharepoint](.agents/skills/skill-sharepoint/SKILL.md) — SharePoint REST API (Listen, Docs, Suche) via Playwright-SSO
+- [skill-m365-mail-agent](.agents/skills/skill-m365-mail-agent/SKILL.md) — Agentische Mail-Fall-Analyse (Seed-Mail + Iteration)
+- [skill-m365-graph-scope-probe](.agents/skills/skill-m365-graph-scope-probe/SKILL.md) — Diagnose fehlender Graph-Scopes (401/403)
+- [skill-outlook](.agents/skills/skill-outlook/SKILL.md) — Lokales Outlook (COM): Suche, Thread-Sicht, verwandte Mails
+- [skill-outlook-termin](.agents/skills/skill-outlook-termin/SKILL.md) — Outlook-/Teams-Termine erstellen
+
+### Personen & Recherche
+- [skill-personensuche-groupfind](.agents/skills/skill-personensuche-groupfind/SKILL.md) — Personen, Vorgesetzte, OE-Struktur via GroupFind
+- [skill-deep-research](.agents/skills/skill-deep-research/SKILL.md) — Mehrstufige Multi-Source-Recherche
+- [skill-chatgpt-research](.agents/skills/skill-chatgpt-research/SKILL.md) — Frage an ChatGPT via Playwright
+- [skill-browse-intranet](.agents/skills/skill-browse-intranet/SKILL.md) — Intranet-Seiten per Playwright (Navigation, Extraktion, Screenshots)
+
+### Utilities
+- [skill-excel-io](.agents/skills/skill-excel-io/SKILL.md) — `.xlsx` lesen/schreiben/bearbeiten per CLI
+- [skill-file-converter](.agents/skills/skill-file-converter/SKILL.md) — Lokale Dateien nach PDF (Office COM) oder Markdown (lightrag)
+- [skill-hibernate](.agents/skills/skill-hibernate/SKILL.md) — Rechner zeitgesteuert in Ruhezustand versetzen
+
 
 ## VS Code Tasks & Hooks
 
-| Task | Beschreibung |
-|---|---|
-| `MCP Atlassian: Start` | Docker-Container starten |
-| `MCP Atlassian: Stop` | Docker-Container stoppen |
-| `MCP Atlassian: Show Logs` | Container-Logs tail'en |
-| `Windows: Hibernate Scheduler` | GUI fuer einmaligen Hibernate-Zeitpunkt (nutzt Skill `skill-hibernate`) |
+- **`MCP Atlassian: Start`** — Docker-Container starten
+- **`MCP Atlassian: Stop`** — Docker-Container stoppen
+- **`MCP Atlassian: Show Logs`** — Container-Logs tail'en
+- **`Windows: Hibernate Scheduler`** — GUI fuer einmaligen Hibernate-Zeitpunkt
+
 
 **Stop-Hook Notifications**: `scripts/hooks/notify.ps1` (Claude Code) und `scripts/hooks/codex-notify.ps1` (Codex) zeigen eine nicht-blockierende Popup-Benachrichtigung via `wscript.exe`, wenn der Agent auf Eingabe wartet.
 
@@ -178,22 +179,27 @@ Test-Daten liegen unter `tests/` (z. B. `TestPPTX.pptx`, `TestXLSX-lang.xlsx`, `
 ## Dokumentation
 
 **MCP Atlassian**
+
 - [Quick Start](docs/mcp-atlassian/MCP-ATLASSIAN-QUICKSTART.md) — Schnelleinstieg fuer den Docker-Container
 - [Setup (Detail)](docs/mcp-atlassian/MCP-ATLASSIAN-SETUP.md) — ausfuehrliche Einrichtung inkl. PAT und Env
 - [Integration](docs/mcp-atlassian/mcp-atlassian-integration.md) — Einbettung in die Agent-Workflows
 
 **Token & M365**
+
 - [Teams-Token-Debugging](docs/teams-token-debugging.md) — 6-Stufen-Fallback-Kette bei TOKEN_EXPIRED / AADSTS
 - [Token-Verfahren](docs/token-verfahren.md) — Ueberblick ueber Token-Beschaffung (Graph, Teams, Outlook)
 
 **BPLUS / Budget**
+
 - [BPLUS Eigenleistung API](docs/bplus/eigenleistung-api.md) — Endpunkte fuer `skill-budget-eigenleistung-el`
 
 **M365 Copilot — Research-Analysen**
+
 - [Analyse M365 Copilot API Research](docs/Analyse-m365-copilot-api-research.md) — Untersuchung Graph-/Copilot-APIs
 - [Analyse M365 Copilot Chat Skill](docs/Analyse-m365-copilot-chat-skill.md) — Design-Analyse `skill-m365-copilot-chat`
 
 **Sonstige**
+
 - [Spec Deep Research](docs/spec_deep_research.md) — Spezifikation fuer `skill-deep-research`
 - [Chat-Notification-Setup](docs/howto_chat_notify.md) — Setup fuer Stop-Hook-Popups
 
@@ -204,9 +210,9 @@ Test-Daten liegen unter `tests/` (z. B. `TestPPTX.pptx`, `TestXLSX-lang.xlsx`, `
 
 ## Ressourcen
 
-- VW Devstack Jira: https://devstack.vwgroup.com/jira
-- VW Devstack Confluence: https://devstack.vwgroup.com/confluence
-- MCP Atlassian GitHub: https://github.com/sooperset/mcp-atlassian
+- VW Devstack Jira: [https://devstack.vwgroup.com/jira](https://devstack.vwgroup.com/jira)
+- VW Devstack Confluence: [https://devstack.vwgroup.com/confluence](https://devstack.vwgroup.com/confluence)
+- MCP Atlassian GitHub: [https://github.com/sooperset/mcp-atlassian](https://github.com/sooperset/mcp-atlassian)
 
 ## Multi-Agent-Setup
 
@@ -236,10 +242,12 @@ Mit der Extension "Markdown For Humans WYSIWYG" — aber nicht fuer Diffs. In `s
     "*.md": "markdownForHumans.editor"
 }
 ```
+
 # VS Code Einstellungen
 
 ## Markdown
-In VS Code kannst du Markdown-Dateien standardmäßig direkt als gerenderte Vorschau öffnen, statt als reinen Texteditor. Dafür gibt es offiziell die Einstellung ```workbench.editorAssociations mit *.md -> vscode.markdown.preview.editor```
+
+In VS Code kannst du Markdown-Dateien standardmäßig direkt als gerenderte Vorschau öffnen, statt als reinen Texteditor. Dafür gibt es offiziell die Einstellung `workbench.editorAssociations mit *.md -> vscode.markdown.preview.editor`  
 Noch besser wird es mit dem Markdown WYSIWYG-Editor "Markdown For Humans WYSIWYG" 
 
 Damit der aber nicht für DIFFS verwendet wird, trage in deine settings.json ein:
@@ -254,14 +262,41 @@ Damit der aber nicht für DIFFS verwendet wird, trage in deine settings.json ein
 
 Damit werden .md-Dateien beim Öffnen als Markdown-Preview angezeigt. VS Code nennt das den Markdown Preview Custom Editor
 
+### Copilot Auto Suggest auch für Markdown
+
+In settings.json:
+
+```json
+"github.copilot.enable": {
+  "*": true,
+  "markdown": true
+},
+"editor.inlineSuggest.enabled": true
+```
+
+### **Key-Shortcut für nur ein Wort übernehmen:**
+
+In C:\Users\<DEIN_USER>\AppData\Roaming\Code\User\keybindings.json:
+
+```json
+[
+  {
+  "key": "shift+tab",
+    "command": "editor.action.inlineSuggest.acceptNextWord",
+    "when": "inlineSuggestionVisible && !editorReadonly"
+  }
+  ]
+```
+
 ## Tipps und Tricks
 
 ### Skills für alle Agents
 
-orignial in -agents/skills (Github CoPilot und CODEX)
+orignial in -agents/skills (Github CoPilot und CODEX)  
 per symlnk spiegeln in .claude/skills
 
 PowerShell
+
 ```
 New-Item -ItemType Directory -Force .agents\skills | Out-Null
 New-Item -ItemType Directory -Force .claude | Out-Null
@@ -277,42 +312,42 @@ New-Item -ItemType Junction -Path .claude\skills -Target (Resolve-Path .agents\s
 
 ## Skill-Matrix Zugriffe und Berechtigungen
 
-Legende Auth-Typ: **Browser-SSO** = Kerberos/NTLM ueber Playwright Browser-Session, **Graph API** = Microsoft Graph mit Token, **NAA** = Nested App Auth (M365ChatClient), **COM** = lokales Outlook COM-Objekt, **lokal** = nur lokale Dateien/Prozesse.
+Legende Auth-Typ: **Browser-SSO** = Kerberos/NTLM ueber Playwright, **Graph API** = MS Graph mit Token, **NAA** = Nested App Auth, **COM** = Outlook COM, **lokal** = nur lokale Dateien.
 
-| Skill | Zugriffsarten | Auth-Typ | Berechtigungen | App-Reg? |
-|---|---|---|---|---|
-| skill-browse-intranet | Playwright MCP, Browser Extension | Browser-SSO | keine (nutzt aktive Browser-Session) | Nein |
-| skill-budget-beauftragungsplanung | SQLite, Excel-Config, Python Scripts | lokal + BPLUS Kerberos | BPLUS-Benutzerrechte | Nein |
-| skill-budget-bplus-export | BPLUS REST API, SQLite, Playwright (optional) | BPLUS Kerberos | BPLUS-Benutzerrechte (Lese-/Exportrechte) | Nein |
-| skill-budget-ea-uebersicht | BPLUS REST API, SQLite | BPLUS Kerberos | BPLUS-Benutzerrechte (`OrgUnit/GetAll`, `DevOrder/GetAll`) | Nein |
-| skill-budget-eigenleistung-el | BPLUS REST API, SQLite, Python Scripts | BPLUS Kerberos | BPLUS-Benutzerrechte (`el_planning` Endpunkt, Schreibzugriff) | Nein |
-| skill-budget-plausibilisierung | lokale Dateien (Markdown) | lokal | keine | Nein |
-| skill-budget-stundensaetze | BPLUS REST API, SQLite | BPLUS Kerberos | BPLUS-Benutzerrechte (`CostCenter/GetCostCenter2HourlyRates`) | Nein |
-| skill-budget-target-ist-analyse | BPLUS REST API, SQLite, Excel, Python Scripts | BPLUS Kerberos | BPLUS-Benutzerrechte (read-only) | Nein |
-| skill-budget-ua-leiter | BPLUS REST API, SQLite | BPLUS Kerberos | BPLUS-Benutzerrechte (`OrgUnit/GetAll` mit Mail-Feldern) | Nein |
-| skill-chatgpt-research | Playwright MCP, ChatGPT Web UI | Browser-SSO | keine (ChatGPT-Login ueber Browser-Session) | Nein |
-| skill-deep-research | Playwright MCP, mcp-atlassian | Browser-SSO + Confluence PAT | Confluence Lese-Berechtigung (Spaces VOBES, VSUP) | Nein |
-| skill-excel-io | lokale .xlsx Dateien, openpyxl/CLI | lokal | keine | Nein |
-| skill-file-converter | Office COM, lightrag LLM-Pipeline | lokal (COM) | keine (lokale Office-Installation) | Nein |
-| skill-hibernate | PowerShell, Windows Task Scheduler | lokal | keine (lokale Admin-/Benutzerrechte) | Nein |
-| skill-important-pages-links-and-urls | Referenzdokumente (Markdown) | lokal | keine | Nein |
-| skill-jira-sys-flow | mcp-atlassian (Jira) | Jira PAT | Jira Lese-Berechtigung (Projekt SYS-FLOW) | Nein |
-| skill-knowledge-bordnetz-vobes | local_rag MCP, Python Scripts | lokal | keine (lokale Wissensdatenbank) | Nein |
-| skill-m365-copilot-chat | Playwright MCP, M365 Copilot Web | Browser-SSO | M365 Copilot Lizenz (kein Graph-Scope); bei API-Migration: `Mail.Read`, `Chat.Read`, `ChannelMessage.Read.All`, `People.Read.All`, `OnlineMeetingTranscript.Read.All`, `ExternalItem.Read.All`, `Sites.Read.All` | Nein (DOM); **Ja bei API** |
-| skill-m365-copilot-file-search | Graph Beta API, Playwright NAA-Token | NAA (AppID c0ab8ce9) | `/.default` via NAA — implizit `Files.Read.All`, `Sites.Read.All` | **Ja** |
-| skill-m365-copilot-mail-search | Graph Search API, Playwright Token | Graph API (Teams AppID 5e3ce6c0) | **`Mail.Read`**, `Calendars.Read` | **Ja** |
-| skill-m365-file-reader | Graph API, Python Scripts | NAA (Copilot-Token) | `Files.Read.All`, `Sites.Read.All` (implizit via NAA) | **Ja** |
-| skill-m365-graph-scope-probe | Graph API, lokale Token-Caches | bestehende Tokens | keine eigenen (diagnostisch, nutzt vorhandene Tokens) | Nein |
-| skill-m365-mail-agent | Graph Search API, Python Scripts, Outlook COM | Graph API (Teams-Token) + COM | **`Mail.Read`**, `Calendars.Read`, `Files.Read.All` | **Ja** |
-| skill-orga-ekek1 | Referenzdokumente (Markdown) | lokal | keine | Nein |
-| skill-outlook | Outlook COM (Lesen, Suchen, **Senden**) | COM | Mail-Versand ueber lokale Outlook-Sitzung; bei Graph-Migration: `Mail.Send`, `Mail.ReadWrite` | Nein (COM) |  
-| skill-outlook-termin | Outlook COM (Erstellen, **Senden**, Absagen) | COM | Termin-/Meeting-Versand ueber lokale Outlook-Sitzung; bei Graph-Migration: `Calendars.ReadWrite` | Nein (COM) |
-| skill-personensuche-groupfind | GroupFind GraphQL API, Playwright MCP | Browser-SSO (Keycloak) | GroupFind Lesezugriff (VW-Netz-Konto) | Nein |
-| skill-protokoll-confluence | mcp-atlassian, Playwright (optional) | Confluence PAT | Confluence Lese-/Schreibberechtigung (Spaces VOBES, EKEK1) | Nein |
-| skill-sharepoint | SharePoint REST API, Playwright Browser-Session | Browser-SSO | SharePoint-Berechtigungen auf Ziel-Site (via Browser-Session) | Nein |
-| skill-te-regelwerk | Playwright MCP, iProject Web, PDF-Extraktion | Browser-SSO | iProject Lesezugriff (VW-Netz-Konto) | Nein |
-| skill-teams-chat | Teams Chat Service API, Graph API | Graph API (Teams-Token) | **`ic3.teams.office.com/.default`**, `graph.microsoft.com/.default` — implizit `Chat.ReadWrite`, `User.Read` | **Ja** |
-| skill-update-confluence-page | mcp-atlassian (Confluence) | Confluence PAT | Confluence Schreibberechtigung auf Zielseite | Nein |
-| git-commit | Git CLI, lokale Dateien | lokal | keine | Nein |
-| git-push | Git CLI, SSH | SSH | SSH-Key-Passphrase via GIT_PKI_PASS | Nein |
-| specify-memory-sync-skill | lokale Markdown-Dateien (.specify/memory) | lokal | keine | Nein |
+> Skills mit **App-Reg = Ja** benoetigen eine registrierte Azure AD App.
+
+
+#### Browser-SSO (Playwright)
+- **skill-browse-intranet** · Playwright MCP · keine (aktive Browser-Session)
+- **skill-chatgpt-research** · Playwright MCP, ChatGPT Web · keine
+- **skill-personensuche-groupfind** · GroupFind GraphQL · Keycloak, VW-Netz-Konto
+- **skill-sharepoint** · SharePoint REST API · SharePoint-Berechtigungen auf Ziel-Site
+- **skill-te-regelwerk** · Playwright, iProject Web · iProject Lesezugriff
+
+#### BPLUS Kerberos
+- **skill-budget-beauftragungsplanung** · SQLite, Excel-Config · BPLUS-Benutzerrechte
+- **skill-budget-bplus-export** · BPLUS REST API, SQLite · BPLUS Lese-/Exportrechte
+- **skill-budget-ea-uebersicht** · BPLUS REST API · `OrgUnit/GetAll`, `DevOrder/GetAll`
+- **skill-budget-eigenleistung-el** · BPLUS REST API · `el_planning` (Schreibzugriff)
+- **skill-budget-stundensaetze** · BPLUS REST API · `CostCenter/GetCostCenter2HourlyRates`
+- **skill-budget-target-ist-analyse** · BPLUS REST API · read-only
+- **skill-budget-ua-leiter** · BPLUS REST API · `OrgUnit/GetAll` mit Mail-Feldern
+
+#### Confluence / Jira PAT
+- **skill-deep-research** · Playwright + mcp-atlassian · Confluence Lese (VOBES, VSUP)
+- **skill-jira-sys-flow** · mcp-atlassian · Jira Lese (SYS-FLOW)
+- **skill-protokoll-confluence** · mcp-atlassian · Confluence Lese-/Schreib (VOBES, EKEK1)
+- **skill-update-confluence-page** · mcp-atlassian · Confluence Schreib auf Zielseite
+
+#### COM (Outlook lokal)
+- **skill-outlook** · Outlook COM (Lesen, Suchen, **Senden**) · bei Graph-Migration: `Mail.Send`, `Mail.ReadWrite`
+- **skill-outlook-termin** · Outlook COM (Erstellen, **Senden**, Absagen) · bei Graph-Migration: `Calendars.ReadWrite`
+
+#### Graph API / NAA (App-Reg = **Ja**)
+- **skill-m365-copilot-chat** · Playwright DOM · Browser-SSO; bei API-Migration: `Mail.Read`, `Chat.Read`, `ChannelMessage.Read.All`, `People.Read.All`, `OnlineMeetingTranscript.Read.All`, `ExternalItem.Read.All`, `Sites.Read.All`
+- **skill-m365-copilot-file-search** · Graph Beta API, NAA (AppID c0ab8ce9) · `Files.Read.All`, `Sites.Read.All`
+- **skill-m365-copilot-mail-search** · Graph Search API (Teams AppID 5e3ce6c0) · **`Mail.Read`**, `Calendars.Read`
+- **skill-m365-file-reader** · Graph API, NAA · `Files.Read.All`, `Sites.Read.All`
+- **skill-m365-graph-scope-probe** · bestehende Tokens · keine eigenen (diagnostisch)
+- **skill-m365-mail-agent** · Graph Search API + COM · **`Mail.Read`**, `Calendars.Read`, `Files.Read.All`
+- **skill-teams-chat** · Teams Chat Service API · `ic3.teams.office.com/.default`, `Chat.ReadWrite`, `User.Read`
