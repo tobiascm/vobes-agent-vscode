@@ -1,0 +1,38 @@
+{
+  "slides": [
+    {
+      "layout_names": ["Titel und Text (zweispaltig)"],
+      "layout_hints": ["zweispaltig"],
+      "slots": {
+        "title": "Zweispaltige Inhalte",
+        "left_text": "Linke Spalte:\n- Fokus auf Kontext\n- Klare Randbedingungen\n- Knapp und präzise",
+        "right_text": "Rechte Spalte:\n- Nächster Satz nur als Vorschlag\n- Positive Tonalität\n- Keine Namen im Text"
+      }
+    },
+    {
+      "layout_names": ["Bild und Text"],
+      "layout_hints": ["Bild und Text"],
+      "slots": {
+        "title": "Bild + Text",
+        "right_text": "Der Text landet im rechten Haupttextfeld.\nDas Bild wird in den Bildplatzhalter gesetzt.",
+        "image": "../../../../../tests/TestPNG.png"
+      }
+    },
+    {
+      "layout_names": ["Titel und Diagramm"],
+      "layout_hints": ["Diagramm"],
+      "slots": {
+        "title": "Tabellenbefüllung",
+        "main_text": "Beispiel für Tabellen-Rendering im Layout.",
+        "table": {
+          "headers": ["Kriterium", "Vorgabe", "Status"],
+          "rows": [
+            ["Antwortstart", "Positiver Einstieg", "Erfüllt"],
+            ["Ausgabeumfang", "Nur nächster Satz", "Erfüllt"],
+            ["Stil", "Kollegial und knapp", "Erfüllt"]
+          ]
+        }
+      }
+    }
+  ]
+}

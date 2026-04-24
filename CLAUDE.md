@@ -164,6 +164,10 @@ Excel lesen | xlsx lesen | Excel schreiben | Excel bearbeiten | Zelle aendern | 
 
 → PFLICHT: Skill $skill-excel-io laden und befolgen. CLI-Tool excel_cli.py fuer info/read/edit/write auf .xlsx — token-schonend (Markdown/JSON/CSV auf stdout), Styling via Flags oder --batch.
 
+PowerPoint erstellen | PowerPoint bearbeiten | PPTX erzeugen | Folien hinzufuegen | Praesentation aus Vorlage | Corporate Template | Volkswagen Brand | Volkswagen Group | potx | Deck bauen | Chart einfuegen | Tabelle in Folie | Folientext setzen | Bullet-Liste in Folie | Speaker Notes  
+
+→ PFLICHT: Skill $skill-powerpoint-ppt-cli laden und befolgen. Hauptpfad pptcli (COM, echtes PowerPoint). Vor dem Erstellen IMMER interaktiv die Vorlage aus .agents/skills/skill-powerpoint-ppt-cli/Vorlagen/ auswaehlen lassen (scripts/select_template.ps1). Niemals direkt die .potx aendern — erst nach userdata/powerpoint/drafts/ kopieren. Session-Lifecycle Pflicht: session open → Operationen → session close --save.
+
 Tool-Prioritaet
 
 local_rag fuer alle Wissensfragen (IMMER zuerst). Vorher IMMER Skill skill-knowledge-bordnetz-vobes laden.

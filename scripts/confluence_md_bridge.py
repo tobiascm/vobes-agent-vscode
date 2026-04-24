@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -637,25 +638,30 @@ def md2storage(md: str) -> str:
                 output.append("<ul>")
                 open_lists.append(indent)
             else:
-                # Close deeper lists
-                while len(open_lists) > 1 and open_lists[-1] > indent:
+                # Close deeper lists (all levels with indent > current)
+                while open_lists and open_lists[-1] > indent:
                     open_lists.pop()
                     output.append("</li></ul>")
-                # Close previous li at same level
                 if open_lists and open_lists[-1] == indent:
                     output.append("</li>")
+                else:
+                    # Returning to a shallower-than-stack indent that isn't on the stack
+                    output.append("<ul>")
+                    open_lists.append(indent)
 
             output.append(f"<li>{text}")
             i += 1
             continue
 
-        # Plain text (paragraph)
+        # Plain text: continuation of previous list item (inside list) or paragraph (outside)
         if in_task_list:
             _flush_tasks()
-        _close_lists_to(0)
         text = _inline_to_xhtml(line.strip())
         if text:
-            output.append(f"<p>{text}</p>")
+            if open_lists:
+                output.append(f"<br/>{text}")
+            else:
+                output.append(f"<p>{text}</p>")
         i += 1
 
     # Close remaining
@@ -712,12 +718,16 @@ def cmd_prepare(args):
     if not after_path.exists():
         after_path.write_text(before_md, encoding="utf-8")
 
-    # 3. Open VS Code diff
-    subprocess.Popen(
-        ["code", "--diff", str(before_md_path), str(after_path)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    # 3. Open VS Code diff (Windows has only code.cmd; POSIX has code)
+    code_bin = shutil.which("code.cmd") or shutil.which("code")
+    if code_bin:
+        subprocess.Popen(
+            [code_bin, "--diff", str(before_md_path), str(after_path)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    else:
+        print("warn: VS Code CLI (code/code.cmd) not found in PATH — open diff manually.", file=sys.stderr)
 
     # 4. Notify
     if args.notify:

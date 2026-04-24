@@ -1425,6 +1425,8 @@ def main(argv: list[str] | None = None) -> int:
         body = args.body
         if args.body_file:
             body = Path(args.body_file).read_text(encoding="utf-8")
+        else:
+            body = body.replace("\\n", "\n") if body else body
         payload = compose_draft(
             to=args.to,
             subject=args.subject,
@@ -1437,6 +1439,8 @@ def main(argv: list[str] | None = None) -> int:
         body = args.body
         if args.body_file:
             body = Path(args.body_file).read_text(encoding="utf-8")
+        else:
+            body = body.replace("\\n", "\n") if body else body
         payload = reply_to_email(
             entry_id=args.entry_id,
             store_id=args.store_id,

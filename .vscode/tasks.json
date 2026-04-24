@@ -65,6 +65,35 @@
         "panel": "new"
       },
       "problemMatcher": []
+    },
+    {
+      "label": "pptcli: help",
+      "type": "shell",
+      "command": "C:\\Daten\\Programme\\mcp-server-ppt\\src\\PptMcp.CLI\\bin\\Release\\net9.0-windows\\pptcli.exe",
+      "args": [
+        "--help"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "pptcli: list PowerPoint templates",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\.agents\\skills\\skill-powerpoint-ppt-cli\\scripts\\select_template.ps1"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
     }
   ]
 }

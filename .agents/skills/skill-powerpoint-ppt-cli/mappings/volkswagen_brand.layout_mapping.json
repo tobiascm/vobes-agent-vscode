@@ -1,0 +1,175 @@
+{
+  "template_name": "Volkswagen Brand",
+  "layouts": [
+    {
+      "match": "^Titelfolie",
+      "slots": {
+        "title": {
+          "placeholder_types": [1, 3],
+          "pick": "topmost"
+        },
+        "subtitle": {
+          "placeholder_types": [4],
+          "pick": "topmost"
+        },
+        "main_text": {
+          "placeholder_types": [2],
+          "min_height": 30,
+          "pick": "largest",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        }
+      }
+    },
+    {
+      "match": "^Titel und Text(\\s*\\(|$)",
+      "slots": {
+        "title": {
+          "placeholder_types": [1],
+          "pick": "topmost"
+        },
+        "subtitle": {
+          "placeholder_types": [2],
+          "max_top": 80,
+          "pick": "topmost"
+        },
+        "main_text": {
+          "placeholder_types": [2],
+          "min_top": 80,
+          "min_height": 20,
+          "pick": "largest",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        },
+        "left_text": {
+          "placeholder_types": [2],
+          "min_top": 80,
+          "pick": "leftmost",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        },
+        "right_text": {
+          "placeholder_types": [2],
+          "min_top": 80,
+          "pick": "rightmost",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        },
+        "table": {
+          "placeholder_types": [2],
+          "min_top": 80,
+          "pick": "largest",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        }
+      }
+    },
+    {
+      "match": "^Bild und Text(\\s*\\(|$)",
+      "slots": {
+        "title": {
+          "placeholder_types": [1],
+          "pick": "topmost"
+        },
+        "subtitle": {
+          "placeholder_types": [2],
+          "max_top": 80,
+          "pick": "topmost"
+        },
+        "main_text": {
+          "placeholder_types": [2],
+          "min_top": 80,
+          "pick": "largest",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        },
+        "left_text": {
+          "placeholder_types": [2],
+          "min_top": 80,
+          "pick": "leftmost",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        },
+        "right_text": {
+          "placeholder_types": [2],
+          "min_top": 80,
+          "pick": "rightmost",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        },
+        "image": {
+          "placeholder_types": [18],
+          "pick": "largest"
+        },
+        "table": {
+          "placeholder_types": [2, 18],
+          "min_top": 80,
+          "pick": "largest",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        }
+      }
+    },
+    {
+      "match": "^Titel und Diagramm(\\s*\\(|$)",
+      "slots": {
+        "title": {
+          "placeholder_types": [1],
+          "pick": "topmost"
+        },
+        "subtitle": {
+          "placeholder_types": [2],
+          "max_top": 80,
+          "pick": "topmost"
+        },
+        "main_text": {
+          "placeholder_types": [2],
+          "min_top": 80,
+          "max_top": 190,
+          "pick": "largest",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        },
+        "caption": {
+          "placeholder_types": [2],
+          "min_top": 400,
+          "pick": "topmost",
+          "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+        },
+        "chart": {
+          "placeholder_types": [8],
+          "pick": "largest"
+        },
+        "table": {
+          "placeholder_types": [12, 8, 2],
+          "min_top": 120,
+          "pick": "largest"
+        }
+      }
+    }
+  ],
+  "fallback_slots": {
+    "title": {
+      "placeholder_types": [1, 3],
+      "pick": "topmost"
+    },
+    "subtitle": {
+      "placeholder_types": [4],
+      "pick": "topmost"
+    },
+    "main_text": {
+      "placeholder_types": [2],
+      "min_height": 20,
+      "pick": "largest",
+      "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+    },
+    "left_text": {
+      "placeholder_types": [2],
+      "pick": "leftmost",
+      "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+    },
+    "right_text": {
+      "placeholder_types": [2],
+      "pick": "rightmost",
+      "exclude_name_regex": ["^Footer Placeholder", "^Slide Number Placeholder"]
+    },
+    "table": {
+      "placeholder_types": [12, 8, 2],
+      "pick": "largest"
+    },
+    "chart": {
+      "placeholder_types": [8],
+      "pick": "largest"
+    }
+  }
+}
