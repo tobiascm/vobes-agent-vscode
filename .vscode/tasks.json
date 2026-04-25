@@ -94,6 +94,46 @@
         "panel": "new"
       },
       "problemMatcher": []
+    },
+    {
+      "label": "ppt-agent: check",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "run",
+        "check"
+      ],
+      "options": {
+        "cwd": "C:\\Daten\\Programme\\mcp-server-ppt\\src\\PptMcp.Agent"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ppt-agent: smoke run",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\.agents\\skills\\skill-powerpoint-ppt-cli\\scripts\\run_ppt_mcp_agent.ps1",
+        "-Task",
+        "Build a one-slide title deck. Title: Agent Smoke Test. Subtitle: Generated from skill runner.",
+        "-TemplatePath",
+        "${workspaceFolder}\\.agents\\skills\\skill-powerpoint-ppt-cli\\Vorlagen\\Volkswagen Brand.potx",
+        "-OutputPath",
+        "${workspaceFolder}\\userdata\\powerpoint\\drafts\\ppt_agent_smoke_task.pptx",
+        "-Overwrite"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      },
+      "problemMatcher": []
     }
   ]
 }

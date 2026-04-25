@@ -1,119 +1,268 @@
 ---
 name: skill-powerpoint-ppt-cli
-description: PowerPoint-Dateien (.pptx) auf Windows aus einer Corporate-Vorlage (.potx) per lokalem `pptcli` erstellen und bearbeiten. Nutze diesen Skill fuer PowerPoint, PPTX, Folien, Praesentation, Deck, Unternehmensvorlage, Corporate Template, Volkswagen Brand, Volkswagen Group, potx, Folientext setzen, Chart einfuegen, Tabelle in Folie, Bullet-Liste, Deck bauen, COM-Automatisierung.
+description: PowerPoint-Dateien (.pptx) auf Windows mit dem offiziellen `PptMcp.Agent` (Plan/Execute/Verify/Repair) erzeugen und bearbeiten. Corporate-Template-Auswahl bleibt als verpflichtendes Profil-Gate aktiv.
 ---
 
-# Skill: PowerPoint mit pptcli
+# Skill: PowerPoint mit PptMcp.Agent
 
-Reproduzierbare PPTX-Erzeugung aus einer Unternehmensvorlage — per lokalem `pptcli.exe` (COM-basiert, nutzt das installierte Microsoft PowerPoint). Keine direkte XML-Manipulation, keine Neuerfindung von Layouts.
+Primärpfad ist der offizielle Orchestrator `src\PptMcp.Agent` aus `trsdn/mcp-server-ppt`.  
+Der Ablauf ist mehrphasig: Plan -> Execute -> Verify -> Repair.  
+Keine XML-Manipulation, nur COM-basierte PowerPoint-Automation ueber `mcp-server-ppt`.
+
+Hinweis zur Namensgebung:
+
+- Der Skill heißt historisch `skill-powerpoint-ppt-cli`.
+- Fuer **neue Deck-Erstellung** ist der Hauptpfad `PptMcp.Agent` ueber `scripts/run_ppt_mcp_agent.ps1`.
+- Fuer **bestehende PPTX-Umbauten** ist der technische Hauptpfad `pptcli session open` oder eine direkte MCP-PowerPoint-Session.
+- Der New-Deck-Orchestrator wird fuer Modify nicht erzwungen, wenn gezielte Session-Edits geeigneter sind.
+- Der Wrapper nutzt standardmaessig `-Provider codex`; fuer Copilot explizit `-Provider copilot` setzen.
 
 ## Wann verwenden
 
-- neue Praesentation aus Corporate-Vorlage bauen
-- Folien hinzufuegen / Text setzen / Tabellen / Bilder / Charts einfuegen
-- bestehende `.pptx` gezielt bearbeiten (COM, keine XML-Hacks)
-- Export nach PDF aus der fertigen `.pptx`
+- neue Praesentation per Prompt erzeugen
+- bestehende Praesentation agentisch verbessern/reparieren
+- aus Mail-/Outlook-Inhalten eine Praesentation erzeugen, nachdem der Inhalt durch den passenden Mail-Skill als Markdown/JSON extrahiert wurde
+- reproduzierbare Deck-Erzeugung mit `.plan.json` und `run-summary.json`
+- laengere Aufgaben, die Plan/Verify/Repair benoetigen
 
 ## Wann NICHT verwenden
 
 - nur PPTX → PDF konvertieren ohne Aenderung → `$skill-file-converter`
 - PPTX-Text aus SharePoint/OneDrive nur **lesen** → `$skill-m365-file-reader`
+- Outlook/Mail-Inhalte direkt suchen/extrahieren → zuerst `$skill-outlook`, `$skill-m365-copilot-mail-search` oder `$skill-m365-mail-agent`
 - Linux/Server-Umgebung (kein lokales PowerPoint) → `python-pptx` direkt
 
 ## Voraussetzungen
 
-| Komponente | Pfad / Check |
-|---|---|
-| Microsoft PowerPoint (Desktop) | muss auf dem System installiert sein |
-| .NET 9 Desktop Runtime + SDK 9.0.311 | user-lokal unter `%USERPROFILE%\.dotnet`, `dotnet --list-runtimes` muss `Microsoft.WindowsDesktop.App 9.x` enthalten |
-| pptcli.exe | `C:\Daten\Programme\mcp-server-ppt\src\PptMcp.CLI\bin\Release\net9.0-windows\pptcli.exe` |
-| Vorlagen-Ordner | `.agents/skills/skill-powerpoint-ppt-cli/Vorlagen/` (lokal, mit `.lnk` auf OneDrive) |
 
-**Erst-Installation ohne Adminrechte:** Schritt-fuer-Schritt-Anleitung inkl. SDK-Install, Clone, Build und Alias siehe [scripts/README_pptcli_installation_windows_no_admin.md](./scripts/README_pptcli_installation_windows_no_admin.md). `dotnet tool install --global PptMcp.CLI` funktioniert aktuell **nicht** (Paket-Fehler) — Source-Build ist Pflicht.
+| Komponente                     | Pfad / Check                                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| Microsoft PowerPoint (Desktop) | muss auf dem System installiert sein                                                                     |
+| .NET 9 SDK/Runtime             | `dotnet --version` und Build muss laufen                                                                 |
+| Node.js + npm                  | `node --version`, `npm --version`                                                                        |
+| Externes Repo                  | `C:\Daten\Programme\mcp-server-ppt`                                                                      |
+| Agent CLI                      | `C:\Daten\Programme\mcp-server-ppt\src\PptMcp.Agent\src\cli.mjs`                                         |
+| MCP Server Binary              | `C:\Daten\Programme\mcp-server-ppt\src\PptMcp.McpServer\bin\Release\net9.0-windows\PptMcp.McpServer.exe` |
+| Codex MCP-Server               | `codex mcp get ppt` muss auf das MCP Server Binary zeigen, wenn `-Provider codex` genutzt wird             |
+| Vorlagen-Ordner                | `.agents/skills/skill-powerpoint-ppt-cli/Vorlagen/`                                                      |
+
+
+## Setup (manuell, einmalig)
+
+```powershell
+Set-Location C:\Daten\Programme\mcp-server-ppt
+dotnet build src\PptMcp.McpServer\PptMcp.McpServer.csproj -c Release /p:NuGetAudit=false
+
+Set-Location src\PptMcp.Agent
+npm install
+npm run check
+npm test
+
+codex mcp add ppt -- "C:\Daten\Programme\mcp-server-ppt\src\PptMcp.McpServer\bin\Release\net9.0-windows\PptMcp.McpServer.exe"
+codex mcp get ppt
+```
 
 ## Arbeitsregeln (verpflichtend)
 
-1. **Vorlage vom User bestaetigen lassen.** Nie einfach eine Default-Vorlage waehlen. Liste via:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .agents/skills/skill-powerpoint-ppt-cli/scripts/select_template.ps1
-   ```
-   Gibt JSON mit allen verfuegbaren `.potx`/`.pptx` aus; User entscheidet.
-2. **Original-Vorlage nie direkt aendern.** Immer erst nach `userdata/powerpoint/drafts/<deck>.pptx` kopieren.
-3. **Layouts/Placeholders auslesen** bevor Inhalte geschrieben werden. Nur vorhandene Corporate-Layouts nutzen.
-4. **Bei Fehlern kein XML-Hack** — COM-/CLI-Fehler sauber melden und zurueck an User.
-5. **Dateisperren pruefen** — wenn die `.pptx` in PowerPoint geoeffnet ist, vorher schliessen.
+1. **Template-Auswahl ist Pflicht-Gate fuer neue Decks.** Vor jedem New-Deck-Run muss eine Vorlage aktiv vom User gewaehlt werden:
+  Bei Modify bestehender PPTX gilt stattdessen: Input-PPTX eindeutig bestimmen, nach Output-PPTX kopieren und nur die Output-PPTX bearbeiten.
+2. **Paritaet zum offiziellen Agent-Flow**: Plan -> Execute -> Verify -> Repair.
+3. **Template-Hinweis**: Die Auswahl wirkt als Corporate-Profil-Guidance fuer den Agent-Prompt.
+4. **Keine XML-Hacks** und keine direkte `.potx`-Mutation.
+5. **Bei Fehlern** klare Preflight-/Setup-Anweisung geben.
+
+## Template-Fidelity
+
+Aktueller Stand:
+
+- `TemplatePath` wird vom Wrapper `scripts/run_ppt_mcp_agent.ps1` als Corporate-Template-Guidance an `PptMcp.Agent` uebergeben.
+- Das garantiert noch nicht technisch, dass die Output-PPTX per PowerPoint-COM aus der `.potx` vorinstanziiert wurde.
+- Fuer normale Entwuerfe ist das ausreichend.
+- Fuer harte Corporate-Fidelity ist spaeter ein separater Wrapper-Modus sinnvoll:
+  1. `.potx` per PowerPoint-COM als neue `.pptx` instanziieren
+  2. danach diese `.pptx` mit `pptcli session open` oder MCP gezielt bearbeiten
+
+Bis dieser Modus existiert, darf der Agent keine falsche Garantie geben, dass das Output-Deck technisch aus der Vorlage erzeugt wurde.
+
+## Upstream-Referenzen
+
+Die folgenden Dateien liegen als Referenzmaterial unter  
+`.agents/skills/skill-powerpoint-ppt-cli/references/pptmcp-upstream/`:
+
+- `ppt-cli.SKILL.md`
+- `ppt-mcp.SKILL.md`
+- `behavioral-rules.md`
+- `generation-pipeline.md`
+- `ppt_agent_mode.md`
+- `slide-design-principles.md`
+- `slide-design-review.md`
+- `PptMcp.Agent.README.md`
+- `AGENT-CLIENT.md`
+- `LICENSE`
+
+Regeln:
+
+- Die **lokale** `SKILL.md` ist maßgeblich fuer diesen Workspace.
+- Die Upstream-Dateien sind Referenzmaterial zur Orientierung und Angleichung.
+- Bei Konflikten gewinnt immer der lokale VW-/Corporate-Workflow.
+
+## Modify bestehender PowerPoint-Dateien
+
+Regeln fuer Aenderungen an vorhandenen Decks:
+
+- Originaldatei niemals direkt bearbeiten.
+- Input-PPTX zuerst nach einer neuen Output-PPTX kopieren.
+- Nur die Output-PPTX oeffnen und bearbeiten.
+- Gezielte Aenderungen bevorzugen statt kompletter Delete-Rebuild-Strategie.
+- Vor Aenderungen erst Slides/Shapes/Placeholder/Charts/Tables inspizieren.
+- Vor jedem Delete immer erst `list/read/verify` ausfuehren.
+- Nach jeder Aenderung betroffene Slides erneut lesen/verifizieren.
+- Optional zusaetzlich PDF-/PNG-Export zur Sichtpruefung erzeugen.
+- Am Ende immer explizit speichern und sauber schliessen.
+
+Technischer Modify-Hauptpfad:
+
+1. Input-Datei nach Output-Datei kopieren.
+2. Output-Datei mit `pptcli session open <output.pptx>` oder direkter MCP-Session oeffnen.
+3. Bestand inspizieren:
+  - `slide list`
+  - `shape list`
+  - `text find`
+  - Chart-/Table-/Placeholder-Inspection, soweit verfuegbar
+4. Zielobjekte anhand stabiler Slide-Indizes, Shape-Namen oder Placeholder identifizieren.
+5. Nur gezielte Aenderungen ausfuehren:
+  - Text setzen/ersetzen
+  - Shapes verschieben/skalieren/formatieren
+  - Charts/Tables aktualisieren
+  - Bilder gezielt ersetzen
+6. Betroffene Slides erneut lesen/verifizieren.
+7. Optional PDF/PNG exportieren.
+8. Session mit Save sauber schliessen.
+
+Wichtig:
+
+- `PptMcp.Agent` bleibt primaer fuer neue Deck-Erstellung und groessere Plan/Verify/Repair-Runs.
+- Fuer kleine oder konkrete Umbauten bestehender PPTX ist `pptcli session open` meist robuster und besser nachvollziehbar.
+
+## Mail-/Outlook-Inhalte zu PowerPoint
+
+Dieser Skill sucht oder liest keine Outlook-/M365-Mails selbst.
+
+Standardkette:
+
+1. Mail-Inhalt mit passendem Mail-Skill extrahieren:
+   - `$skill-outlook` fuer lokales Outlook/COM
+   - `$skill-m365-copilot-mail-search` fuer Graph/Copilot-Mail-Suche
+   - `$skill-m365-mail-agent` fuer agentische Fallanalyse
+2. Extrahierten Inhalt als Markdown/JSON an diesen PowerPoint-Skill uebergeben.
+3. Neue Praesentation ueber `scripts/run_ppt_mcp_agent.ps1` erzeugen oder bestehende PPTX ueber Modify-Workflow bearbeiten.
+
+Es gibt keinen separaten Legacy-Mail-PPT-Builder mehr.
+Die geloeschte Datei `test_email_prompt_content.json` ist bewusst nicht erforderlich.
+
+## Create neuer PowerPoint-Dateien
+
+Regeln fuer Neuanlagen:
+
+- Template-Gate bleibt verpflichtend (Vorlage aktiv waehlen).
+- Wrapper-Default ist `-Provider codex`; fuer GitHub Copilot explizit `-Provider copilot` verwenden.
+- Vorlage nur als Corporate-Template-Profil/Quelle verwenden, niemals mutieren.
+- Output standardmaessig nach `userdata/powerpoint/drafts/` schreiben.
+- Nach jedem Lauf Artefakte pruefen:
+  - `*.plan.json`
+  - `*-artifacts/run-summary.json` (primär `status`, `verification`, `slideCount*`; freie Agent-Texte nur in `raw.*`)
+
+## Design Review
+
+Lokale, gekuerzte Review-Regeln (an Upstream angelehnt):
+
+- Action Titles verwenden (aussagekraeftige, handlungsorientierte Titel).
+- Pro Slide genau eine Kernbotschaft.
+- Lesbarkeit sicherstellen (Schriftgroessen, Kontrast, Hierarchie).
+- Keine Ueberlappungen von Shapes/Charts/Texten.
+- Konsistente Abstaende und sauberes Grid.
+- Bei Datenfolien Source Bar pflegen.
+- Title Story Test: Titel ueber alle Slides muessen eine klare Story bilden.
+- Deck-Level Flow pruefen (roter Faden ueber alle Slides).
+- Keine festen Upstream-Farben/Fallback-Fonts erzwingen.
+- VW-/Unternehmensvorlage hat immer Vorrang.
+
+## Agent-Verhalten
+
+Arbeitsregeln fuer den Agent:
+
+- Nicht nach Informationen fragen, die per Tool/CLI direkt ermittelbar sind.
+- Rueckfragen sind verpflichtend bei:
+  - destruktiven Aenderungen
+  - Ueberschreiben bestehender Outputs
+  - unklarer Input-Datei
+  - mehreren moeglichen Vorlagen
+- Bei Fehlern nicht identisch wiederholen:
+  - Fehlerursache lesen
+  - Parameter gezielt korrigieren
+  - genau einen gezielten Retry ausfuehren
 
 ## Standard-Pfade
 
-| Zweck | Pfad |
-|---|---|
-| Vorlagen | `.agents/skills/skill-powerpoint-ppt-cli/Vorlagen/*.potx` |
-| Entwuerfe | `userdata/powerpoint/drafts/` |
-| Exporte (PDF) | `userdata/powerpoint/exports/` |
-| Bilder fuer Folien | `userdata/powerpoint/images/` |
+
+| Zweck           | Pfad                                                                    |
+| --------------- | ----------------------------------------------------------------------- |
+| Vorlagen        | `.agents/skills/skill-powerpoint-ppt-cli/Vorlagen/*.potx`               |
+| Entwuerfe       | `userdata/powerpoint/drafts/`                                           |
+| Agent-Artefakte | neben Output-Datei: `*.plan.json`, `*-artifacts\run-summary.json`       |
+| Runner-Script   | `.agents/skills/skill-powerpoint-ppt-cli/scripts/run_ppt_mcp_agent.ps1` |
+
 
 ## Workflow
 
 ```powershell
-# 1. Vorlagen listen und User auswaehlen lassen
+# 1) Vorlage interaktiv oder eindeutig per -Name/-Index waehlen (Pflicht)
 powershell -ExecutionPolicy Bypass -File .agents/skills/skill-powerpoint-ppt-cli/scripts/select_template.ps1
 
-# 2. 5-Folien-POC aus gewaehlter Vorlage bauen
-powershell -ExecutionPolicy Bypass -File .agents/skills/skill-powerpoint-ppt-cli/scripts/build_deck_poc.ps1 `
-    -TemplatePath ".agents/skills/skill-powerpoint-ppt-cli/Vorlagen/Volkswagen Brand.potx" `
-    -OutputPath "userdata/powerpoint/drafts/poc_corporate_deck.pptx"
+# Agentenfaehig ohne Interaktion, wenn Name eindeutig ist:
+powershell -ExecutionPolicy Bypass -File .agents/skills/skill-powerpoint-ppt-cli/scripts/select_template.ps1 `
+  -Name "Volkswagen Brand" `
+  -NonInteractive
 
-# 3. Manuelle Pruefung in PowerPoint:
-#    - Corporate-Design uebernommen?
-#    - Layouts/Placeholders korrekt belegt?
+# 2) Agent-Run starten (empfohlener Hauptpfad)
+powershell -ExecutionPolicy Bypass -File .agents/skills/skill-powerpoint-ppt-cli/scripts/run_ppt_mcp_agent.ps1 `
+  -Task "Build a 5-slide executive deck on Q4 revenue performance and next actions." `
+  -TemplatePath ".agents/skills/skill-powerpoint-ppt-cli/Vorlagen/Volkswagen Brand.potx" `
+  -OutputPath "userdata/powerpoint/drafts/q4-agent-smoke.pptx" `
+  -Provider codex `
+  -Overwrite
+
+# 3) Ergebnis pruefen:
+#    - userdata/powerpoint/drafts/q4-agent-smoke.pptx
+#    - userdata/powerpoint/drafts/q4-agent-smoke.plan.json
+#    - userdata/powerpoint/drafts/q4-agent-smoke-artifacts/run-summary.json
+#      Wichtig: Fuer Betriebsentscheidungen nur status/verification/slideCount* nutzen.
+#      raw.executionSummary/raw.repairSummary/raw.verificationSummary sind Debug-Freitext.
 ```
 
-Direkte `pptcli`-Aufrufe (Schema wird nach Verifikation aus `pptcli --help` hier ergaenzt):
+Direkter Agent-CLI-Aufruf (ohne Wrapper) bleibt moeglich:
 
 ```powershell
-$pptcli = "C:\Daten\Programme\mcp-server-ppt\src\PptMcp.CLI\bin\Release\net9.0-windows\pptcli.exe"
-& $pptcli --help
-& $pptcli layouts --file "userdata/powerpoint/drafts/poc_corporate_deck.pptx"
+Set-Location C:\Daten\Programme\mcp-server-ppt\src\PptMcp.Agent
+node .\src\cli.mjs run `
+  --provider codex `
+  --task "Build a 5-slide executive deck on Q4 revenue performance and next actions." `
+  --output "C:\Daten\Python\vobes_agent_vscode\userdata\powerpoint\drafts\q4-agent-smoke.pptx" `
+  --overwrite
 ```
 
-> **TODO nach Runtime-Install:** Reale Befehlsliste aus `pptcli --help` hier eintragen. Bis dahin dient `build_deck_poc.ps1` als Referenz.
+Wichtige Flags:
+
+- `--provider`, `--plan-file`, `--model`, `--show`, `--skip-verify`, `--mcp-server`
+- `--plan-timeout-ms`, `--execute-timeout-ms`, `--verify-timeout-ms`
 
 ## Fehlerbehandlung
 
-| Fehler | Ursache | Fix |
-|---|---|---|
-| `You must install .NET to run this application` | .NET 9 Runtime fehlt | SDK 9.0.311 user-lokal installieren, siehe `scripts/README_pptcli_installation_windows_no_admin.md` |
-| `dotnet tool install --global PptMcp.CLI` schlaegt fehl | NuGet-Paket fehlerhaft | Source-Build statt NuGet, siehe Installationsanleitung |
-| `pptcli` nicht auf PATH | user-lokale `.dotnet` noch nicht im aktuellen Terminal | `$env:PATH = "$env:USERPROFILE\.dotnet;$env:PATH"` oder Alias per PowerShell-Profil setzen |
-| `file is locked` / `access denied` | Deck oder Vorlage in PowerPoint offen | In PowerPoint schliessen, erneut versuchen |
-| `layout not found` | Layout-Name nicht in Vorlage | Layout-Namen via `pptcli slide list --session <id>` (Feld `layoutName`) ermitteln, nicht via `master list-layouts` |
-| `master list-layouts` schlaegt fehl (RuntimeBinderException `SlideMasters`) | Known bug in pptcli 0.1.0 (Source-Build) | Workaround: `slide list` nutzen — das liefert `layoutName` je Folie |
-| `InvalidOperationException: Failed to create session ... COM HRESULT` beim Oeffnen einer `.pptx`, die aus `.potx` per `Copy-Item` umbenannt wurde | `.potx`-Rohdaten sind keine gueltige `.pptx` fuer COM | `.potx` per PowerPoint COM `Presentations.Open` + `SaveAs(path, 24)` als echte `.pptx` instantiieren (siehe `build_deck_poc.ps1`) |
-| COM-HResult `0x800A03EC` | PowerPoint-Instanz inkonsistent | PowerPoint beenden (`taskkill /IM POWERPNT.EXE /F`), retry |
 
-## Abhaengigkeiten
-
-- lokales Microsoft PowerPoint (Desktop, Windows)
-- .NET 9 Desktop Runtime
-- `pptcli.exe` aus `trsdn/mcp-server-ppt` (lokal gebaut, Pfad siehe oben)
-
-## Hinweise
-
-- **Nicht serverfaehig** — COM erfordert Windows-Desktop mit PowerPoint.
-- `.potx`-Vorlagen werden beim Kopieren direkt als `.pptx` ins Draft-Verzeichnis gelegt (nicht in-place bearbeiten).
-- `ppt-mcp` (MCP-Server-Modus) ist Nebenpfad fuer explorative Aufgaben und aktuell **nicht** in `.vscode/mcp.json` registriert. CLI ist Hauptpfad.
-
-## Mapping (neu)
-
-- Fuer robuste Placeholder-Befuellung (Titel/Subtitel/Haupttext, Zweispalter, Bild+Text, Diagramm/Tabelle) ist ein layout-spezifisches Mapping vorhanden:
-  - `.agents/skills/skill-powerpoint-ppt-cli/mappings/volkswagen_brand.layout_mapping.json`
-- Beispiel-Builder mit Mapping:
-  - `.agents/skills/skill-powerpoint-ppt-cli/scripts/_build_test_email_prompt_deck.ps1`
-  - liest Inhalte aus `.agents/skills/skill-powerpoint-ppt-cli/scripts/data/test_email_prompt_content.json`
-- Umlaute werden ueber JSON (`Get-Content -Encoding UTF8` + `ConvertFrom-Json`) stabil geladen.
-- Slot-Typen im Content-JSON:
-  - Text-Slots: `title`, `subtitle`, `main_text`, `left_text`, `right_text`, `caption`
-  - Medien-Slot: `image` (String-Pfad oder `{ "path": "..." }`, relativ zur Content-Datei erlaubt)
-  - Tabellen-Slot: `table` mit `{ "headers": [...], "rows": [[...], ...] }` oder `table: "pfad/zur/datei.csv"`
-- Beispiel fuer erweiterte Layouts (Zweispalter, Bild+Text, Tabelle):
-  - `.agents/skills/skill-powerpoint-ppt-cli/scripts/data/test_layout_features_content.json`
+| Fehler                                 | Ursache                      | Fix                                                                             |
+| -------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------- |
+| `Missing npm dependencies`             | `node_modules` fehlt         | `cd C:\Daten\Programme\mcp-server-ppt\src\PptMcp.Agent && npm install`          |
+| `Default MCP server binary not found`  | MCP Server nicht gebaut      | `dotnet build ... -c Release /p:NuGetAudit=false`                               |
+| `NU190x warnings as errors`            | NuGet-Audit blockiert Build  | Build mit `/p:NuGetAudit=false` ausfuehren                                      |
+| Agent bricht mit Copilot-SDK Fehler ab | Copilot Runtime/Auth Problem | in `src\PptMcp.Agent` erneut `npm install`, dann `npm run check` und `npm test` |
+| Datei gesperrt                         | Deck in PowerPoint offen     | Deck in PowerPoint schliessen, Run wiederholen                                  |

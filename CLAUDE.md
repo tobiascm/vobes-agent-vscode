@@ -166,7 +166,11 @@ Excel lesen | xlsx lesen | Excel schreiben | Excel bearbeiten | Zelle aendern | 
 
 PowerPoint erstellen | PowerPoint bearbeiten | PPTX erzeugen | Folien hinzufuegen | Praesentation aus Vorlage | Corporate Template | Volkswagen Brand | Volkswagen Group | potx | Deck bauen | Chart einfuegen | Tabelle in Folie | Folientext setzen | Bullet-Liste in Folie | Speaker Notes  
 
-→ PFLICHT: Skill $skill-powerpoint-ppt-cli laden und befolgen. Hauptpfad pptcli (COM, echtes PowerPoint). Vor dem Erstellen IMMER interaktiv die Vorlage aus .agents/skills/skill-powerpoint-ppt-cli/Vorlagen/ auswaehlen lassen (scripts/select_template.ps1). Niemals direkt die .potx aendern — erst nach userdata/powerpoint/drafts/ kopieren. Session-Lifecycle Pflicht: session open → Operationen → session close --save.
+→ PFLICHT: Skill $skill-powerpoint-ppt-cli laden und befolgen.
+
+Neue Praesentation: Hauptpfad ist PptMcp.Agent ueber scripts/run_ppt_mcp_agent.ps1 (Plan -> Execute -> Verify -> Repair, COM-basiert). Vor dem Erstellen IMMER interaktiv oder eindeutig per Parameter die Vorlage aus .agents/skills/skill-powerpoint-ppt-cli/Vorlagen/ auswaehlen lassen (scripts/select_template.ps1) und als Corporate-Template-Profil mitgeben. Niemals direkt die .potx aendern.
+
+Bestehende PPTX bearbeiten: Keine Vorlage erzwingen. Original-PPTX zuerst nach Output-PPTX kopieren. Nur die Output-PPTX per pptcli session open oder direkter MCP-Session bearbeiten. Gezielte Aenderungen statt Delete/Rebuild. Vor jedem Delete immer list/read/verify.
 
 Tool-Prioritaet
 

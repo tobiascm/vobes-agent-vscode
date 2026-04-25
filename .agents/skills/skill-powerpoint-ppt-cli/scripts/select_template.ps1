@@ -1,57 +1,82 @@
-# Lists PowerPoint templates available under the skill's Vorlagen directory.
-# Returns JSON on stdout (agent-consumable) and a human-readable table on stderr.
-
-[CmdletBinding()]
 param(
-    [string]$TemplatesDir = (Join-Path $PSScriptRoot '..' 'Vorlagen')
+    [int]$Index,
+    [string]$Name,
+    [switch]$NonInteractive
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = "Stop"
 
-if (-not (Test-Path -LiteralPath $TemplatesDir)) {
-    $msg = "Templates directory not found: $TemplatesDir"
-    [Console]::Error.WriteLine($msg)
-    @{ error = $msg; templates = @() } | ConvertTo-Json -Depth 3
-    exit 2
+$skillRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
+$templateDir = Join-Path $skillRoot "Vorlagen"
+
+if (-not (Test-Path -LiteralPath $templateDir)) {
+    throw "Vorlagen-Ordner nicht gefunden: $templateDir"
 }
 
-$resolvedDir = (Resolve-Path -LiteralPath $TemplatesDir).ProviderPath
+$templates = @(Get-ChildItem -Path $templateDir -File -Include *.potx, *.pptx -Recurse |
+    Sort-Object FullName)
 
-$items = Get-ChildItem -LiteralPath $resolvedDir -File |
-    Where-Object { $_.Extension -in '.potx', '.pptx', '.pptm' } |
-    Sort-Object Name
-
-if (-not $items) {
-    $msg = "No .potx/.pptx templates found in $resolvedDir"
-    [Console]::Error.WriteLine($msg)
-    @{ error = $msg; directory = $resolvedDir; templates = @() } | ConvertTo-Json -Depth 3
-    exit 3
+if (-not $templates -or $templates.Count -eq 0) {
+    throw "Keine .potx oder .pptx Vorlage gefunden in: $templateDir"
 }
 
-$rows = @()
-$idx = 0
-foreach ($f in $items) {
-    $idx++
-    $rows += [pscustomobject]@{
-        index     = $idx
-        name      = $f.Name
-        full_path = $f.FullName
-        size_kb   = [int][math]::Round($f.Length / 1024)
-        modified  = $f.LastWriteTime.ToString('s')
+$selected = $null
+
+if ($Name) {
+    $matches = @($templates | Where-Object { $_.Name -like "*$Name*" -or $_.BaseName -like "*$Name*" })
+
+    if ($matches.Count -eq 1) {
+        $selected = $matches[0]
+    }
+    elseif ($matches.Count -gt 1) {
+        $names = ($matches | ForEach-Object { $_.FullName }) -join "`n"
+        throw "Name ist nicht eindeutig: $Name`nTreffer:`n$names"
+    }
+    elseif ($NonInteractive) {
+        throw "Keine Vorlage passend zu -Name gefunden: $Name"
     }
 }
 
-# Human-readable table on stderr
-[Console]::Error.WriteLine("")
-[Console]::Error.WriteLine("Verfuegbare Vorlagen in $resolvedDir")
-[Console]::Error.WriteLine(('-' * 72))
-$rows | Format-Table -AutoSize | Out-String | ForEach-Object { [Console]::Error.Write($_) }
-[Console]::Error.WriteLine("Bitte dem Agent die 'index' oder den 'name' der gewuenschten Vorlage nennen.")
-[Console]::Error.WriteLine("")
+if (-not $selected -and $PSBoundParameters.ContainsKey("Index")) {
+    if ($Index -lt 1 -or $Index -gt $templates.Count) {
+        throw "Index ausserhalb des gueltigen Bereichs: $Index. Gueltig: 1-$($templates.Count)"
+    }
 
-# JSON on stdout
-@{
-    directory = $resolvedDir
-    count     = $rows.Count
-    templates = $rows
-} | ConvertTo-Json -Depth 4
+    $selected = $templates[$Index - 1]
+}
+
+if (-not $selected) {
+    if ($NonInteractive) {
+        throw "Keine eindeutige Vorlage ausgewaehlt. Nutze -Index oder -Name."
+    }
+
+    Write-Host ""
+    Write-Host "Verfuegbare PowerPoint-Vorlagen:"
+    Write-Host ""
+
+    for ($i = 0; $i -lt $templates.Count; $i++) {
+        $n = $i + 1
+        Write-Host ("[{0}] {1}" -f $n, $templates[$i].FullName)
+    }
+
+    Write-Host ""
+    $choice = Read-Host "Bitte Vorlage waehlen [1-$($templates.Count)]"
+
+    if (-not ($choice -as [int])) {
+        throw "Ungueltige Auswahl: $choice"
+    }
+
+    $choiceIndex = [int]$choice
+    if ($choiceIndex -lt 1 -or $choiceIndex -gt $templates.Count) {
+        throw "Auswahl ausserhalb des gueltigen Bereichs: $choice"
+    }
+
+    $selected = $templates[$choiceIndex - 1]
+}
+
+Write-Host ""
+Write-Host "Gewaehlte Vorlage:"
+Write-Host $selected.FullName
+
+# Letzte Zeile bewusst maschinenlesbar: nur Pfad.
+$selected.FullName
